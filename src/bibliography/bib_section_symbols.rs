@@ -5,7 +5,7 @@ use crate::{
     parser::syntax::Entry,
     project::workspace::{Document, DocumentKind, Workspace},
 };
-use lsp_types::{Hover, HoverContents, Location, MarkupContent, MarkupKind, Url};
+use lsp_types::{Hover, HoverContents, Location, Url};
 use std::{collections::BTreeSet, ops::Range};
 
 struct Target<'a> {
@@ -204,20 +204,11 @@ pub(crate) fn definitions(ws: &Workspace, uri: &Url, offset: usize) -> Option<Ve
 
 pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Hover>> {
     Some(target(ws, uri, offset)?.and_then(|target| {
-        let [(entry_uri, doc, entry)] = target.entries.as_slice() else {
+        let [(_, doc, entry)] = target.entries.as_slice() else {
             return None;
         };
         Some(Hover {
-            contents: HoverContents::Markup(MarkupContent {
-                kind: MarkupKind::PlainText,
-                value: format!(
-                    "{}\n\n{}\n{}:{}",
-                    entry.name,
-                    entry.detail,
-                    entry_uri.path(),
-                    doc.text.position(entry.span.start).line + 1
-                ),
-            }),
+            contents: HoverContents::Markup(super::reference_preview::hover(doc, entry)),
             range: Some(
                 ws.documents[uri]
                     .text

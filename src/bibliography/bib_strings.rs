@@ -233,7 +233,7 @@ pub(crate) fn completion(
             if seen.insert(entry.name.to_ascii_lowercase()) {
                 candidates.push((
                     entry.name.clone(),
-                    format!("{} — {}", entry.detail, uri.path()),
+                    format!("{} — {}", entry.detail, crate::language::display::path(uri)),
                 ));
             }
         }

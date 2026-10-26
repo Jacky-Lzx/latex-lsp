@@ -430,15 +430,20 @@ pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<H
                 crate::bibliography::bib_source_aliases::detail(doc, entry)
             }
         };
-        Some(Hover {
-            contents: HoverContents::Markup(MarkupContent {
+        let contents = match super::reference_preview::documentation(
+            ws,
+            &answer.identity.uri,
+            name,
+            &detail,
+        ) {
+            Some(Documentation::MarkupContent(contents)) => contents,
+            _ => MarkupContent {
                 kind: MarkupKind::PlainText,
-                value: format!(
-                    "{name}\n\n{detail}\n{}:{}",
-                    answer.identity.uri.path(),
-                    doc.text.position(answer.identity.start).line + 1
-                ),
-            }),
+                value: format!("{name}\n\n{detail}"),
+            },
+        };
+        Some(Hover {
+            contents: HoverContents::Markup(contents),
             range: Some(
                 ws.documents[uri]
                     .text

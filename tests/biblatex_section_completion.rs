@@ -1,3 +1,5 @@
+#[path = "support/completion.rs"]
+mod completion;
 use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
@@ -73,9 +75,9 @@ fn section_completion_uses_active_metadata_and_replaces_the_entire_key_suffix() 
             .iter()
             .find(|item| item.label == "collision")
             .unwrap_or_else(|| panic!("{body}: {items:?}"));
-        let detail = item.detail.as_ref().unwrap();
+        let detail = completion::preview(&item);
         assert!(
-            detail.contains(expected_title) && detail.contains(expected_library),
+            detail.contains(expected_title) && !detail.contains(expected_library),
             "{detail}"
         );
         assert_eq!(apply(&source, item), source.replace("colBAD", "collision"));
@@ -113,7 +115,7 @@ fn section_metadata_search_keeps_titles_authors_years_multiple_words_and_fuzzy_k
             .into_iter()
             .find(|item| item.label == "collision")
             .unwrap_or_else(|| panic!("{body}"));
-        assert!(item.detail.as_ref().unwrap().contains("Selected"));
+        assert!(completion::preview(&item).contains("Selected"));
         assert_eq!(
             apply(&source, &item),
             source.replace(&format!("{{{query}}}"), "{collision}")
@@ -208,7 +210,7 @@ fn selection_edits_refresh_completion_metadata_without_changing_child_versions()
         } else {
             "Selected"
         };
-        assert!(item.detail.as_ref().unwrap().contains(expected), "{item:?}");
+        assert!(completion::preview(&item).contains(expected), "{item:?}");
         assert_eq!(apply(content, &item), r"\cite{collision}");
     }
 }
@@ -259,7 +261,7 @@ fn real_selected_metadata_completion_compiles_using_the_selected_database() {
         .into_iter()
         .find(|item| item.label == "collision")
         .unwrap();
-    assert!(item.detail.as_ref().unwrap().contains("Selected"));
+    assert!(completion::preview(&item).contains("Selected"));
     let completed = apply(&source, &item);
     assert_eq!(completed, source.replace("{Selected 2026}", "{collision}"));
     std::fs::write(dir.path().join("main.tex"), completed).unwrap();

@@ -1,3 +1,5 @@
+#[path = "support/completion.rs"]
+mod completion;
 use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
 fn setup(preamble: &str, body: &str) -> (tempfile::TempDir, Workspace, Url) {
@@ -38,14 +40,11 @@ fn a_source_override_candidate_uses_its_source_metadata_and_replaces_the_complet
     let bib = main.join("section.bib").unwrap();
     let item = candidate(&ws, &bib, "crossref={pa", "parent");
     assert!(
-        item.detail
-            .as_ref()
-            .unwrap()
-            .contains("Dynamic bibliography set: member"),
+        completion::preview(&item).contains("Dynamic bibliography set: member"),
         "{item:?}"
     );
     assert!(
-        item.detail.as_ref().unwrap().contains(main.path()),
+        !completion::preview(&item).contains(main.path()),
         "{item:?}"
     );
     let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
@@ -63,14 +62,10 @@ fn an_explicit_early_request_preserves_book_candidate_metadata() {
     let bib = main.join("section.bib").unwrap();
     let item = candidate(&ws, &bib, "crossref={pa", "parent");
     assert!(
-        item.detail.as_ref().unwrap().contains("Selected parent"),
+        completion::preview(&item).contains("Selected parent"),
         "{item:?}"
     );
-    assert!(!item
-        .detail
-        .as_ref()
-        .unwrap()
-        .contains("Dynamic bibliography set"));
+    assert!(!completion::preview(&item).contains("Dynamic bibliography set"));
 }
 #[test]
 fn distinct_numeric_namespaces_remove_conflicting_candidates_but_keep_common_books() {
@@ -111,10 +106,7 @@ fn source_only_named_declarations_are_not_database_parent_candidates() {
             "crossref={pa",
             "parent",
         );
-        assert!(item
-            .detail
-            .unwrap()
-            .contains("Dynamic bibliography set: member"));
+        assert!(completion::preview(&item).contains("Dynamic bibliography set: member"));
     }
 }
 
@@ -132,10 +124,7 @@ fn repeated_execution_of_one_physical_declaration_is_a_consistent_candidate() {
     ws.refresh_project(&main);
     let bib = main.join("section.bib").unwrap();
     let item = candidate(&ws, &bib, "crossref={pa", "parent");
-    assert!(
-        item.detail.as_ref().unwrap().contains("sets.tex"),
-        "{item:?}"
-    );
+    assert!(!completion::preview(&item).contains("sets.tex"), "{item:?}");
 }
 #[test]
 fn unsaved_consumers_cannot_reintroduce_book_metadata_for_a_source_override() {
@@ -162,11 +151,7 @@ fn an_unfinished_relation_value_still_offers_the_certified_source_candidate() {
         9,
     );
     let item = candidate(&ws, &bib, "crossref={pa", "parent");
-    assert!(item
-        .detail
-        .as_ref()
-        .unwrap()
-        .contains("Dynamic bibliography set: member"));
+    assert!(completion::preview(&item).contains("Dynamic bibliography set: member"));
 }
 #[test]
 fn unproved_source_execution_keeps_relation_candidates_protected() {
@@ -240,9 +225,7 @@ fn relation_edits_preserve_utf16_suffixes_lists_and_only_valid_source_parent_typ
         let item = candidate(&ws, &bib, &(prefix + &marker[..2]), name);
         assert_eq!(apply(&source, &item), source.replace(marked, expected));
         assert_eq!(
-            item.detail
-                .unwrap()
-                .contains("Dynamic bibliography set: member"),
+            completion::preview(&item).contains("Dynamic bibliography set: member"),
             name == "parent"
         );
         if name == "member" {
@@ -288,7 +271,7 @@ fn a_wildcard_without_an_early_explicit_request_does_not_lock_the_book() {
         "crossref={pa",
         "parent",
     );
-    assert!(item.detail.unwrap().contains("Dynamic bibliography set"));
+    assert!(completion::preview(&item).contains("Dynamic bibliography set"));
 }
 #[test]
 fn ids_expressions_preambles_duplicate_fields_and_truncation_keep_their_guards() {
@@ -350,7 +333,7 @@ fn accepted_relation_completions_compile_with_the_previewed_set_or_book_identity
             .replace("crossref={parent}", "crossref={paBAD}");
         ws.open(bib.clone(), source.clone(), 7);
         let item = candidate(&ws, &bib, "crossref={pa", "parent");
-        let detail = item.detail.as_ref().unwrap();
+        let detail = completion::preview(&item);
         assert_eq!(
             detail.contains("Dynamic bibliography set"),
             !early,

@@ -175,7 +175,7 @@ pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Hover> {
             value: format!(
                 "{name}\n\nbiblatex resource: {}\n{}:{}",
                 binding.filename,
-                binding.uri.path(),
+                crate::language::display::path(&binding.uri),
                 ws.documents[&binding.uri]
                     .text
                     .position(binding.span.start)

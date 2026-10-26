@@ -577,6 +577,7 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
             }
             let candidates = catalog.candidates(ws, uri, &field.name).ok()?;
             Some(crate::language::features::bibliography_relation_edits(
+                ws,
                 doc,
                 offset,
                 candidates.iter().map(|(name, candidate)| {

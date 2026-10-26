@@ -1,3 +1,5 @@
+#[path = "support/completion.rs"]
+mod completion;
 use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 fn setup(marked: &str) -> (tempfile::TempDir, Workspace, Url, Position) {
@@ -75,7 +77,7 @@ fn source_candidates_preview_numeric_identity_and_replace_the_full_key_suffix() 
         let (_dir, ws, main, at) = setup(body);
         let candidate = item(&ws, &main, at, "parent");
         assert!(
-            candidate.detail.as_ref().unwrap().contains(detail),
+            completion::preview(&candidate).contains(detail),
             "{candidate:?}"
         );
         let text = &ws.documents[&main].text.source;
@@ -91,14 +93,10 @@ fn accepting_an_early_partial_request_previews_the_book_it_will_lock() {
         let (_dir, ws, main, at) = setup(body);
         let candidate = item(&ws, &main, at, "parent");
         assert!(
-            candidate
-                .detail
-                .as_ref()
-                .unwrap()
-                .contains("Selected parent"),
+            completion::preview(&candidate).contains("Selected parent"),
             "{candidate:?}"
         );
-        assert!(!candidate.detail.as_ref().unwrap().contains("Dynamic"));
+        assert!(!completion::preview(&candidate).contains("Dynamic"));
     }
 }
 #[test]
@@ -106,10 +104,7 @@ fn source_only_sets_are_valid_tex_candidates_without_database_parent_entries() {
     let (_dir, ws, main, at) =
         setup(r"\newrefsection[chosen]\defbibentryset{collected}{member}\cite{col¦BAD}");
     let candidate = item(&ws, &main, at, "collected");
-    assert!(candidate
-        .detail
-        .unwrap()
-        .contains("Dynamic bibliography set: member"));
+    assert!(completion::preview(&candidate).contains("Dynamic bibliography set: member"));
 }
 #[test]
 fn source_member_completion_uses_its_numeric_database_and_excludes_nested_sets() {
@@ -117,7 +112,7 @@ fn source_member_completion_uses_its_numeric_database_and_excludes_nested_sets()
         r"\newrefsection[chosen]\defbibentryset{other}{parent}\defbibentryset{collected}{¦}\cite{collected}",
     );
     let candidate = item(&ws, &main, at, "member");
-    assert!(candidate.detail.unwrap().contains("Selected member"));
+    assert!(completion::preview(&candidate).contains("Selected member"));
     let items = features::completion(&ws, &main, at);
     for blocked in ["other", "collected"] {
         assert!(!items.iter().any(|item| item.label == blocked), "{items:?}");
@@ -138,10 +133,7 @@ fn static_named_and_structured_source_citation_completions_keep_unicode_ranges()
         let candidate = item(&ws, &main, at, "parent");
         let text = &ws.documents[&main].text.source;
         assert_eq!(applied(text, &candidate), text.replace("paBAD", "parent"));
-        assert!(candidate
-            .detail
-            .unwrap()
-            .contains("Dynamic bibliography set"));
+        assert!(completion::preview(&candidate).contains("Dynamic bibliography set"));
     }
 }
 #[test]
@@ -297,7 +289,7 @@ fn an_accepted_first_query_locks_every_repeated_execution_in_the_same_numeric_se
     std::fs::write(dir.path().join("chapter.tex"), text).unwrap();
     ws.open(chapter.clone(), text.into(), 3);
     let candidate = item(&ws, &chapter, Position::new(0, 8), "parent");
-    assert!(candidate.detail.unwrap().contains("Selected parent"));
+    assert!(completion::preview(&candidate).contains("Selected parent"));
 }
 #[test]
 fn an_early_completion_with_wildcard_loading_does_not_certify_a_source_or_book_mix() {
@@ -418,5 +410,5 @@ fn preamble_member_queries_keep_the_default_resource_namespace() {
     let at = Text::new(source.clone()).position(source.find("memBAD").unwrap() + 3);
     ws.open(main.clone(), source, 6);
     let candidate = item(&ws, &main, at, "member");
-    assert!(candidate.detail.unwrap().contains("Default member"));
+    assert!(completion::preview(&candidate).contains("Default member"));
 }

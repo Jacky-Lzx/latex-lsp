@@ -41,7 +41,14 @@ fn check(ws: &Workspace, uri: &Url, key: &str, targets: &[&str]) {
             let HoverContents::Markup(contents) = hover.contents else {
                 panic!("{hover:?}")
             };
-            assert!(contents.value.contains(expected), "{}", contents.value);
+            assert_eq!(contents.kind, MarkupKind::Markdown);
+            assert_eq!(
+                contents.value,
+                format!(
+                    "```bibtex\n{}\n```",
+                    ws.documents[&locations[0].uri].text.source.trim()
+                )
+            );
         }
     }
 }

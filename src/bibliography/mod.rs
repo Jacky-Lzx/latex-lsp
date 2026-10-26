@@ -33,3 +33,4 @@ pub(crate) mod bib_strings;
 pub(crate) mod bib_symbols;
 pub(crate) mod citation_search;
 pub(crate) mod citations;
+pub(crate) mod reference_preview;

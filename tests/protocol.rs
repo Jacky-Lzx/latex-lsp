@@ -9,6 +9,13 @@ use std::{
 use lsp_types::Url;
 use serde_json::{json, Value};
 
+fn citation_preview(item: &Value) -> &str {
+    item["documentation"]["value"]
+        .as_str()
+        .or_else(|| item["detail"].as_str())
+        .unwrap_or_default()
+}
+
 struct Server {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -5917,7 +5924,7 @@ fn bibliography_alias_symbols_negotiate_hierarchy_refresh_search_and_restore_dis
                 if hierarchy {
                     assert_eq!(alias["range"], json!(expected));
                     assert_eq!(alias["selectionRange"], json!(expected));
-                    assert!(alias["detail"].as_str().unwrap().contains("owner"));
+                    assert!(citation_preview(&alias).contains("owner"));
                 } else {
                     assert_eq!(alias["location"], json!({"uri":bib,"range":expected}));
                     assert_eq!(alias["containerName"], "IDS");
@@ -32414,10 +32421,11 @@ fn selected_section_citation_targets_and_hover_follow_unsaved_root_changes_over_
             json!({"textDocument":{"uri":chapter},"position":{"line":0,"character":8}}),
         );
         assert!(
-            hover["contents"]["value"]
-                .as_str()
-                .unwrap()
-                .contains(expected),
+            hover["contents"]["value"].as_str().unwrap().contains(
+                std::fs::read_to_string(main.join(expected).unwrap().to_file_path().unwrap())
+                    .unwrap()
+                    .trim()
+            ),
             "{hover}"
         );
         assert_eq!(
@@ -32638,11 +32646,11 @@ fn section_citation_completions_keep_selected_metadata_and_refresh_shared_root_c
         .unwrap()
         .clone();
     assert!(
-        original["detail"].as_str().unwrap().contains("Selected"),
+        citation_preview(&original).contains("Selected"),
         "{original}"
     );
     assert!(
-        original["detail"].as_str().unwrap().contains("section.bib"),
+        !citation_preview(&original).contains("section.bib"),
         "{original}"
     );
     assert_eq!(
@@ -32667,10 +32675,7 @@ fn section_citation_completions_keep_selected_metadata_and_refresh_shared_root_c
         .iter()
         .find(|item| item["label"] == "collision")
         .unwrap();
-    assert!(
-        item["detail"].as_str().unwrap().contains("Default"),
-        "{item}"
-    );
+    assert!(citation_preview(&item).contains("Default"), "{item}");
     assert_eq!(item["textEdit"], original["textEdit"]);
     let unsaved = main.join("new-root.tex").unwrap();
     server.notify(
@@ -33135,7 +33140,7 @@ fn section_bibliography_relations_follow_unsaved_metadata_and_shared_consumers_o
         .find(|item| item["label"] == "parent")
         .unwrap();
     assert!(
-        item["detail"].as_str().unwrap().contains("Selected parent"),
+        citation_preview(&item).contains("Selected parent"),
         "{item}"
     );
     assert_eq!(
@@ -33203,9 +33208,7 @@ fn section_bibliography_relations_follow_unsaved_metadata_and_shared_consumers_o
             .unwrap()
             .iter()
             .any(|item| item["label"] == "parent"
-                && item["detail"]
-                    .as_str()
-                    .is_some_and(|detail| detail.contains("Selected parent"))),
+                && citation_preview(item).contains("Selected parent")),
         "{items}"
     );
     server.request(1000, "shutdown", Value::Null);
@@ -33891,10 +33894,7 @@ fn source_set_relation_completion_tracks_unsaved_identities_metadata_edits_and_l
             .contains("Dynamic bibliography set: member"),
         "{parent}"
     );
-    assert!(
-        parent["detail"].as_str().unwrap().contains(main.path()),
-        "{parent}"
-    );
+    assert!(!citation_preview(parent).contains(main.path()), "{parent}");
     assert_eq!(
         parent["textEdit"],
         json!({"range":text.range(at,at+5),"newText":"parent"})
@@ -33913,17 +33913,11 @@ fn source_set_relation_completion_tracks_unsaved_identities_metadata_edits_and_l
     );
     let book = server.request(4, "textDocument/completion", params.clone());
     assert!(
-        book["items"][0]["detail"]
-            .as_str()
-            .unwrap()
-            .contains("Selected parent"),
+        citation_preview(&book["items"][0]).contains("Selected parent"),
         "{book}"
     );
     assert!(
-        !book["items"][0]["detail"]
-            .as_str()
-            .unwrap()
-            .contains("Dynamic bibliography set"),
+        !citation_preview(&book["items"][0]).contains("Dynamic bibliography set"),
         "{book}"
     );
     let ambiguous = source.replace(
@@ -34076,7 +34070,7 @@ fn xdata_relation_completions_follow_unsaved_provider_types_and_alias_owners_ove
         .iter()
         .find(|item| item["label"] == "dataalias")
         .unwrap();
-    assert!(alias["detail"].as_str().unwrap().contains("alias for data"));
+    assert!(citation_preview(&alias).contains("ids={dataalias}"));
     assert_eq!(
         alias["textEdit"],
         json!({"range":Text::new(library.into()).range(at,at),"newText":"dataalias"})
@@ -34594,13 +34588,10 @@ fn source_set_citation_completions_refresh_probe_identities_metadata_limits_and_
     };
     let candidate = find(server.request(2, "textDocument/completion", params.clone()));
     assert!(
-        candidate["detail"]
-            .as_str()
-            .unwrap()
-            .contains("Dynamic bibliography set: member"),
+        citation_preview(&candidate).contains("Dynamic bibliography set: member"),
         "{candidate}"
     );
-    assert!(candidate["detail"].as_str().unwrap().contains(sets.path()));
+    assert!(!citation_preview(&candidate).contains(sets.path()));
     assert_eq!(
         candidate["textEdit"],
         json!({"range":range,"newText":"parent"})
@@ -34612,13 +34603,10 @@ fn source_set_citation_completions_refresh_probe_identities_metadata_limits_and_
     );
     let candidate = find(server.request(3, "textDocument/completion", params.clone()));
     assert!(
-        candidate["detail"]
-            .as_str()
-            .unwrap()
-            .contains("Selected parent"),
+        citation_preview(&candidate).contains("Selected parent"),
         "{candidate}"
     );
-    assert!(!candidate["detail"].as_str().unwrap().contains("Dynamic"));
+    assert!(!citation_preview(&candidate).contains("Dynamic"));
     server.notify(
         "textDocument/didClose",
         json!({"textDocument":{"uri":sets}}),
@@ -35039,7 +35027,7 @@ fn source_set_disjoint_aliases_refresh_navigation_candidates_and_versioned_edits
     let candidates=server.request(4,"textDocument/completion",json!({"textDocument":{"uri":main},"position":{"line":member.start.line,"character":member.start.character+1}}));
     let items = candidates.as_array().unwrap();
     let old = items.iter().find(|item| item["label"] == "old").unwrap();
-    assert!(old["detail"].as_str().unwrap().contains("Alias title"));
+    assert!(citation_preview(&old).contains("Alias title"));
     let renamed = server.request(
         5,
         "textDocument/rename",
@@ -35165,7 +35153,7 @@ fn source_set_default_projects_preserve_alias_identity_without_refsections_over_
     let candidates=server.request(4,"textDocument/completion",json!({"textDocument":{"uri":main},"position":{"line":member.start.line,"character":member.start.character+1}}));
     let items = candidates.as_array().unwrap();
     let old = items.iter().find(|item| item["label"] == "old").unwrap();
-    assert!(old["detail"].as_str().unwrap().contains("Alias title"));
+    assert!(citation_preview(&old).contains("Alias title"));
     let renamed = server.request(
         5,
         "textDocument/rename",
@@ -35792,11 +35780,8 @@ fn intersecting_ids_owner_candidates_refresh_types_metadata_and_nested_member_gu
         .or_else(|| items["items"].as_array())
         .unwrap();
     let old = list.iter().find(|item| item["label"] == "old").unwrap();
-    assert!(old["detail"]
-        .as_str()
-        .unwrap()
-        .contains("Bibliography alias of parent"));
-    assert!(!old["detail"].as_str().unwrap().contains("Raw parent"));
+    assert!(citation_preview(&old).contains("Bibliography alias of parent"));
+    assert!(!citation_preview(&old).contains("Raw parent"));
     assert_eq!(old["textEdit"], json!({"range":replace,"newText":"old"}));
     let params_relation = json!({"textDocument":{"uri":bib},"position":relation.end});
     let items = server.request(3, "textDocument/completion", params_relation);
@@ -37833,10 +37818,7 @@ fn source_predicate_completions_follow_final_identity_exact_edits_and_unsaved_co
     };
     let initial = server.request(2, "textDocument/completion", params.clone());
     let item = parent(&initial).unwrap();
-    assert!(item["detail"]
-        .as_str()
-        .unwrap()
-        .contains("Dynamic bibliography set: member"));
+    assert!(citation_preview(&item).contains("Dynamic bibliography set: member"));
     assert_eq!(
         item["textEdit"],
         json!({"range":text.range(at,at+"parSuffix".len()),"newText":"parent"})
@@ -37868,12 +37850,9 @@ fn source_predicate_completions_follow_final_identity_exact_edits_and_unsaved_co
     );
     server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":source.replace(r"\input{query}",r"\cite{parent}\input{query}")}]}));
     let early = parent(&server.request(6, "textDocument/completion", params.clone())).unwrap();
-    assert!(early["detail"].as_str().unwrap().contains("Raw parent"));
-    assert!(early["detail"].as_str().unwrap().contains("data.bib"));
-    assert!(!early["detail"]
-        .as_str()
-        .unwrap()
-        .contains("Dynamic bibliography set"));
+    assert!(citation_preview(&early).contains("Raw parent"));
+    assert!(!citation_preview(&early).contains("data.bib"));
+    assert!(!citation_preview(&early).contains("Dynamic bibliography set"));
     server.notify(
         "textDocument/didClose",
         json!({"textDocument":{"uri":main}}),
@@ -39275,10 +39254,7 @@ fn initialized_entrydata_keeps_final_sets_exact_versions_and_unsaved_guards() {
             item["textEdit"],
             json!({"range":query,"newText":"collection"})
         );
-        assert!(item["detail"]
-            .as_str()
-            .unwrap()
-            .contains("Dynamic bibliography set"));
+        assert!(citation_preview(&item).contains("Dynamic bibliography set"));
         let edit = server.request(
             7,
             "textDocument/rename",
@@ -40243,10 +40219,7 @@ fn note_initializers_keep_exact_edits_and_refresh_unsaved_modes_and_dependencies
                 item["textEdit"],
                 json!({"range":query,"newText":"collection"})
             );
-            assert!(item["detail"]
-                .as_str()
-                .unwrap()
-                .contains("Dynamic bibliography set"));
+            assert!(citation_preview(&item).contains("Dynamic bibliography set"));
             server.request(1000, "shutdown", Value::Null);
             server.notify("exit", Value::Null);
             server.wait_exit(0);

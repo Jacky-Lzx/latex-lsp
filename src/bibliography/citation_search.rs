@@ -118,6 +118,7 @@ pub(crate) fn items(
         }
     }
     candidate_items(
+        ws,
         doc,
         offset,
         span,
@@ -136,6 +137,7 @@ pub(crate) fn items(
     )
 }
 pub(crate) fn candidate_items<'a>(
+    ws: &Workspace,
     doc: &Document,
     offset: usize,
     span: Range<usize>,
@@ -167,18 +169,23 @@ pub(crate) fn candidate_items<'a>(
     Some(
         ranked
             .into_iter()
-            .map(|((rank, name), (entry_uri, detail))| CompletionItem {
-                label: name.into(),
-                kind: Some(CompletionItemKind::REFERENCE),
-                detail: Some(format!("{} — {}", detail, entry_uri.path())),
-                filter_text: Some(format!("{filter_prefix} {} {}", name, detail)),
-                sort_text: Some(format!("{rank:02}{}", name)),
-                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                    range,
-                    new_text: name.into(),
-                })),
-                additional_text_edits: (!extra.is_empty()).then(|| extra.clone()),
-                ..Default::default()
+            .map(|((rank, name), (entry_uri, detail))| {
+                let documentation =
+                    super::reference_preview::documentation(ws, entry_uri, name, detail);
+                CompletionItem {
+                    label: name.into(),
+                    kind: Some(CompletionItemKind::REFERENCE),
+                    detail: documentation.is_none().then(|| detail.into()),
+                    documentation,
+                    filter_text: Some(format!("{filter_prefix} {} {}", name, detail)),
+                    sort_text: Some(format!("{rank:02}{}", name)),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                        range,
+                        new_text: name.into(),
+                    })),
+                    additional_text_edits: (!extra.is_empty()).then(|| extra.clone()),
+                    ..Default::default()
+                }
             })
             .collect(),
     )

@@ -1,3 +1,5 @@
+#[path = "support/completion.rs"]
+mod completion;
 use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
 fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url, Url) {
@@ -87,7 +89,7 @@ fn default_candidates_preview_the_identity_created_by_the_first_accepted_request
         let candidate = items.iter().find(|item| item.label == wanted);
         if let Some(detail) = detail {
             assert!(
-                candidate.unwrap().detail.as_ref().unwrap().contains(detail),
+                completion::preview(candidate.unwrap()).contains(detail),
                 "{items:?}"
             );
         } else {

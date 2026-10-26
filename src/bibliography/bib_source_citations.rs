@@ -93,6 +93,7 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
             } = context?;
             let doc = ws.documents.get(uri)?;
             let mut items = crate::bibliography::citation_search::candidate_items(
+                ws,
                 doc,
                 offset,
                 span,

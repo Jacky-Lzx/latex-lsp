@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range as Span;
 
 use lsp_types::*;
@@ -1447,6 +1447,7 @@ fn completion_in_query(
             None
         };
         let mut candidates = Vec::new();
+        let mut bibliography_docs = BTreeMap::new();
         let limit = workspace.completion_budget();
         let mut seen = BTreeSet::new();
         let labels = (kind == Some(TargetKind::Label))
@@ -1467,14 +1468,32 @@ fn completion_in_query(
                     {
                         continue;
                     }
-                    if completion_candidate(
+                    let before = candidates.len();
+                    let full = completion_candidate(
                         &mut candidates,
                         &mut seen,
                         limit,
                         prefix,
                         &entry.name,
-                        || format!("{} — {}", entry.detail, entry_uri.path()),
-                    ) {
+                        || {
+                            if kind == TargetKind::Citation {
+                                entry.detail.clone()
+                            } else {
+                                format!("{} — {}", entry.detail, super::display::path(entry_uri))
+                            }
+                        },
+                    );
+                    if kind == TargetKind::Citation && candidates.len() > before {
+                        if let Some(docs) = crate::bibliography::reference_preview::documentation(
+                            workspace,
+                            entry_uri,
+                            &entry.name,
+                            &entry.detail,
+                        ) {
+                            bibliography_docs.insert(entry.name.clone(), docs);
+                        }
+                    }
+                    if full {
                         break 'documents;
                     }
                 }
@@ -1534,6 +1553,7 @@ fn completion_in_query(
                 let mut item = CompletionItem {
                     label: name.clone(),
                     detail: Some(detail),
+                    documentation: bibliography_docs.remove(&name),
                     kind: Some(CompletionItemKind::REFERENCE),
                     text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                         range: replacement_range,
@@ -1545,6 +1565,9 @@ fn completion_in_query(
                 };
                 if let Some(docs) = &environment_docs {
                     docs.apply_environment(&mut item, &name);
+                }
+                if kind == Some(TargetKind::Citation) && item.documentation.is_some() {
+                    item.detail = None;
                 }
                 item
             })
@@ -1854,10 +1877,11 @@ pub(crate) fn bibliography_relation_completions(
         })
         .filter(|(_, name, _)| allowed.is_none_or(|allowed| allowed.contains(*name)));
     let limit = workspace.completion_budget();
-    bibliography_relation_edits(doc, offset, candidates, limit)
+    bibliography_relation_edits(workspace, doc, offset, candidates, limit)
 }
 
 pub(crate) fn bibliography_relation_edits<'a>(
+    workspace: &Workspace,
     doc: &Document,
     offset: usize,
     candidates: impl Iterator<Item = (&'a Url, &'a str, &'a str)>,
@@ -1908,9 +1932,12 @@ pub(crate) fn bibliography_relation_edits<'a>(
                 (key_span.clone(), name.to_string())
             };
             let (range, additional) = syntax::name_completion_ranges(&doc.text, span, offset)?;
+            let documentation =
+                crate::bibliography::reference_preview::documentation(workspace, uri, name, detail);
             Some(CompletionItem {
                 label: name.to_string(),
-                detail: Some(format!("{} — {}", detail, uri.path())),
+                detail: documentation.is_none().then(|| detail.into()),
+                documentation,
                 kind: Some(CompletionItemKind::REFERENCE),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text })),
                 additional_text_edits: (!additional.is_empty()).then_some(additional),
@@ -2500,7 +2527,7 @@ fn hover_query(workspace: &Workspace, uri: &Url, position: Position) -> Option<H
                                 "{}\n\n{}\nSource: {}\nDocumentation: https://texdoc.org/pkg/{}",
                                 package.name,
                                 package.description,
-                                target.path(),
+                                super::display::path(&target),
                                 package.name
                             ),
                         }),
@@ -2542,11 +2569,19 @@ fn hover_query(workspace: &Workspace, uri: &Url, position: Position) -> Option<H
             })
             .find(|entry| target.kind.same_name(&entry.name, target.name))
         {
+            if target.kind == TargetKind::Citation {
+                return Some(Hover {
+                    contents: HoverContents::Markup(crate::bibliography::reference_preview::hover(
+                        entry_doc, entry,
+                    )),
+                    range: Some(doc.text.range(target.span.start, target.span.end)),
+                });
+            }
             value = Some(format!(
                 "{}\n\n{}\n{}:{}",
                 entry.name,
                 entry.detail,
-                entry_uri.path(),
+                super::display::path(entry_uri),
                 entry_doc.text.position(entry.span.start).line + 1
             ));
             break;

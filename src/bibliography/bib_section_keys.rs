@@ -15,7 +15,7 @@ use crate::{
     project::workspace::{Document, DocumentKind, Workspace},
     symbols::named_references::Context,
 };
-use lsp_types::{Hover, HoverContents, Location, MarkupContent, MarkupKind, Url};
+use lsp_types::{Hover, HoverContents, Location, Url};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
@@ -2028,21 +2028,12 @@ pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<H
                 .filter(move |entry| entry.name == name)
                 .map(move |entry| (uri, doc, entry))
         });
-        let (entry_uri, doc, entry) = entries.next()?;
+        let (_, doc, entry) = entries.next()?;
         if entries.next().is_some() {
             return None;
         }
         Some(Hover {
-            contents: HoverContents::Markup(MarkupContent {
-                kind: MarkupKind::PlainText,
-                value: format!(
-                    "{}\n\n{}\n{}:{}",
-                    entry.name,
-                    entry.detail,
-                    entry_uri.path(),
-                    doc.text.position(entry.span.start).line + 1
-                ),
-            }),
+            contents: HoverContents::Markup(super::reference_preview::hover(doc, entry)),
             range: Some(source.text.range(target.span.start, target.span.end)),
         })
     }))

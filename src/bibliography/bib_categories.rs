@@ -702,7 +702,7 @@ pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Hover> {
     let definitions = index.definitions(ws, &ws.symbol_scope(uri), entry);
     let locations = definitions
         .iter()
-        .map(|location| location.uri.path())
+        .map(|location| crate::language::display::path(&location.uri))
         .collect::<Vec<_>>()
         .join("\n");
     Some(Hover {
