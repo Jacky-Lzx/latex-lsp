@@ -3,6 +3,7 @@ import { LanguageClient, TransportKind } from 'vscode-languageclient/node';
 import { PdfPreviewProvider } from './preview/provider';
 import { SyncTexNavigation } from './synctex';
 import { type InverseSearch } from './preview/protocol';
+import { NeovimLinkedEditing } from './neovim';
 
 const languages = ['latex', 'tex', 'plaintex', 'bibtex', 'bib', 'bst', 'bibtex-style'];
 type BuildStatus = {
@@ -18,7 +19,8 @@ class LatexExtension implements vscode.Disposable {
   private pending: Promise<void> = Promise.resolve();
   private disposed = false;
 
-  constructor(private readonly output: vscode.OutputChannel, private readonly previews: PdfPreviewProvider) {}
+  constructor(private readonly output: vscode.OutputChannel, private readonly previews: PdfPreviewProvider,
+    private readonly linkedEditing: NeovimLinkedEditing) {}
 
   // Serialize restarts, settings updates, and shutdown so clients never overlap.
   private enqueue(operation: () => Promise<void>): Promise<void> {
@@ -46,6 +48,13 @@ class LatexExtension implements vscode.Disposable {
         ]),
         initializationOptions: config.get<object>('settings', {}),
         outputChannel: this.output,
+        middleware: {
+          provideLinkedEditingRange: async (document, position, token, next) => {
+            const result = await next(document, position, token);
+            if (!token.isCancellationRequested) await this.linkedEditing.arm(document, result);
+            return result;
+          },
+        },
       });
       this.client = client;
       client.onNotification('latex/buildStarted', (result: unknown) => {
@@ -126,10 +135,11 @@ function documentUri(argument?: vscode.Uri): string {
 export async function activate(context: vscode.ExtensionContext): Promise<{ previews: PdfPreviewProvider }> {
   const output = vscode.window.createOutputChannel('TeXquill');
   const previews = new PdfPreviewProvider(context, output);
-  const controller = new LatexExtension(output, previews);
+  const linkedEditing = new NeovimLinkedEditing(context, output);
+  const controller = new LatexExtension(output, previews, linkedEditing);
   const navigation = new SyncTexNavigation((command, args) => controller.execute(command, args), previews);
   extension = controller;
-  context.subscriptions.push(output, controller, previews);
+  context.subscriptions.push(output, controller, previews, linkedEditing);
 
   function register(name: string, action: (uri?: vscode.Uri) => unknown) {
     context.subscriptions.push(vscode.commands.registerCommand(`texquill.${name}`, async (uri?: vscode.Uri) => {

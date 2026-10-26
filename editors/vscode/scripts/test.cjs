@@ -17,6 +17,13 @@ async function executablePath() {
 
 async function main() {
   const extensionDevelopmentPath = path.resolve(__dirname, '..');
+  const testNeovim = process.argv.includes('--neovim');
+  const neovimExtension = process.env.TEXQUILL_TEST_NEOVIM_EXTENSION;
+  if (testNeovim) {
+    if (!neovimExtension) throw new Error('Set TEXQUILL_TEST_NEOVIM_EXTENSION to an installed VSCode Neovim extension directory.');
+    const manifest = JSON.parse(await fs.readFile(path.join(neovimExtension, 'package.json'), 'utf8'));
+    if (`${manifest.publisher}.${manifest.name}` !== 'asvetliakov.vscode-neovim') throw new Error('Expected the VSCode Neovim extension.');
+  }
   const server = process.env.TEXQUILL_TEST_SERVER
     ?? path.resolve(extensionDevelopmentPath, '../../target/release/texquill');
   await fs.access(server);
@@ -42,6 +49,11 @@ async function main() {
     await fs.writeFile(path.join(workspace, 'slow.cjs'),
       'require("node:fs").writeFileSync(require("node:path").join(__dirname, "slow.pid"), String(process.pid)); setTimeout(() => {}, 60000);');
     await fs.writeFile(path.join(userData, 'User/settings.json'), JSON.stringify({
+      ...(testNeovim ? {
+        'vscode-neovim.neovimClean': true,
+        [`vscode-neovim.neovimExecutablePaths.${process.platform}`]: process.env.TEXQUILL_TEST_NEOVIM ?? 'nvim',
+        'extensions.experimental.affinity': { 'asvetliakov.vscode-neovim': 1 },
+      } : {}),
       'texquill.serverPath': server,
       'texquill.settings': { distribution: { enabled: false }, build: { executable: 'pdflatex', outputDirectory: 'build' } },
       'security.workspace.trust.enabled': false,
@@ -53,8 +65,9 @@ async function main() {
     // launch as a GUI application, not inherit that mode.
     delete process.env.ELECTRON_RUN_AS_NODE;
     const options = {
-      extensionDevelopmentPath,
-      extensionTestsPath: path.join(extensionDevelopmentPath, 'dist/test/integration.js'),
+      extensionDevelopmentPath: testNeovim ? [extensionDevelopmentPath, neovimExtension] : extensionDevelopmentPath,
+      extensionTestsPath: testNeovim ? path.join(extensionDevelopmentPath, 'dist/test/neovim.js')
+        : path.join(extensionDevelopmentPath, 'dist/test/integration.js'),
       vscodeExecutablePath: await executablePath(),
       extensionTestsEnv: {
         TEXQUILL_TEST_WORKSPACE: workspace,

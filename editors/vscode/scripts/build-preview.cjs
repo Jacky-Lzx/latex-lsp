@@ -7,6 +7,7 @@ async function main() {
   const pdfjs = path.join(root, 'node_modules/pdfjs-dist');
   await fs.rm(assets, { recursive: true, force: true });
   await fs.cp(path.join(root, 'media/preview'), assets, { recursive: true });
+  await fs.copyFile(path.join(root, 'media/neovim-linked-editing.lua'), path.join(root, 'dist/neovim-linked-editing.lua'));
   const vendor = path.join(assets, 'vendor');
   await fs.mkdir(vendor);
   for (const [source, target] of [

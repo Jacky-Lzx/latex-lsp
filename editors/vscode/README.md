@@ -54,6 +54,8 @@ Use VS Code's standard completion, navigation, rename, formatting, and quick fix
 
 Environment name linked editing is enabled by default for LaTeX, TeX, and Plain TeX. Editing the name in a matching `\begin{name}` or `\end{name}` updates its partner, including nested environments. This uses the server's linked editing ranges and VS Code's native editing support. To disable it, set `"editor.linkedEditing": false` in the corresponding language-specific settings (for example, `[latex]`); other languages keep their existing defaults.
 
+With VSCode Neovim active, the companion edit is joined to the originating Neovim undo block, so deleting an environment-name character in Normal mode needs one `u` to restore both names. Redo and independent body edits keep their normal undo boundaries. This compatibility adapter uses the extension's Lua buffer-sync hook (tested with VSCode Neovim 1.20.1); it only joins writes matching the server-provided name pair, buffer change tick, and undo sequence. It does not change undo key mappings or installed extension files, and restores the hook when TeXquill deactivates.
+
 The command palette provides:
 
 | Command | Purpose |
@@ -113,6 +115,8 @@ VSCODE_EXECUTABLE_PATH='/Applications/Visual Studio Code.app/Contents/MacOS/Code
 ```
 
 `npm run compile` also copies the viewer assets and required PDF.js distribution files into `dist/preview/assets`; the Rust build is independent.
+
+To test VSCode Neovim compatibility in an isolated profile with a clean Neovim configuration, set `TEXQUILL_TEST_NEOVIM_EXTENSION` to its installed extension directory and run `npm run test:neovim`. Optionally set `TEXQUILL_TEST_NEOVIM` to the Neovim executable. This loads only the two development extensions and leaves installed extensions disabled. The test covers character deletion, one-step undo/redo, independent body edits, and `ciw` replacement.
 
 The extension and server can have separate release versions. When changing custom commands or the configuration protocol, update both sides in the same commit and run the host tests.
 

@@ -97,7 +97,8 @@
     "watch": "tsc -p . --watch",
     "vscode:prepublish": "npm run compile",
     "package": "vsce package --out texquill.vsix",
-    "test": "npm run compile && node --test scripts/test-coordinates.mjs && node scripts/test.cjs"
+    "test": "npm run compile && node --test scripts/test-coordinates.mjs && node scripts/test.cjs",
+    "test:neovim": "npm run compile && node scripts/test.cjs --neovim"
   },
   "dependencies": { "vscode-languageclient": "^9.0.1" },
   "overrides": {
