@@ -182,11 +182,15 @@ fn inline_bibliography_warnings_use_the_static_single_key_and_offer_a_precise_fi
         Range::new(Position::new(2, 0), Position::new(2, 6))
     );
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Workspace::default()
     };
     workspace.open(uri.clone(), source.into(), 7);
     workspace
+        .project
         .build_diagnostics
         .insert(uri.clone(), diagnostics.clone());
     let actions = editing::code_actions(

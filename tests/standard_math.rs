@@ -11,7 +11,10 @@ use lsp_types::*;
 fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///standard-math/main.tex").unwrap();
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace
@@ -134,11 +137,15 @@ fn real_standard_math_typos_offer_a_fix_that_compiles_with_existing_accents_and_
             ..text.offset(diagnostic.range.end).unwrap();
         assert_eq!(&source[span], format!("\\{typo}"));
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(directory.path().into());
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), before.diagnostics);
         let actions = editing::code_actions(

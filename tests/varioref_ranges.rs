@@ -215,7 +215,10 @@ fn range_completion_replaces_only_the_active_endpoint_including_incomplete_calls
 fn range_signatures_and_snippets_expose_both_required_labels() {
     for name in ["vrefrange", "vpagerefrange"] {
         let mut workspace = Workspace {
-            snippets: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                snippets: true,
+                ..Default::default()
+            },
             ..Workspace::default()
         };
         for (arguments, active) in [
@@ -275,11 +278,15 @@ fn multiline_range_warnings_select_and_repair_each_endpoint_at_the_final_input_l
         assert_eq!(diagnostics[&uri].len(), 2);
         let text = Text::new(source.clone());
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Workspace::default()
         };
         workspace.open(uri.clone(), source.clone(), 4);
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), diagnostics.clone());
         let mut edits = Vec::new();

@@ -95,15 +95,21 @@ fn missing_indirect_packages_preserve_options_lists_comments_and_versions_in_fix
                 assert_eq!(diagnostic.data.as_ref().unwrap()["loaderCommand"], loader);
                 assert_eq!(diagnostic.data.as_ref().unwrap()["file"], report);
                 let mut workspace = Workspace {
-                    code_action_literals: true,
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        code_action_literals: true,
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace
                     .documents
                     .insert(uri.clone(), Document::new(&uri, source.clone(), Some(7)));
                 let diagnostic = diagnostic.clone();
-                workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+                workspace
+                    .project
+                    .build_diagnostics
+                    .insert(uri.clone(), diagnostics);
                 let actions = editing::code_actions(
                     &workspace,
                     &uri,
@@ -197,8 +203,11 @@ fn legacy_package_repairs_recheck_loaded_aliases_and_the_selected_project() {
         std::fs::write(root.join("definitions.sty"), r"\def\loadpkg{\usepackage}").unwrap();
         std::fs::write(root.join("fixture.sty"), "Package").unwrap();
         let mut workspace = Workspace {
-            apply_edits: true,
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                apply_edits: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace
@@ -221,7 +230,7 @@ fn legacy_package_repairs_recheck_loaded_aliases_and_the_selected_project() {
             ),
             ..Default::default()
         };
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             uri.clone(),
             [(uri.clone(), vec![diagnostic.clone()])].into(),
         );

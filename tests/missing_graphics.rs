@@ -163,7 +163,10 @@ fn image_fixes_use_declared_extension_settings_and_skip_unknown_searches() {
         std::fs::write(root.join("main.tex"), &source).unwrap();
         std::fs::write(root.join("result.png"), "image").unwrap();
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
@@ -177,7 +180,7 @@ fn image_fixes_use_declared_extension_settings_and_skip_unknown_searches() {
             data: Some(serde_json::json!({"file":"resutl"})),
             ..Default::default()
         };
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             main.clone(),
             [(main.clone(), vec![diagnostic.clone()])].into(),
         );
@@ -217,7 +220,10 @@ fn image_spelling_fixes_use_the_compilation_root_and_project_graphics_paths() {
     }
     let child = uri(root, "shared/child.tex");
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -238,8 +244,8 @@ fn image_spelling_fixes_use_the_compilation_root_and_project_graphics_paths() {
         ("a/main.tex", "plots/result.pdf"),
         ("b/main.tex", "plots/resut.pdf"),
     ] {
-        workspace.build_diagnostics.clear();
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.clear();
+        workspace.project.build_diagnostics.insert(
             uri(root, project),
             [(child.clone(), vec![diagnostic.clone()])].into(),
         );
@@ -322,11 +328,15 @@ fn missing_image_corrections_make_real_graphicx_builds_succeed() {
             let start = source.find(missing).unwrap();
             assert_eq!(diagnostic.range, text.range(start, start + missing.len()));
             let mut workspace = Workspace {
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace
+                .project
                 .build_diagnostics
                 .insert(main.clone(), outcome.diagnostics);
             let fixes = actions(&workspace, &main, &diagnostic);
@@ -360,12 +370,15 @@ fn fix_fixture(marked: &str, name: &str) -> (tempfile::TempDir, Workspace, Url, 
         .find(|item| item.code == Some(NumberOrString::String("missing-image".into())))
         .unwrap();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(directory.path().into());
     workspace.open(main.clone(), text.source, 7);
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         main.clone(),
         [(main.clone(), vec![diagnostic.clone()])].into(),
     );
@@ -425,6 +438,7 @@ fn image_fixes_reject_stale_names_metadata_ranges_and_newly_restored_files() {
             _ => unreachable!(),
         }
         workspace
+            .project
             .build_diagnostics
             .insert(main.clone(), [(main.clone(), vec![changed.clone()])].into());
         assert!(
@@ -433,7 +447,7 @@ fn image_fixes_reject_stale_names_metadata_ranges_and_newly_restored_files() {
         );
         workspace.open(main.clone(), r"\includegraphics{imgae.pdf}".into(), 9);
     }
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         main.clone(),
         [(main.clone(), vec![diagnostic.clone()])].into(),
     );
@@ -447,9 +461,9 @@ fn legacy_image_corrections_revalidate_versions_candidates_and_current_source() 
         fix_fixture(r"\includegraphics{imgae.pdf}¦", "imgae.pdf");
     let candidate = directory.path().join("image.pdf");
     std::fs::write(&candidate, "image").unwrap();
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
-    workspace.versioned_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
+    workspace.client.versioned_edits = true;
     let fixes = actions(&workspace, &main, &diagnostic);
     assert_eq!(fixes.len(), 1);
     let CodeActionOrCommand::Command(command) = &fixes[0] else {
@@ -540,11 +554,15 @@ fn image_alias_errors_offer_precise_spelling_fixes_and_reject_stale_calls() {
             assert_eq!(diagnostic.range, text.range(start, start + 5));
             std::fs::write(directory.path().join("image.png"), "image").unwrap();
             let mut workspace = Workspace {
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(directory.path().into());
             workspace
+                .project
                 .build_diagnostics
                 .insert(main.clone(), [(main.clone(), diagnostics.clone())].into());
             let fixes = actions(&workspace, &main, diagnostic);

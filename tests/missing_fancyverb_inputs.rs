@@ -90,13 +90,17 @@ fn apply(text: Text, edit: TextEdit) -> Text {
 
 fn workspace(root: &Path, main: &Url, source: &str, items: Vec<Diagnostic>) -> Workspace {
     let mut workspace = Workspace {
-        code_action_literals: true,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace.open(main.clone(), source.into(), 7);
     workspace
+        .project
         .build_diagnostics
         .insert(main.clone(), [(main.clone(), items)].into());
     workspace

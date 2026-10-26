@@ -27,14 +27,18 @@ impl Project {
         .unwrap();
         let root = Url::from_file_path(&main).unwrap();
         let mut workspace = Workspace {
-            code_action_literals: literals,
-            apply_edits,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: literals,
+                apply_edits,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(directory.path().into());
         let diagnostics = build_log::parse(&main, &format!("(./main.tex\n{RERUN}\n)\n"));
         let diagnostic = diagnostics[&root][0].clone();
         workspace
+            .project
             .build_diagnostics
             .insert(root.clone(), diagnostics);
         Self {
@@ -160,7 +164,7 @@ fn ordinary_warning_text_errors_and_other_servers_do_not_create_rebuild_actions(
         diagnostic.message = message.into();
         diagnostic.severity = Some(severity);
         diagnostic.source = Some(source.into());
-        project.workspace.build_diagnostics.insert(
+        project.workspace.project.build_diagnostics.insert(
             project.root.clone(),
             [(project.root.clone(), vec![diagnostic.clone()])].into(),
         );
@@ -192,6 +196,7 @@ fn repeated_warnings_group_by_the_build_root_even_in_a_shared_source() {
         );
         project
             .workspace
+            .project
             .build_diagnostics
             .insert(root, diagnostics);
     }
@@ -200,7 +205,7 @@ fn repeated_warnings_group_by_the_build_root_even_in_a_shared_source() {
     }
     project.workspace.reload(&shared);
     assert!(project.workspace.root_document(&shared).is_err());
-    let requested = project.workspace.build_diagnostics[&project.root][&shared].clone();
+    let requested = project.workspace.project.build_diagnostics[&project.root][&shared].clone();
     let actions = editing::code_actions(
         &project.workspace,
         &shared,
@@ -256,7 +261,7 @@ fn biblatex_latex_only_requests_can_rebuild_with_direct_engines() {
         ] {
             let mut diagnostic = project.diagnostic.clone();
             diagnostic.message = message.into();
-            project.workspace.build_diagnostics.insert(
+            project.workspace.project.build_diagnostics.insert(
                 project.root.clone(),
                 [(project.root.clone(), vec![diagnostic.clone()])].into(),
             );
@@ -292,7 +297,7 @@ fn bibliography_requests_offer_rebuild_only_for_the_known_latexmk_cycle() {
                     for (tool, field) in [("BibTeX", "file(s):"), ("Biber", "file:")] {
                         let mut diagnostic = project.diagnostic.clone();
                         diagnostic.message = format!("Package biblatex Warning: Please (re)run {tool} on the {field} main and rerun LaTeX afterwards.");
-                        project.workspace.build_diagnostics.insert(
+                        project.workspace.project.build_diagnostics.insert(
                             project.root.clone(),
                             [(project.root.clone(), vec![diagnostic.clone()])].into(),
                         );
@@ -333,6 +338,7 @@ fn index_processing_requests_report_the_tool_without_offering_an_incomplete_rebu
             assert_eq!(analysis["rerunRequired"], true);
             project
                 .workspace
+                .project
                 .build_diagnostics
                 .insert(project.root.clone(), diagnostics);
             assert!(
@@ -349,6 +355,7 @@ fn index_warning(project: &mut Project, file: &str, kind: &str) {
     project.diagnostic = diagnostics[&project.root][0].clone();
     project
         .workspace
+        .project
         .build_diagnostics
         .insert(project.root.clone(), diagnostics);
 }
@@ -424,6 +431,7 @@ fn shared_source_index_actions_use_each_roots_own_task_configuration() {
         let diagnostics = build_log::parse(&path, &format!("(./{name}\n(./shared.tex\nPackage rerunfilecheck Warning: File `people.idx' has changed. Rerun LaTeX/makeindex to get index right.\n)\n)\n"));
         project
             .workspace
+            .project
             .build_diagnostics
             .insert(Url::from_file_path(&path).unwrap(), diagnostics);
     }
@@ -434,7 +442,8 @@ fn shared_source_index_actions_use_each_roots_own_task_configuration() {
         .reload(&Url::from_file_path(&other).unwrap());
     let shared_uri = Url::from_file_path(&shared).unwrap();
     project.workspace.reload(&shared_uri);
-    let diagnostics = project.workspace.build_diagnostics[&project.root][&shared_uri].clone();
+    let diagnostics =
+        project.workspace.project.build_diagnostics[&project.root][&shared_uri].clone();
     let actions = editing::code_actions(
         &project.workspace,
         &shared_uri,
@@ -468,7 +477,7 @@ fn bibliography_actions_require_the_configured_backend_and_the_single_root_job()
             for (job, matches) in [("main", true), ("other", false), ("main, other", false)] {
                 let mut diagnostic = project.diagnostic.clone();
                 diagnostic.message = format!("Package biblatex Warning: Please (re)run {requested} on the {field} {job} and rerun LaTeX afterwards.");
-                project.workspace.build_diagnostics.insert(
+                project.workspace.project.build_diagnostics.insert(
                     project.root.clone(),
                     [(project.root.clone(), vec![diagnostic])].into(),
                 );

@@ -127,15 +127,20 @@ fn copying_a_source_is_not_an_invocation_and_completed_copies_keep_tab_repairs()
                 "{copy}/{call}: {item:?}"
             );
             let mut workspace = latex_lsp::project::workspace::Workspace {
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(directory.path().into());
             workspace.open(uri.clone(), source, 9);
             workspace
+                .project
                 .build_diagnostic_sources
                 .insert(uri.clone(), outcome.diagnostic_sources);
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri.clone(), outcome.diagnostics);
             assert_eq!(
@@ -202,16 +207,21 @@ fn completed_or_argument_free_redeclarations_still_offer_literal_tab_repairs() {
             outcome.diagnostics
         );
         let mut workspace = latex_lsp::project::workspace::Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(directory.path().into());
         workspace.open(uri.clone(), source, 9);
         let item = outcome.diagnostics[&uri][0].clone();
         workspace
+            .project
             .build_diagnostic_sources
             .insert(uri.clone(), outcome.diagnostic_sources);
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), outcome.diagnostics);
         assert_eq!(selected_actions(&workspace, &uri, &item).len(), 1);
@@ -231,15 +241,20 @@ fn cross_file_aliases_use_complete_project_arguments_for_diagnostics_and_repairs
         let item = outcome.diagnostics[&uri][0].clone();
         assert_eq!(item.code.is_some(), precise, "{arguments}: {item:?}");
         let mut workspace = latex_lsp::project::workspace::Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(directory.path().into());
         workspace.open(uri.clone(), source, 9);
         workspace
+            .project
             .build_diagnostic_sources
             .insert(uri.clone(), outcome.diagnostic_sources);
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), outcome.diagnostics);
         assert_eq!(
@@ -327,17 +342,22 @@ fn literal_fixes_record_loaded_scopes_and_recheck_macro_arities_before_legacy_ex
         serde_json::from_value(data["macroSources"].clone()).unwrap();
     assert_eq!(scope, [main.clone(), macros.clone()].into());
     let mut workspace = Workspace {
-        code_action_literals: false,
-        apply_edits: true,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: false,
+            apply_edits: true,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace.open(main.clone(), source.into(), 9);
     workspace
+        .project
         .build_diagnostic_sources
         .insert(main.clone(), outcome.diagnostic_sources);
     workspace
+        .project
         .build_diagnostics
         .insert(main.clone(), outcome.diagnostics);
     let actions = selected_actions(&workspace, &main, &item);
@@ -355,8 +375,9 @@ fn literal_fixes_record_loaded_scopes_and_recheck_macro_arities_before_legacy_ex
     std::fs::write(macros.to_file_path().unwrap(), r"\def\bad{}").unwrap();
     workspace.reload(&macros);
     assert_eq!(selected_actions(&workspace, &main, &item).len(), 1);
-    let saved = workspace.build_diagnostics[&main][&main].clone();
+    let saved = workspace.project.build_diagnostics[&main][&main].clone();
     workspace
+        .project
         .build_diagnostics
         .get_mut(&main)
         .unwrap()
@@ -367,11 +388,13 @@ fn literal_fixes_record_loaded_scopes_and_recheck_macro_arities_before_legacy_ex
         .unwrap()["macroSources"] = serde_json::json!([macros]);
     assert!(selected_actions(&workspace, &main, &item).is_empty());
     workspace
+        .project
         .build_diagnostics
         .get_mut(&main)
         .unwrap()
         .insert(main.clone(), saved);
     workspace
+        .project
         .build_diagnostic_sources
         .get_mut(&main)
         .unwrap()
@@ -565,16 +588,21 @@ fn real_copied_commands_exclude_arguments_and_repair_following_literal_tabs() {
                         .clone();
                     let main_uri = Url::from_file_path(&main).unwrap();
                     let mut workspace = latex_lsp::project::workspace::Workspace {
-                        code_action_literals: true,
-                        versioned_edits: true,
+                        client: latex_lsp::project::state::ClientCapabilities {
+                            code_action_literals: true,
+                            versioned_edits: true,
+                            ..Default::default()
+                        },
                         ..Default::default()
                     };
                     workspace.add_root(root.into());
                     workspace.open(uri.clone(), source.clone(), 9);
                     workspace
+                        .project
                         .build_diagnostic_sources
                         .insert(main_uri.clone(), outcome.diagnostic_sources);
                     workspace
+                        .project
                         .build_diagnostics
                         .insert(main_uri, outcome.diagnostics);
                     let actions = selected_actions(&workspace, &uri, &item);
@@ -700,16 +728,21 @@ fn real_paused_environment_parameters_and_completed_redeclarations_keep_distinct
                         serde_json::json!([main_uri])
                     );
                     let mut workspace = latex_lsp::project::workspace::Workspace {
-                        code_action_literals: true,
-                        versioned_edits: true,
+                        client: latex_lsp::project::state::ClientCapabilities {
+                            code_action_literals: true,
+                            versioned_edits: true,
+                            ..Default::default()
+                        },
                         ..Default::default()
                     };
                     workspace.add_root(root.into());
                     workspace.open(uri.clone(), source.clone(), 9);
                     workspace
+                        .project
                         .build_diagnostic_sources
                         .insert(main_uri.clone(), outcome.diagnostic_sources);
                     workspace
+                        .project
                         .build_diagnostics
                         .insert(main_uri, outcome.diagnostics);
                     let actions = selected_actions(&workspace, &uri, &item);
@@ -806,16 +839,21 @@ fn real_cross_file_macro_arguments_are_excluded_and_literal_tabs_can_be_repaired
                     [uri.clone(), Url::from_file_path(&macros).unwrap()].into()
                 );
                 let mut workspace = latex_lsp::project::workspace::Workspace {
-                    code_action_literals: true,
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        code_action_literals: true,
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(root.into());
                 workspace.open(uri.clone(), source.into(), 9);
                 workspace
+                    .project
                     .build_diagnostic_sources
                     .insert(uri.clone(), outcome.diagnostic_sources);
                 workspace
+                    .project
                     .build_diagnostics
                     .insert(uri.clone(), outcome.diagnostics);
                 let actions = selected_actions(&workspace, &uri, &item);

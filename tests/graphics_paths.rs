@@ -356,6 +356,7 @@ fn recorder_only_path_settings_with_unknown_execution_order_do_not_choose_images
         workspace.reload(&settings);
         let main = uri(root, "main.tex");
         workspace
+            .project
             .recorded_inputs
             .insert(main.clone(), [main.clone(), settings].into());
         assert!(targets(&workspace, &main).is_empty(), "{setting}");

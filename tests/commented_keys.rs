@@ -205,11 +205,15 @@ fn commented_list_warning_ranges_and_fixes_preserve_all_comment_text() {
         let diagnostics = build_log::parse(&main, &log);
         assert_eq!(diagnostics[&uri].len(), 2, "{command}: {diagnostics:?}");
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Workspace::default()
         };
         workspace.open(uri.clone(), source.clone(), 7);
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), diagnostics.clone());
         let text = Text::new(source.clone());

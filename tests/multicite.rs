@@ -307,7 +307,10 @@ fn multicite_signatures_follow_global_notes_and_repeated_local_groups() {
 fn multicite_command_snippets_keep_existing_parenthesized_notes() {
     for following in ["", "(overall){alpha}{beta}"] {
         let mut workspace = Workspace {
-            snippets: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                snippets: true,
+                ..Default::default()
+            },
             ..Workspace::default()
         };
         let source = format!("\\parencites{following}");
@@ -463,7 +466,10 @@ fn multicite_citation_fixes_replace_only_the_confirmed_missing_key() {
     );
     let diagnostic = &diagnostics[&uri][0];
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Workspace::default()
     };
     workspace.open(uri.clone(), source.into(), 4);
@@ -471,6 +477,7 @@ fn multicite_citation_fixes_replace_only_the_confirmed_missing_key() {
     std::fs::write(bib.to_file_path().unwrap(), "@book{alpha,title={Alpha}}").unwrap();
     workspace.open(bib, "@book{alpha,title={Alpha}}".into(), 4);
     workspace
+        .project
         .build_diagnostics
         .insert(uri.clone(), diagnostics.clone());
     let actions = latex_lsp::editing::code_actions(

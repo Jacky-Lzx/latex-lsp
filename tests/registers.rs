@@ -236,7 +236,7 @@ fn classic_font_commands_index_names_with_their_actual_arity_and_symbol_kind() {
                 root,
                 &[("main.tex", source), ("definitions.tex", &definitions)],
             );
-            workspace.snippets = true;
+            workspace.client.snippets = true;
             let main = Url::from_file_path(root.join("main.tex")).unwrap();
             let definition = Url::from_file_path(root.join("definitions.tex")).unwrap();
             let text = &workspace.documents[&main].text;
@@ -407,7 +407,7 @@ fn fontspec_switches_support_project_navigation_completion_and_safe_rename() {
                     ("other.tex", independent),
                 ],
             );
-            workspace.snippets = true;
+            workspace.client.snippets = true;
             let main = Url::from_file_path(root.join("main.tex")).unwrap();
             let definition = Url::from_file_path(root.join("definitions.tex")).unwrap();
             let text = &workspace.documents[&main].text;
@@ -743,7 +743,7 @@ fn length_and_box_operations_offer_signatures_and_escaped_snippets() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let mut workspace = setup(root, &[("main.tex", r"\newl")]);
-    workspace.snippets = true;
+    workspace.client.snippets = true;
     let uri = Url::from_file_path(root.join("main.tex")).unwrap();
     let items = features::completion(&workspace, &uri, Position::new(0, 5));
     let item = items.iter().find(|item| item.label == "newlength").unwrap();

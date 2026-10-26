@@ -9,7 +9,10 @@ use lsp_types::*;
 fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
     let uri = Url::parse("file:///snippets/main.tex").unwrap();
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut cases = Vec::new();

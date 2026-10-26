@@ -317,7 +317,10 @@ fn name_diagnostics_move_with_keys_and_do_not_guess_comma_or_and_repairs() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -338,6 +341,7 @@ fn name_diagnostics_move_with_keys_and_do_not_guess_comma_or_and_repairs() {
         let item = items(&diagnostics, &uri(root, "refs.data"))[0].clone();
         assert_eq!(item.range, span(source, "café😀"));
         workspace
+            .project
             .build_diagnostics
             .insert(uri(root, "main.tex"), diagnostics);
         assert!(editing::code_actions(

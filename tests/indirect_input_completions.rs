@@ -423,7 +423,7 @@ fn commented_literal_sources_stay_navigable_and_renamable_after_completion() {
         let root = directory.path();
         let marked = format!("\\documentclass{{article}}\\newenvironment{{x}}{{}}{{}}\\begin{{document}}\\begin{{x}}Before \\{loader}% before 😀\r\n{{% filename\r\npar|WRONG% keep\r\n}} Tail\\end{{document}}");
         let mut workspace = project(root, &[("main.tex", ""), ("part.tex", r"Part\end{x}")]);
-        workspace.versioned_edits = true;
+        workspace.client.versioned_edits = true;
         let main = uri(root, "main.tex");
         let child = uri(root, "part.tex");
         let updated = complete(&mut workspace, &main, &marked, "part.tex");

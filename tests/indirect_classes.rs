@@ -133,14 +133,20 @@ fn indirect_class_errors_repair_literal_names_preserving_options_comments_and_ve
                 );
                 assert_eq!(diagnostic.data.as_ref().unwrap()["loaderCommand"], loader);
                 let mut workspace = Workspace {
-                    code_action_literals: true,
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        code_action_literals: true,
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace
                     .documents
                     .insert(uri.clone(), Document::new(&uri, source, Some(7)));
-                workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+                workspace
+                    .project
+                    .build_diagnostics
+                    .insert(uri.clone(), diagnostics);
                 let choices = actions(&workspace, &uri, diagnostic);
                 assert_eq!(choices.len(), 1, "{loader}/{form}/{argument}: {choices:?}");
                 let CodeActionOrCommand::CodeAction(action) = &choices[0] else {
@@ -204,7 +210,10 @@ fn class_dependencies_links_completion_and_rename_preserve_single_filename_seman
             std::fs::write(class.to_file_path().unwrap(), r"\def\readpart{\input}").unwrap();
             std::fs::write(part.to_file_path().unwrap(), "Part").unwrap();
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
@@ -295,8 +304,11 @@ fn legacy_class_repairs_revalidate_alias_definitions_without_parent_version_chan
         .unwrap();
         std::fs::write(root.join("fixture.cls"), "Class").unwrap();
         let mut workspace = Workspace {
-            apply_edits: true,
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                apply_edits: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace
@@ -319,7 +331,7 @@ fn legacy_class_repairs_revalidate_alias_definitions_without_parent_version_chan
             ),
             ..Default::default()
         };
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             uri.clone(),
             [(uri.clone(), vec![diagnostic.clone()])].into(),
         );

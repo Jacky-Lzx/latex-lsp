@@ -201,7 +201,10 @@ fn navigation_and_versioned_renames_preserve_options_comments_and_filename_wrapp
     std::fs::write(root.join("chapters/code/sample.rs"), "Decoy.").unwrap();
     let child = uri(root, "chapters/child.tex");
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -277,6 +280,7 @@ fn tex_shadowing_and_data_roles_are_consistent_for_quoted_and_detokenized_inputs
         for recorded in [false, true] {
             if recorded {
                 workspace
+                    .project
                     .recorded_inputs
                     .insert(main.clone(), [data.clone()].into());
             }
@@ -292,7 +296,7 @@ fn tex_shadowing_and_data_roles_are_consistent_for_quoted_and_detokenized_inputs
             let pos = Text::new(source.clone()).position(source.rfind("code-only").unwrap());
             assert!(features::definitions(&workspace, &main, pos).is_empty());
         }
-        workspace.recorded_inputs.clear();
+        workspace.project.recorded_inputs.clear();
     }
 }
 
@@ -344,13 +348,14 @@ fn executable_options_invalid_shapes_macros_and_redefinitions_do_not_guess_data_
             "{marked}: {items:?}"
         );
         workspace
+            .project
             .recorded_inputs
             .insert(main.clone(), [code.clone()].into());
         assert!(
             workspace.project_documents(&main).contains(&code),
             "recorded executable code must retain its source role: {marked}"
         );
-        workspace.recorded_inputs.clear();
+        workspace.project.recorded_inputs.clear();
     }
     workspace.open(main.clone(), r"\VerbatimInput{sample one.rs}".into(), 7);
     std::fs::write(root.join("sample one.rs"), "Code.").unwrap();
@@ -361,6 +366,7 @@ fn executable_options_invalid_shapes_macros_and_redefinitions_do_not_guess_data_
         7,
     );
     workspace
+        .project
         .recorded_inputs
         .insert(main.clone(), [code.clone()].into());
     assert!(

@@ -117,7 +117,7 @@ fn source_and_relation_queries_prepare_exact_ranges_and_keep_versioned_edits() {
     let bib = main.join("section.bib").unwrap();
     let source = ws.documents[&bib].text.source.clone();
     ws.open(bib.clone(), source, 7);
-    ws.versioned_edits = true;
+    ws.client.versioned_edits = true;
     let positions = [
         (&bib, at(&ws, &bib, "crossref={pa")),
         (

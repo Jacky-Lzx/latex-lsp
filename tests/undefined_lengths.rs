@@ -49,11 +49,17 @@ fn a_missing_length_offers_a_spelling_fix_from_its_project() {
     let uri = Url::from_file_path(&main).unwrap();
     let diagnostic = diagnostics[&uri][0].clone();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(directory.path().into());
-    workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+    workspace
+        .project
+        .build_diagnostics
+        .insert(uri.clone(), diagnostics);
     let actions = editing::code_actions(
         &workspace,
         &uri,
@@ -104,12 +110,18 @@ fn fixture_name(declarations: &str, name: &str) -> (tempfile::TempDir, Workspace
     let uri = Url::from_file_path(&main).unwrap();
     let diagnostic = diagnostics[&uri][0].clone();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(directory.path().into());
     workspace.open(uri.clone(), source, 9);
-    workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+    workspace
+        .project
+        .build_diagnostics
+        .insert(uri.clone(), diagnostics);
     (directory, workspace, uri, diagnostic)
 }
 
@@ -244,7 +256,7 @@ fn repeated_length_errors_require_a_unique_consumed_source_prefix() {
 #[test]
 fn versioned_and_legacy_length_fixes_revalidate_candidates_versions_and_operands() {
     let (directory, mut workspace, uri, diagnostic) = fixture(r"\newlength{\measure}");
-    workspace.versioned_edits = true;
+    workspace.client.versioned_edits = true;
     let response = actions(&workspace, &uri, &diagnostic);
     let CodeActionOrCommand::CodeAction(action) = &response[0] else {
         panic!("missing action")
@@ -255,8 +267,8 @@ fn versioned_and_legacy_length_fixes_revalidate_candidates_versions_and_operands
     };
     assert_eq!(edits.len(), 1);
     assert_eq!(edits[0].text_document.version, Some(9));
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
     let response = actions(&workspace, &uri, &diagnostic);
     let CodeActionOrCommand::Command(command) = &response[0] else {
         panic!("missing legacy command")
@@ -344,14 +356,18 @@ fn real_length_errors_offer_repairs_and_compile_with_original_expressions_in_all
                     before.output
                 );
                 let mut workspace = Workspace {
-                    code_action_literals: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        code_action_literals: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(root.into());
                 workspace
+                    .project
                     .build_diagnostics
                     .insert(Url::from_file_path(&main).unwrap(), before.diagnostics);
-                workspace.build_diagnostic_sources.insert(
+                workspace.project.build_diagnostic_sources.insert(
                     Url::from_file_path(&main).unwrap(),
                     before.diagnostic_sources,
                 );

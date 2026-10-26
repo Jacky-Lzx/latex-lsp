@@ -21,13 +21,19 @@ fn workspace(source: &str, log: &str) -> (tempfile::TempDir, Workspace, Url, Vec
     let parsed = build_log::parse(&main, log);
     let items = parsed.get(&root).cloned().unwrap_or_default();
     let mut workspace = Workspace {
-        code_action_literals: true,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(directory.path().into());
     workspace.open(root.clone(), source.into(), 9);
-    workspace.build_diagnostics.insert(root.clone(), parsed);
+    workspace
+        .project
+        .build_diagnostics
+        .insert(root.clone(), parsed);
     (directory, workspace, root, items)
 }
 
@@ -333,8 +339,8 @@ fn legacy_operand_fixes_reject_tampered_replacements_metadata_and_stale_sources(
     let source = r"$\left a\right)$";
     let (_directory, mut workspace, root, items) =
         workspace(source, &log(1, r"$\left a", "a", false));
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
     let actions = actions(&workspace, &root, &items[0]);
     let CodeActionOrCommand::Command(command) = &actions[0] else {
         panic!("{actions:?}")
@@ -351,6 +357,7 @@ fn legacy_operand_fixes_reject_tampered_replacements_metadata_and_stale_sources(
     assert!(editing::resolve_fix(&workspace, request()).is_none());
     workspace.open(root.clone(), source.into(), 9);
     workspace
+        .project
         .build_diagnostics
         .get_mut(&root)
         .unwrap()
@@ -392,11 +399,15 @@ fn loaded_operand_parameters_and_primitive_redefinitions_are_rechecked() {
         let precise = definition == r"\def\consume{}";
         assert_eq!(item.code.is_some(), precise, "{definition}: {item:?}");
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(directory.path().into());
         workspace
+            .project
             .build_diagnostics
             .insert(root.clone(), outcome.diagnostics.clone());
         assert_eq!(!actions(&workspace, &root, item).is_empty(), precise);
@@ -475,13 +486,17 @@ fn real_delimiter_operand_repairs_generate_pdf_and_clear_all_errors() {
                     outcome.output
                 );
                 let mut workspace = Workspace {
-                    code_action_literals: true,
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        code_action_literals: true,
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(directory.path().into());
                 workspace.open(uri.clone(), source.into(), 9);
                 workspace
+                    .project
                     .build_diagnostics
                     .insert(root.clone(), outcome.diagnostics.clone());
                 let mut edits = vec![];
@@ -522,6 +537,7 @@ fn real_delimiter_operand_repairs_generate_pdf_and_clear_all_errors() {
                 );
                 workspace.open(uri.clone(), repaired, 10);
                 workspace
+                    .project
                     .build_diagnostics
                     .insert(root, outcome.diagnostics);
                 assert!(editing::code_actions(

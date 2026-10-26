@@ -415,7 +415,7 @@ pub fn fixes(
     let mut comparisons = 0;
     let citation_resources = std::cell::OnceCell::new();
     let source_statuses = std::cell::OnceCell::new();
-    for (root, diagnostics) in &workspace.build_diagnostics {
+    for (root, diagnostics) in &workspace.project.build_diagnostics {
         let Some(diagnostics) = diagnostics.get(uri) else {
             continue;
         };
@@ -467,7 +467,7 @@ pub fn fixes(
             let invocation_scope = if literal
                 || matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-length" | "undefined-toggle" | "undefined-boolean" | "undefined-environment" | "mismatched-environment-end" | "missing-input" | "missing-include" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
             {
-                let confirmed = workspace.build_diagnostic_sources.get(root);
+                let confirmed = workspace.project.build_diagnostic_sources.get(root);
                 let scope = if let Some(value) = diagnostic
                     .data
                     .as_ref()
@@ -733,6 +733,7 @@ pub fn fixes(
                     citation_scope.is_none_or(|resources| resources.contains(*uri))
                         && (kind != Kind::Anchor
                             || workspace
+                                .project
                                 .build_diagnostic_sources
                                 .get(root)
                                 .is_none_or(|sources| sources.contains(*uri)))

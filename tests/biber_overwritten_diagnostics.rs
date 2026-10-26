@@ -281,7 +281,10 @@ fn overwrite_diagnostics_refresh_without_choosing_a_field_to_delete_or_rewrite()
         warning("café😀", "year")
     );
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -298,6 +301,7 @@ fn overwrite_diagnostics_refresh_without_choosing_a_field_to_delete_or_rewrite()
             span(source, "2026-10-23")
         );
         workspace
+            .project
             .build_diagnostics
             .insert(uri(root, "main.tex"), diagnostics);
         assert!(editing::code_actions(

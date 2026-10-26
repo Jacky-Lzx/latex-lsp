@@ -50,7 +50,10 @@ fn single_code_lines_keep_commands_braces_and_files_literal() {
             let source = format!("\\usepackage{{fvextra}}\\newcommand{{\\say}}{{Text}}\\label{{kept}}{newline}{literal}{newline}\\input{{chapter}}\\say\\ref{{kept}}");
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
@@ -228,7 +231,10 @@ fn real_single_line_code_and_recovery_preserve_aux_labels_after_rename() {
             let main = Url::from_file_path(root.join("main.tex")).unwrap();
             let source = format!("\\documentclass{{article}}\n\\usepackage{{fvextra}}\n\\begin{{document}}\n\\label{{kept}}\\begin{{VerbEnv}}[showspaces=true]\n{body}\n{ending}\n\\label{{after}}\\fvset{{extra=false}}\\textbf{{\\Verb|\\label{{inside}}|}}{}\\textbf{{\\Verb|\\label{{outside}}|}}Text.\\ref{{kept}}\\label{{real}}\n\\end{{document}}\n", if repair { "\\end{VerbEnv}\n" } else { "" });
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.open(main.clone(), source.clone(), 7);

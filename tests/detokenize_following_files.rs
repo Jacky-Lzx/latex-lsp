@@ -24,7 +24,10 @@ fn project(root: &Path, body: &str, extension: &str) -> (Workspace, Url, Url) {
     .unwrap();
     std::fs::write(root.join(format!("refs.{extension}")), "Data.").unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());

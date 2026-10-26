@@ -182,7 +182,10 @@ fn command_snippets_preserve_existing_arguments_and_user_signatures_win() {
     for name in COMMANDS {
         for following in ["", "{alpha}", "[pre][post]{alpha}"] {
             let mut workspace = Workspace {
-                snippets: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    snippets: true,
+                    ..Default::default()
+                },
                 ..Workspace::default()
             };
             let source = format!("\\{name}{following}");
@@ -329,7 +332,10 @@ fn missing_key_warnings_and_spelling_fixes_preserve_notes_and_prose() {
             let start = source.find("{alphaa}").unwrap() + 1;
             assert_eq!(items[0].range, text.range(start, start + 6), "{source}");
             let mut workspace = Workspace {
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Workspace::default()
             };
             workspace.open(uri.clone(), source.clone(), 5);
@@ -339,6 +345,7 @@ fn missing_key_warnings_and_spelling_fixes_preserve_notes_and_prose() {
                 5,
             );
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri.clone(), diagnostics.clone());
             let actions = latex_lsp::editing::code_actions(

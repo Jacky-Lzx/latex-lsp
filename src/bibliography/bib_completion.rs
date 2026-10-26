@@ -570,7 +570,7 @@ pub(crate) fn completion(
             }
         }
         let after = syntax::skip_space(source, kind.span.end);
-        let snippets = workspace.snippets
+        let snippets = workspace.client.snippets
             && !kind.has_body
             && (after == source.len() || source.as_bytes().get(after) == Some(&b'@'));
         return Some(
@@ -657,7 +657,7 @@ pub(crate) fn completion(
             })
             .take(workspace.completion_budget())
             .map(|(name, docs, custom)| {
-                let snippet = workspace.snippets && !assigned;
+                let snippet = workspace.client.snippets && !assigned;
                 let normalized = name.to_ascii_lowercase();
                 let common = common.contains(&normalized.as_str());
                 CompletionItem {

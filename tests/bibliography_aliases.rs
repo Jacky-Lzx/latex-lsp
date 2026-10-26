@@ -14,7 +14,10 @@ fn project(root: &Path, bibliography: &str) -> (Workspace, Url, Url) {
     std::fs::write(root.join("main.tex"),"\\documentclass{article}\n\\addbibresource{refs.bib}\n😀 \\cite{legacy😀,main,other} \\citefield{legacy😀}{title}\n").unwrap();
     std::fs::write(root.join("refs.bib"), bibliography).unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());

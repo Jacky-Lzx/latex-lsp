@@ -25,7 +25,10 @@ fn project(root: &Path, body: &str) -> Workspace {
     )
     .unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());

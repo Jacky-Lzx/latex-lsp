@@ -1263,7 +1263,10 @@ fn citation_rename_updates_bibtex_keys_and_only_matching_citations() {
 #[test]
 fn macro_rename_preserves_backslashes_and_carries_document_versions() {
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let source = r"\newcommand{\foo}[1]{#1} \foo{中文}";

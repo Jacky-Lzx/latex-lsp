@@ -479,8 +479,8 @@ impl Snapshot {
             configuration.insert(path, (binding, contents));
         }
         let recorded = [
-            &workspace.recorded_bindings,
-            &workspace.bibliography_bindings,
+            &workspace.project.recorded_bindings,
+            &workspace.project.bibliography_bindings,
         ]
         .into_iter()
         .filter_map(|by_root| by_root.get(root))
@@ -880,8 +880,12 @@ mod tests {
         let mut workspace = Workspace::default();
         let tex: BTreeMap<_, _> = [(chapter.clone(), chapter.clone())].into();
         let bib: BTreeMap<_, _> = [(alias.clone(), first.clone())].into();
-        workspace.recorded_bindings.insert(root.clone(), tex);
         workspace
+            .project
+            .recorded_bindings
+            .insert(root.clone(), tex);
+        workspace
+            .project
             .bibliography_bindings
             .insert(root.clone(), bib.clone());
         let before = Snapshot::capture(&workspace, &root, &BuildConfig::default());
@@ -924,6 +928,7 @@ mod tests {
         let root = Url::from_file_path(directory.path().join("main.tex")).unwrap();
         let mut workspace = Workspace::default();
         workspace
+            .project
             .recorded_bindings
             .insert(root.clone(), [(opened.clone(), data.clone())].into());
         let before = Snapshot::capture(&workspace, &root, &BuildConfig::default());
@@ -954,6 +959,7 @@ mod tests {
         let root = Url::from_file_path(directory.path().join("main.tex")).unwrap();
         let mut workspace = Workspace::default();
         workspace
+            .project
             .recorded_bindings
             .insert(root.clone(), [(alias.clone(), first.clone())].into());
         let before = Snapshot::capture(&workspace, &root, &BuildConfig::default());
@@ -2603,6 +2609,7 @@ mod active_direct_source_conditions {
                 Document::new(&recorded_uri, recorded_source.into(), None),
             );
             workspace
+                .project
                 .recorded_inputs
                 .insert(main_uri.clone(), BTreeSet::from([recorded_uri.clone()]));
             assert!(workspace
@@ -2769,6 +2776,7 @@ mod active_direct_graphic_conditions {
                 Document::new(&recorded_uri, recorded_source.into(), None),
             );
             workspace
+                .project
                 .recorded_inputs
                 .insert(main_uri.clone(), BTreeSet::from([recorded_uri]));
             let snapshot = Snapshot::capture(&workspace, &main_uri, &BuildConfig::default());

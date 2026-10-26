@@ -85,6 +85,7 @@ fn file_events_invalidate_only_affected_builds_and_preserve_artifact_input_check
     let warning = Diagnostic::new_simple(Range::default(), "Old compiler warning".into());
     for main in [&a, &b] {
         workspace
+            .project
             .build_diagnostics
             .insert(main.clone(), [(main.clone(), vec![warning.clone()])].into());
     }
@@ -92,36 +93,40 @@ fn file_events_invalidate_only_affected_builds_and_preserve_artifact_input_check
     let changes = file_operations::FileChanges::new([child.as_str()]).unwrap();
     let affected = changes.refresh(&mut workspace);
     assert!(affected.contains(&a));
-    assert!(!workspace.build_diagnostics.contains_key(&a));
-    assert!(workspace.build_diagnostics.contains_key(&b));
+    assert!(!workspace.project.build_diagnostics.contains_key(&a));
+    assert!(workspace.project.build_diagnostics.contains_key(&b));
     workspace
+        .project
         .recorded_inputs
         .insert(a.clone(), [a.clone(), child.clone()].into());
     workspace
+        .project
         .build_diagnostics
         .insert(a.clone(), [(a.clone(), vec![warning.clone()])].into());
     std::fs::remove_file(root.join("a/child.tex")).unwrap();
     changes.refresh(&mut workspace);
-    assert!(!workspace.build_diagnostics.contains_key(&a));
-    assert!(workspace.build_diagnostics.contains_key(&b));
-    assert!(workspace.recorded_inputs[&a].contains(&child));
+    assert!(!workspace.project.build_diagnostics.contains_key(&a));
+    assert!(workspace.project.build_diagnostics.contains_key(&b));
+    assert!(workspace.project.recorded_inputs[&a].contains(&child));
     // Images are not indexed as documents, but deleting a recorded image must
     // still invalidate the compiler diagnostics belonging to its project.
     let image = uri(root, "a/image.png");
     workspace
+        .project
         .recorded_inputs
         .get_mut(&a)
         .unwrap()
         .insert(image.clone());
     workspace
+        .project
         .build_diagnostics
         .insert(a.clone(), [(a.clone(), vec![warning])].into());
     file_operations::FileChanges::new([image.as_str()])
         .unwrap()
         .refresh(&mut workspace);
-    assert!(!workspace.build_diagnostics.contains_key(&a));
-    assert!(workspace.build_diagnostics.contains_key(&b));
-    assert!(workspace.recorded_inputs[&a].contains(&image));
+    assert!(!workspace.project.build_diagnostics.contains_key(&a));
+    assert!(workspace.project.build_diagnostics.contains_key(&b));
+    assert!(workspace.project.recorded_inputs[&a].contains(&image));
     let fragment = uri(root, "a/fragment.inc");
     std::fs::write(root.join("a/fragment.inc"), r"\label{fragment}").unwrap();
     file_operations::FileChanges::new([fragment.as_str()])
@@ -397,9 +402,11 @@ fn recorded_dependencies_follow_file_and_directory_moves() {
     let bibliography = uri(root, "chapters/refs.bib");
     std::fs::write(root.join("chapters/refs.bib"), "@book{example}\n").unwrap();
     workspace
+        .project
         .bibliography_inputs
         .insert(main.clone(), [bibliography].into());
     workspace
+        .project
         .recorded_inputs
         .insert(main.clone(), [main, chapter].into());
     std::fs::rename(root.join("main.tex"), root.join("paper.tex")).unwrap();
@@ -415,13 +422,13 @@ fn recorded_dependencies_follow_file_and_directory_moves() {
     let paper = uri(root, "paper.tex");
     let chapter = uri(root, "sections/old.tex");
     assert_eq!(
-        workspace.recorded_inputs[&paper],
+        workspace.project.recorded_inputs[&paper],
         [paper.clone(), chapter.clone()].into()
     );
     assert!(workspace.project_documents(&paper).contains(&chapter));
     let bibliography = uri(root, "sections/refs.bib");
     assert_eq!(
-        workspace.bibliography_inputs[&paper],
+        workspace.project.bibliography_inputs[&paper],
         [bibliography.clone()].into()
     );
     assert!(workspace.project_documents(&paper).contains(&bibliography));
@@ -432,7 +439,7 @@ fn batched_file_renames_update_tex_bib_packages_images_and_magic_root_comments()
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let mut workspace = project(root);
-    workspace.versioned_edits = true;
+    workspace.client.versioned_edits = true;
     let main = uri(root, "main.tex");
     let source = workspace.documents[&main].text.source.clone();
     workspace

@@ -273,12 +273,18 @@ fn named_argument_errors_reuse_versioned_macro_spelling_repairs() {
     let diagnostics = build_log::parse(&main, &format!("(./main.tex\n./main.tex:1: Undefined control sequence.\n<argument> \\keynme\nl.1 {source}\n)\n"));
     let diagnostic = diagnostics[&uri][0].clone();
     let mut workspace = Workspace {
-        versioned_edits: true,
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.open(uri.clone(), source.into(), 7);
-    workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+    workspace
+        .project
+        .build_diagnostics
+        .insert(uri.clone(), diagnostics);
     assert_eq!(
         repaired(&workspace, &uri, &diagnostic),
         source.replace(r"\keynme", r"\keyname")
@@ -329,12 +335,16 @@ fn real_named_argument_macro_fixes_restore_successful_compilation() {
                 before.output
             );
             let mut workspace = Workspace {
-                versioned_edits: true,
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.open(uri.clone(), source, 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri.clone(), before.diagnostics.clone());
             std::fs::write(&main, repaired(&workspace, &uri, diagnostic)).unwrap();
@@ -387,12 +397,16 @@ fn real_multiple_name_operand_repairs_restore_successful_compilation() {
                     )
                 });
             let mut workspace = Workspace {
-                versioned_edits: true,
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.open(uri.clone(), source, 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri.clone(), before.diagnostics.clone());
             std::fs::write(&main, repaired(&workspace, &uri, diagnostic)).unwrap();

@@ -61,7 +61,7 @@ fn static_diagnostics_can_be_disabled_and_offer_existing_spelling_fixes() {
         "\\label{introduction}\\ref{introdution}".into(),
         1,
     );
-    ws.code_action_literals = true;
+    ws.client.code_action_literals = true;
     let diagnostics = ws.diagnostics(&uri);
     let diagnostic = diagnostics
         .iter()
@@ -295,7 +295,7 @@ fn named_reference_spelling_repairs_replace_only_the_actual_key() {
     ] {
         let mut ws = Workspace::default();
         ws.config.distribution.enabled = false;
-        ws.code_action_literals = true;
+        ws.client.code_action_literals = true;
         let uri = Url::parse("untitled:named-reference-fix.tex").unwrap();
         ws.open(uri.clone(), source.into(), 1);
         let diagnostic = ws

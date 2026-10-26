@@ -177,15 +177,18 @@ fn style_fixes_preserve_comments_commas_and_suffixes_and_legacy_edits_revalidate
             format!("% emoji😀 keep\r\n\\bibliographystyle{{% header\r\n  {name}% tail\r\n}}\r\n");
         std::fs::write(root.join("main.tex"), &source).unwrap();
         let mut workspace = Workspace {
-            code_action_literals: true,
-            apply_edits: true,
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                apply_edits: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
         workspace.open(main.clone(), source.clone(), 7);
         let diagnostic = style_diagnostic(root, &name);
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             main.clone(),
             [(main.clone(), vec![diagnostic.clone()])].into(),
         );
@@ -201,7 +204,7 @@ fn style_fixes_preserve_comments_commas_and_suffixes_and_legacy_edits_revalidate
             format!("Replace with bibliography style file `styles/local,style{suffix}`")
         );
         let modern = action.edit.clone().unwrap();
-        workspace.code_action_literals = false;
+        workspace.client.code_action_literals = false;
         let legacy = actions(&workspace, &main, &diagnostic);
         assert_eq!(legacy.len(), 1);
         let CodeActionOrCommand::Command(command) = &legacy[0] else {
@@ -248,14 +251,17 @@ fn style_suggestions_are_bounded_and_reject_invalid_spaced_or_other_extension_ca
     let source = r"\bibliographystyle{styles/localstylex}";
     std::fs::write(root.join("main.tex"), source).unwrap();
     let mut workspace = Workspace {
-        code_action_literals: true,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace.open(main.clone(), source.into(), 7);
     let diagnostic = style_diagnostic(root, "styles/localstylex");
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         main.clone(),
         [(main.clone(), vec![diagnostic.clone()])].into(),
     );
@@ -270,7 +276,7 @@ fn style_suggestions_are_bounded_and_reject_invalid_spaced_or_other_extension_ca
     }
     let mut mismatch = diagnostic.clone();
     mismatch.data = Some(serde_json::json!({"file":"wrong.bst"}));
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         main.clone(),
         [(main.clone(), vec![mismatch.clone()])].into(),
     );
@@ -329,13 +335,17 @@ fn real_missing_style_errors_locate_only_read_sources_and_compile_after_versione
                 Text::new(source.clone()).range(start, start + name.len())
             );
             let mut workspace = Workspace {
-                code_action_literals: true,
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace.open(settings.clone(), source.clone(), 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(main.clone(), outcome.diagnostics);
             let result = actions(&workspace, &settings, &diagnostic);

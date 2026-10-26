@@ -345,7 +345,7 @@ fn counter_commands_offer_signatures_and_snippets_without_overwriting_existing_a
         ),
     ] {
         let (_directory, mut workspace, uri, position) = setup(marked);
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = features::completion(&workspace, &uri, position);
         let item = items
             .iter()

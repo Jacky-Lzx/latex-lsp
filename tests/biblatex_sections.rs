@@ -8,7 +8,7 @@ use lsp_types::*;
 fn setup(source: &str) -> (Workspace, Url) {
     let mut ws = Workspace::default();
     ws.config.distribution.enabled = false;
-    ws.snippets = true;
+    ws.client.snippets = true;
     let uri = Url::parse("untitled:bib-sections.tex").unwrap();
     ws.open(uri.clone(), source.into(), 6);
     (ws, uri)

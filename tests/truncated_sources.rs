@@ -111,11 +111,15 @@ fn real_bounded_compiler_streams_and_logs_do_not_borrow_root_fixes_after_omissio
             Text::new(source.into()).range(0, source.len())
         );
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), outcome.diagnostics);
         let actions = editing::code_actions(

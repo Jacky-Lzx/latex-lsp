@@ -24,7 +24,10 @@ fn setup(root: &Path, files: &[(&str, &str)]) -> Workspace {
         std::fs::write(path, source).unwrap();
     }
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -216,6 +219,7 @@ fn recorded_signature_providers_can_change_direct_file_reference_meaning() {
             .documents
             .insert(provider.clone(), Document::new(&provider, text, Some(3)));
         workspace
+            .project
             .recorded_inputs
             .insert(main.clone(), BTreeSet::from([provider]));
         assert!(navigation::document_links(&workspace, &main).is_empty());

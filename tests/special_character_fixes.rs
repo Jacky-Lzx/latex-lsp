@@ -24,13 +24,19 @@ fn setup(source: &str, log: &str) -> (tempfile::TempDir, Workspace, Url, Vec<Dia
     let parsed = build_log::parse(&root.join("main.tex"), log);
     let diagnostics = parsed.get(&uri).cloned().unwrap_or_default();
     let mut workspace = Workspace {
-        code_action_literals: true,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace.open(uri.clone(), source.into(), 9);
-    workspace.build_diagnostics.insert(uri.clone(), parsed);
+    workspace
+        .project
+        .build_diagnostics
+        .insert(uri.clone(), parsed);
     (directory, workspace, uri, diagnostics)
 }
 fn edits(actions: Vec<CodeActionOrCommand>, uri: &Url) -> Vec<TextEdit> {
@@ -165,8 +171,8 @@ fn legacy_escape_commands_recheck_versions_context_and_current_diagnostics() {
     let source = "Before & after.\n";
     let log = format!("(./main.tex\n! {AMP}\nl.1 Before &\n)\n");
     let (_directory, mut workspace, uri, items) = setup(source, &log);
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
     let actions = editing::code_actions(&workspace, &uri, items[0].range, &context(items.clone()));
     assert_eq!(actions.len(), 1);
     let CodeActionOrCommand::Command(command) = &actions[0] else {
@@ -191,7 +197,7 @@ fn legacy_escape_commands_recheck_versions_context_and_current_diagnostics() {
     workspace
         .documents
         .insert(uri.clone(), Document::new(&uri, source.into(), Some(9)));
-    workspace.build_diagnostics.clear();
+    workspace.project.build_diagnostics.clear();
     assert!(editing::resolve_fix(&workspace, request()).is_none());
 }
 
@@ -202,8 +208,9 @@ fn special_character_actions_filter_requests_deduplicate_roots_and_recheck_data(
     let (_directory, mut workspace, uri, items) = setup(source, &log);
     let other = uri.join("other.tex").unwrap();
     workspace
+        .project
         .build_diagnostics
-        .insert(other, workspace.build_diagnostics[&uri].clone());
+        .insert(other, workspace.project.build_diagnostics[&uri].clone());
     let range = items[0].range;
     assert_eq!(
         editing::code_actions(&workspace, &uri, range, &context(vec![])).len(),
@@ -215,7 +222,7 @@ fn special_character_actions_filter_requests_deduplicate_roots_and_recheck_data(
     request = context(items.clone());
     request.diagnostics[0].message = "unrelated".into();
     assert!(editing::code_actions(&workspace, &uri, range, &request).is_empty());
-    for diagnostics in workspace.build_diagnostics.values_mut() {
+    for diagnostics in workspace.project.build_diagnostics.values_mut() {
         diagnostics.get_mut(&uri).unwrap()[0].data =
             Some(json!({"character":"#","sourceContext":"Before &"}));
     }
@@ -415,13 +422,17 @@ fn real_special_character_fixes_repair_child_sources_without_changing_valid_tex(
                 outcome.output
             );
             let mut workspace = Workspace {
-                code_action_literals: true,
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace.open(uri.clone(), source.into(), 9);
             workspace
+                .project
                 .build_diagnostics
                 .insert(Url::from_file_path(&main).unwrap(), outcome.diagnostics);
             let mut fixes = Vec::new();
@@ -619,13 +630,17 @@ fn real_extra_alignment_tabs_repair_tables_arrays_and_raw_alignments() {
                         outcome.output
                     );
                     let mut workspace = Workspace {
-                        code_action_literals: true,
-                        versioned_edits: true,
+                        client: latex_lsp::project::state::ClientCapabilities {
+                            code_action_literals: true,
+                            versioned_edits: true,
+                            ..Default::default()
+                        },
                         ..Default::default()
                     };
                     workspace.add_root(root.into());
                     workspace.open(uri.clone(), source.into(), 9);
                     workspace
+                        .project
                         .build_diagnostics
                         .insert(Url::from_file_path(&main).unwrap(), outcome.diagnostics);
                     let mut fixes = Vec::new();
@@ -877,8 +892,8 @@ fn legacy_extra_closing_brace_deletions_recheck_diagnostics_source_and_version()
     let source = "Before } after.\n";
     let log = format!("(./main.tex\n! {EXTRA_BRACE}\nl.1 Before }}\n)\n");
     let (_directory, mut workspace, uri, items) = setup(source, &log);
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
     let actions = editing::code_actions(&workspace, &uri, items[0].range, &context(items.clone()));
     assert_eq!(actions.len(), 1);
     let CodeActionOrCommand::Command(command) = &actions[0] else {
@@ -902,7 +917,7 @@ fn legacy_extra_closing_brace_deletions_recheck_diagnostics_source_and_version()
     workspace
         .documents
         .insert(uri.clone(), Document::new(&uri, source.into(), Some(9)));
-    workspace.build_diagnostics.clear();
+    workspace.project.build_diagnostics.clear();
     assert!(editing::resolve_fix(&workspace, request()).is_none());
 }
 
@@ -975,13 +990,17 @@ fn real_extra_closing_brace_deletions_repair_text_math_and_explicit_groups() {
                         expected
                     );
                     let mut workspace = Workspace {
-                        code_action_literals: true,
-                        versioned_edits: true,
+                        client: latex_lsp::project::state::ClientCapabilities {
+                            code_action_literals: true,
+                            versioned_edits: true,
+                            ..Default::default()
+                        },
                         ..Default::default()
                     };
                     workspace.add_root(root.into());
                     workspace.open(uri.clone(), source.clone(), 9);
                     workspace
+                        .project
                         .build_diagnostics
                         .insert(Url::from_file_path(&main).unwrap(), outcome.diagnostics);
                     let mut changes = Vec::new();
@@ -1151,8 +1170,8 @@ fn legacy_double_script_repairs_reject_escapes_forged_codes_and_outdated_sources
         let prefix = source[..source.rfind(character).unwrap() + 1].to_string();
         let log = format!("(./main.tex\n! {message}\nl.1 {prefix}\n)\n");
         let (_directory, mut workspace, uri, items) = setup(&source, &log);
-        workspace.code_action_literals = false;
-        workspace.apply_edits = true;
+        workspace.client.code_action_literals = false;
+        workspace.client.apply_edits = true;
         let actions =
             editing::code_actions(&workspace, &uri, items[0].range, &context(items.clone()));
         assert_eq!(actions.len(), 1);
@@ -1180,6 +1199,7 @@ fn legacy_double_script_repairs_reject_escapes_forged_codes_and_outdated_sources
             .documents
             .insert(uri.clone(), Document::new(&uri, source.clone(), Some(9)));
         for diagnostic in workspace
+            .project
             .build_diagnostics
             .values_mut()
             .flat_map(|files| files.values_mut())
@@ -1249,13 +1269,17 @@ fn real_double_script_empty_bases_repair_inline_display_and_grouped_scripts() {
                         outcome.output
                     );
                     let mut workspace = Workspace {
-                        code_action_literals: true,
-                        versioned_edits: true,
+                        client: latex_lsp::project::state::ClientCapabilities {
+                            code_action_literals: true,
+                            versioned_edits: true,
+                            ..Default::default()
+                        },
                         ..Default::default()
                     };
                     workspace.add_root(root.into());
                     workspace.open(uri.clone(), source.clone(), 9);
                     workspace
+                        .project
                         .build_diagnostics
                         .insert(Url::from_file_path(&main).unwrap(), outcome.diagnostics);
                     let text = Text::new(source.clone());

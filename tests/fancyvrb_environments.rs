@@ -240,7 +240,10 @@ fn literal_examples_do_not_define_symbols_import_files_or_participate_in_renames
         );
         std::fs::write(root.join("main.tex"), &source).unwrap();
         let mut workspace = Workspace {
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
@@ -436,7 +439,10 @@ fn closing_line_suffixes_are_discarded_without_losing_delimiters_or_the_next_sou
             );
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
@@ -569,7 +575,10 @@ fn header_markers_never_close_the_body_and_preserve_real_source_renames() {
                 let source =
                     format!("{before}{header}{newline}{body}{newline}{marker}{newline}{after}");
                 let mut workspace = Workspace {
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.open(main.clone(), source.clone(), 7);
@@ -706,8 +715,11 @@ fn incomplete_raw_environments_offer_one_versioned_close_fix_without_parsing_the
             argument(environment)
         );
         let mut workspace = Workspace {
-            versioned_edits: true,
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                versioned_edits: true,
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.open(main.clone(), source.clone(), 7);
@@ -833,7 +845,10 @@ fn real_header_markers_keep_body_literal_after_versioned_label_rename() {
                 );
                 std::fs::write(root.join("main.tex"), &source).unwrap();
                 let mut workspace = Workspace {
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(root.into());
@@ -954,7 +969,10 @@ fn real_discarded_closing_suffix_preserves_the_compiler_error_and_safe_rename() 
                 assert!(diagnostic.message.contains("line end"), "{diagnostic:?}");
                 let inputs = outcome.inputs.unwrap();
                 assert!(!inputs.contains(&discarded));
-                workspace.recorded_inputs.insert(main.clone(), inputs);
+                workspace
+                    .project
+                    .recorded_inputs
+                    .insert(main.clone(), inputs);
                 assert!(!workspace.project_documents(&main).contains(&discarded));
                 let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
                 assert!(aux.contains(&format!("newlabel{{{key}}}")), "{aux}");

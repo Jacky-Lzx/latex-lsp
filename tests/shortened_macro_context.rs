@@ -194,12 +194,16 @@ fn real_shortened_macro_contexts_reject_wrong_repairs_and_preserve_unique_repair
                 let mut expected = source.clone();
                 expected.replace_range(start..start + name.len() + 1, &format!("\\{correct}"));
                 let mut workspace = Workspace {
-                    versioned_edits: true,
-                    code_action_literals: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        code_action_literals: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.open(uri.clone(), source.clone(), 7);
                 workspace
+                    .project
                     .build_diagnostics
                     .insert(uri.clone(), before.diagnostics.clone());
                 let repair = repaired(&workspace, &uri, diagnostic, &correct);

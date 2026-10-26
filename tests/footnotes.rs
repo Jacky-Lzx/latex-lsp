@@ -111,7 +111,7 @@ fn footnote_completions_negotiate_snippets_and_preserve_existing_arguments() {
             ("footnotetext", "[7]{Existing}"),
         ] {
             let (_directory, mut workspace, uri) = setup(&format!(r"\{name}{tail}"));
-            workspace.snippets = snippets;
+            workspace.client.snippets = snippets;
             let text = &workspace.documents[&uri].text;
             let offset = text.source.find(name).unwrap() + name.len();
             let item = features::completion(&workspace, &uri, text.position(offset))

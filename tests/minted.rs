@@ -289,7 +289,10 @@ fn incomplete_code_stays_literal_until_its_delimiter_or_end_of_input() {
 fn headers_have_signatures_and_snippets_and_incremental_edits_refresh_literal_boundaries() {
     let main = uri();
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     for command in ["mintinline", "mint"] {

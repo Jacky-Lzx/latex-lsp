@@ -214,7 +214,10 @@ fn category_commands_offer_snippets_and_respect_custom_signatures() {
         for following in ["", "{alpha}{beta}"] {
             let source = format!("\\{name}{following}");
             let mut workspace = Workspace {
-                snippets: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    snippets: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let main = insert(&mut workspace, "main.tex", &source);
@@ -283,11 +286,15 @@ fn category_assignments_do_not_claim_citation_warnings_or_spelling_fixes() {
             assert_eq!(items[0].range.start, Position::new(1, 0));
         }
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(directory.path().into());
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), diagnostics.clone());
         let actions = latex_lsp::editing::code_actions(

@@ -116,7 +116,7 @@ fn assignment_lists_complete_full_keys_and_signature_help_requires_exact_native_
         let name = "assignrefcontextentries";
         let body = format!("\\{name}{following}");
         let (_dir, mut ws, main, _bib) = setup(&body);
-        ws.snippets = true;
+        ws.client.snippets = true;
         let doc = &ws.documents[&main];
         let at = doc.text.source.find(&body).unwrap() + name.len() + 1;
         let items = features::completion(&ws, &main, doc.text.position(at));

@@ -27,8 +27,11 @@ fn setup(source: &str, definitions: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///color-fixes/main.tex").unwrap();
     let palette = Url::parse("file:///color-fixes/palette.tex").unwrap();
     let mut workspace = Workspace {
-        code_action_literals: true,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace
@@ -39,12 +42,13 @@ fn setup(source: &str, definitions: &str) -> (Workspace, Url) {
         Document::new(&palette, definitions.into(), None),
     );
     workspace
+        .project
         .recorded_inputs
         .insert(uri.clone(), [uri.clone(), palette].into());
     (workspace, uri)
 }
 fn store(workspace: &mut Workspace, uri: &Url, diagnostic: Diagnostic) {
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         uri.clone(),
         BTreeMap::from([(uri.clone(), vec![diagnostic])]),
     );
@@ -468,8 +472,11 @@ fn real_undefined_color_repairs_compile_all_direct_call_forms() {
                 "{engine}/{call}: {error:?}"
             );
             let mut workspace = Workspace {
-                versioned_edits: true,
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
@@ -505,10 +512,12 @@ fn project_macro_arities_revalidate_cross_file_color_fixes_and_reject_changed_ta
     };
     store(&mut workspace, &uri, error.clone());
     workspace
+        .project
         .build_diagnostic_sources
         .insert(uri.clone(), [uri.clone()].into());
     assert!(actions(&workspace, &uri, &error).is_empty());
     workspace
+        .project
         .build_diagnostic_sources
         .insert(uri.clone(), [uri.clone(), palette.clone()].into());
     assert_eq!(
@@ -522,11 +531,13 @@ fn project_macro_arities_revalidate_cross_file_color_fixes_and_reject_changed_ta
         Document::new(&later, r"\renewcommand{\bridge}[3]{}".into(), Some(9)),
     );
     workspace
+        .project
         .recorded_inputs
         .get_mut(&uri)
         .unwrap()
         .insert(later.clone());
     workspace
+        .project
         .build_diagnostic_sources
         .get_mut(&uri)
         .unwrap()
@@ -559,17 +570,19 @@ fn a_child_error_retains_color_candidates_from_its_paused_parent() {
         .documents
         .insert(child.clone(), Document::new(&child, source.into(), Some(7)));
     workspace
+        .project
         .recorded_inputs
         .get_mut(&root)
         .unwrap()
         .insert(child.clone());
     workspace
+        .project
         .build_diagnostic_sources
         .insert(root.clone(), [root.clone(), child.clone()].into());
     let mut error = diagnostic(source, &format!("l.1 {source}"), true);
     error.data.as_mut().unwrap()["macroSources"] = serde_json::json!([child]);
     error.data.as_mut().unwrap()["macroPausedSources"] = serde_json::json!([root]);
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         root.clone(),
         BTreeMap::from([(child.clone(), vec![error.clone()])]),
     );
@@ -585,6 +598,7 @@ fn a_child_error_retains_color_candidates_from_its_paused_parent() {
         let mut malformed = error.clone();
         malformed.data.as_mut().unwrap()["macroPausedSources"] = value;
         workspace
+            .project
             .build_diagnostics
             .get_mut(&root)
             .unwrap()
@@ -592,6 +606,7 @@ fn a_child_error_retains_color_candidates_from_its_paused_parent() {
         assert!(actions(&workspace, &child, &malformed).is_empty());
     }
     workspace
+        .project
         .build_diagnostics
         .get_mut(&root)
         .unwrap()

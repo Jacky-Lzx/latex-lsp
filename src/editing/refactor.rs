@@ -616,7 +616,10 @@ mod tests {
     fn command_actions_recompute_edits_and_reject_stale_versions() {
         let uri = Url::parse("file:///refactor/main.tex").unwrap();
         let mut ws = Workspace {
-            apply_edits: true,
+            client: crate::project::state::ClientCapabilities {
+                apply_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         ws.documents

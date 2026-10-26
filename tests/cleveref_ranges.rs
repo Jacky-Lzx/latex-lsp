@@ -124,7 +124,10 @@ fn range_completions_replace_only_the_active_endpoint_even_across_lines() {
 #[test]
 fn signatures_and_command_snippets_match_two_required_labels_and_keep_existing_arguments() {
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Workspace::default()
     };
     for name in COMMANDS {
@@ -259,11 +262,15 @@ fn multiline_warnings_locate_and_offer_spelling_fixes_for_each_endpoint() {
             let diagnostics = build_log::parse(&main, &log);
             assert_eq!(diagnostics[&uri].len(), 2);
             let mut workspace = Workspace {
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Workspace::default()
             };
             workspace.open(uri.clone(), source.clone(), 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri.clone(), diagnostics.clone());
             let text = Text::new(source.clone());

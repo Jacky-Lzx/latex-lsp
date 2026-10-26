@@ -94,7 +94,7 @@ fn resource_label_references_use_a_separate_namespace_and_include_only_the_effec
 fn rename_replaces_inner_option_and_selection_ranges_without_touching_other_namespaces() {
     for versioned in [false, true] {
         let (_dir, mut ws, main, source, at) = setup("😀\r\n\\newrefsection[ch¦osen]\\newrefsection[chosen,global.bib]\\label{chosen}\\ref{chosen}\\detokenize{\\newrefsection[chosen]}");
-        ws.versioned_edits = versioned;
+        ws.client.versioned_edits = versioned;
         let prepared = features::prepare_rename(&ws, &main, at).unwrap().unwrap();
         let PrepareRenameResponse::RangeWithPlaceholder { range, placeholder } = prepared else {
             panic!("{prepared:?}")
@@ -156,7 +156,7 @@ fn all_roots_consuming_a_shared_registration_are_updated_with_document_versions(
     ws.open(other.clone(), source.clone(), 8);
     let provider = main.join("resources.tex").unwrap();
     ws.open(provider.clone(), registration.into(), 3);
-    ws.versioned_edits = true;
+    ws.client.versioned_edits = true;
     let at = Text::new(source.clone()).position(source.rfind("chosen]").unwrap() + 2);
     let refs = features::references(&ws, &main, at, true);
     assert_eq!(refs.len(), 3, "{refs:?}");

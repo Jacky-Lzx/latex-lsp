@@ -30,7 +30,10 @@ const SELECTORS: &[(&str, &[&str])] = &[
 fn setup(source: &str, snippets: bool) -> (Workspace, Url) {
     let uri = Url::parse("file:///nfss-tests/lsplsptest.fd").unwrap();
     let mut workspace = Workspace {
-        snippets,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace

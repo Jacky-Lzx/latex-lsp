@@ -301,13 +301,17 @@ fn spelling_fixes_keep_full_names_stars_comments_and_document_versions() {
         let item = items[0].clone();
         std::fs::write(directory.path().join(right), r"\input{main}").unwrap();
         let mut workspace = Workspace {
-            code_action_literals: true,
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(directory.path().into());
         workspace.open(main.clone(), source.clone(), 7);
         workspace
+            .project
             .build_diagnostics
             .insert(main.clone(), [(main.clone(), vec![item.clone()])].into());
         let fixes = actions(&workspace, &main, &item);
@@ -336,8 +340,11 @@ fn fixes_reject_tampered_metadata_shadowed_candidates_and_project_redefinitions(
     );
     let item = items[0].clone();
     let mut workspace = Workspace {
-        code_action_literals: true,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     std::fs::write(directory.path().join("sample.rs"), "Code.").unwrap();
@@ -345,6 +352,7 @@ fn fixes_reject_tampered_metadata_shadowed_candidates_and_project_redefinitions(
     workspace.open(main.clone(), text.source.clone(), 7);
     let store = |workspace: &mut Workspace, item: Diagnostic| {
         workspace
+            .project
             .build_diagnostics
             .insert(main.clone(), [(main.clone(), vec![item])].into());
     };
@@ -374,6 +382,7 @@ fn fixes_reject_tampered_metadata_shadowed_candidates_and_project_redefinitions(
         1,
     );
     workspace
+        .project
         .recorded_inputs
         .insert(main.clone(), [settings].into());
     assert!(actions(&workspace, &main, &item).is_empty());
@@ -415,13 +424,17 @@ fn real_missing_verbatim_inputs_warn_without_failing_and_fixes_restore_code() {
                 .unwrap();
             assert_eq!(item.severity, Some(DiagnosticSeverity::WARNING));
             let mut workspace = Workspace {
-                code_action_literals: true,
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace.open(main.clone(), source.clone(), 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(main.clone(), outcome.diagnostics.clone());
             let fixes = actions(&workspace, &main, item);

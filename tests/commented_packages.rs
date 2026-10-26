@@ -287,12 +287,15 @@ fn package_errors_and_repairs_do_not_guess_from_partly_dynamic_commented_lists()
             diagnostic.code = Some(NumberOrString::String("missing-package".into()));
             diagnostic.data = Some(serde_json::json!({"file":"locla.sty","loaderCommand":command}));
             let mut workspace = Workspace {
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace.open(main_uri.clone(), source.clone(), 7);
-            workspace.build_diagnostics.insert(
+            workspace.project.build_diagnostics.insert(
                 main_uri.clone(),
                 [(main_uri.clone(), vec![diagnostic.clone()])].into(),
             );

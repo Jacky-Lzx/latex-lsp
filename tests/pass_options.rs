@@ -241,7 +241,10 @@ fn forwarding_commands_offer_two_required_arguments_and_explain_loading_order() 
     let main = Url::parse("file:///pass-options/main.tex").unwrap();
     for command in ["PassOptionsToPackage", "PassOptionsToClass"] {
         let mut workspace = Workspace {
-            snippets: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                snippets: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let source = r"\PassOptionsTo";

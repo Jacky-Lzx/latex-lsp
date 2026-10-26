@@ -161,7 +161,10 @@ fn entry_queries_complete_single_keys_and_hint_all_three_parameters() {
         for snippets in [false, true] {
             for tail in ["", "{alpha}{yes}{no}"] {
                 let mut workspace = Workspace {
-                    snippets,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        snippets,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 let source = format!("\\{name}{tail}");

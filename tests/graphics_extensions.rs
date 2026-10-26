@@ -425,6 +425,7 @@ fn recorder_only_settings_without_a_proven_execution_order_do_not_assume_default
         workspace.reload(&settings);
         let main = uri(root, "main.tex");
         workspace
+            .project
             .recorded_inputs
             .insert(main.clone(), [main.clone(), settings.clone()].into());
         assert!(workspace.project_documents(&main).contains(&settings));

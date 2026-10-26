@@ -234,7 +234,10 @@ fn malformed_framed_calls_and_ignored_text_do_not_create_literal_colors() {
 fn framed_box_completion_and_hover_preserve_existing_optional_models_and_body() {
     let uri = Url::parse("file:///framed-colors/main.tex").unwrap();
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Workspace::default()
     };
     for (source, expected, snippet) in [

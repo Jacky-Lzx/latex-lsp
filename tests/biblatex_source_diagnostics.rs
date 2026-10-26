@@ -9,7 +9,7 @@ fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url) {
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let mut ws = Workspace::default();
     ws.config.distribution.enabled = false;
-    ws.code_action_literals = true;
+    ws.client.code_action_literals = true;
     ws.open(main.clone(), source, 5);
     (dir, ws, main)
 }
@@ -181,7 +181,7 @@ fn compiler_confirmed_warnings_share_source_repairs_even_when_lint_is_disabled()
     compiler.code = None;
     compiler.message =
         "LaTeX Warning: Citation 'collectd' on page 1 undefined on input line 1.".into();
-    ws.build_diagnostics.insert(
+    ws.project.build_diagnostics.insert(
         main.clone(),
         std::collections::BTreeMap::from([(main.clone(), vec![compiler.clone()])]),
     );

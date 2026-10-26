@@ -9,7 +9,7 @@ fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("untitled:kernel-hooks.tex").unwrap();
     let mut workspace = Workspace::default();
     workspace.config.distribution.enabled = false;
-    workspace.snippets = true;
+    workspace.client.snippets = true;
     workspace.open(uri.clone(), source.into(), 5);
     (workspace, uri)
 }

@@ -255,11 +255,15 @@ fn required_field_key_cache_refreshes_without_inventing_an_insertion_quickfix() 
         let item = &items(&diagnostics, &uri(root, "refs.data"))[0];
         assert_eq!(item.range, span(&source, "café😀"));
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
         workspace
+            .project
             .build_diagnostics
             .insert(uri(root, "main.tex"), diagnostics.clone());
         assert!(editing::code_actions(

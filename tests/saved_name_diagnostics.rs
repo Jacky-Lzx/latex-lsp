@@ -248,13 +248,19 @@ fn compiler_confirmed_saved_name_macro_errors_offer_versioned_spelling_repairs()
         Some(NumberOrString::String("undefined-control-sequence".into()))
     );
     let mut workspace = Workspace {
-        versioned_edits: true,
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.open(uri.clone(), source.into(), 7);
-    workspace.build_diagnostics.insert(uri.clone(), diagnostics);
-    let diagnostic = workspace.build_diagnostics[&uri][&uri]
+    workspace
+        .project
+        .build_diagnostics
+        .insert(uri.clone(), diagnostics);
+    let diagnostic = workspace.project.build_diagnostics[&uri][&uri]
         .iter()
         .find(|item| item.message == "Undefined control sequence.")
         .unwrap();
@@ -284,9 +290,9 @@ fn real_saved_name_macro_spelling_repairs_restore_successful_compilation() {
             let diagnostic = undefined(&before.diagnostics[&uri]);
             let start = source.find(r"\keynme").unwrap();
             assert_eq!(diagnostic.range, Text::new(source.clone()).range(start, start + 7), "{engine}/{call}: {}", before.output);
-            let mut workspace = Workspace { versioned_edits: true, code_action_literals: true, ..Default::default() };
+            let mut workspace = Workspace { client: latex_lsp::project::state::ClientCapabilities { versioned_edits: true, code_action_literals: true, ..Default::default() }, ..Default::default() };
             workspace.open(uri.clone(), source.clone(), 7);
-            workspace.build_diagnostics.insert(uri.clone(), before.diagnostics.clone());
+            workspace.project.build_diagnostics.insert(uri.clone(), before.diagnostics.clone());
             let result = apply(&workspace, &uri, repair(&workspace, &uri, diagnostic));
             std::fs::write(&main, result).unwrap();
             let after = build::run(&main, &config, &AtomicBool::new(false));

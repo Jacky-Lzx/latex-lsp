@@ -267,7 +267,7 @@ fn warning(workspace: &mut Workspace, uri: &Url, loader: &str, name: &str) -> Di
         data: Some(serde_json::json!({"file":file,"loaderCommand":loader})),
         ..Default::default()
     };
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         uri.clone(),
         [(uri.clone(), vec![diagnostic.clone()])].into(),
     );
@@ -348,7 +348,10 @@ fn loader_repairs_preserve_options_lists_versions_and_fix_redundant_suffixes() {
         std::fs::write(root.join("main.tex"), source).unwrap();
         std::fs::write(root.join(filename), "Loaded source.").unwrap();
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
@@ -380,7 +383,10 @@ fn loader_repairs_revalidate_legacy_versions_metadata_and_file_existence() {
     std::fs::write(root.join("local.sty"), "Loaded source.").unwrap();
     let uri = Url::from_file_path(root.join("main.tex")).unwrap();
     let mut workspace = Workspace {
-        apply_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            apply_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -407,6 +413,7 @@ fn loader_repairs_revalidate_legacy_versions_metadata_and_file_existence() {
     let mut invalid = diagnostic;
     invalid.data.as_mut().unwrap()["loaderCommand"] = "documentclass".into();
     workspace
+        .project
         .build_diagnostics
         .get_mut(&uri)
         .unwrap()
@@ -530,8 +537,11 @@ fn real_missing_package_and_class_names_offer_versioned_repairs_that_compile() {
             )
             .unwrap();
             let mut workspace = Workspace {
-                code_action_literals: true,
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
@@ -568,7 +578,10 @@ fn real_missing_package_and_class_names_offer_versioned_repairs_that_compile() {
                 .find(|entry| entry.code == Some(NumberOrString::String(code.into())))
                 .unwrap()
                 .clone();
-            workspace.build_diagnostics.insert(main, before.diagnostics);
+            workspace
+                .project
+                .build_diagnostics
+                .insert(main, before.diagnostics);
             let actions = editing::code_actions(
                 &workspace,
                 &uri,

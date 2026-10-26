@@ -10,7 +10,10 @@ fn fixture(marked: &str) -> (Workspace, Url, Position) {
     let source = marked.replace('¦', "");
     let main = Url::parse("file:///fancy-completion/main.tex").unwrap();
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.open(main.clone(), source.clone(), 7);
@@ -61,7 +64,7 @@ fn inline_command_templates_preserve_existing_code_names_and_control_operands() 
     let item = items.iter().find(|item| item.label == "Verb").unwrap();
     assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
     let (mut workspace, main, at) = fixture("\\Ve¦");
-    workspace.snippets = false;
+    workspace.client.snippets = false;
     let items = features::completion(&workspace, &main, at);
     let item = items.iter().find(|item| item.label == "Verb").unwrap();
     assert_eq!(item.insert_text_format, Some(InsertTextFormat::PLAIN_TEXT));

@@ -367,11 +367,15 @@ fn trailing_comments_do_not_hide_the_reported_closing_line_of_missing_labels() {
             "{call}: {diagnostic:?}"
         );
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Workspace::default()
         };
         workspace.open(uri.clone(), source.clone(), 7);
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), diagnostics.clone());
         let actions = editing::code_actions(
@@ -769,11 +773,17 @@ fn parenthesized_label_spelling_fixes_preserve_the_compilers_exact_key_range() {
         let diagnostics = build_log::parse(&main, &format!("(./main.tex\nLaTeX Warning: {kind} `sec:(targte)' on page 1 undefined on input line 2.\n)\n"));
         let diagnostic = diagnostics[&uri][0].clone();
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Workspace::default()
         };
         workspace.open(uri.clone(), source.clone(), 7);
-        workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+        workspace
+            .project
+            .build_diagnostics
+            .insert(uri.clone(), diagnostics);
         let actions = editing::code_actions(
             &workspace,
             &uri,

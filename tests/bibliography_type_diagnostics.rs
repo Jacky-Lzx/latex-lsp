@@ -230,11 +230,15 @@ fn unknown_style_types_do_not_offer_unverified_spelling_edits() {
     let target = uri(root, "refs.bib");
     let item = diagnostic(&found, &target);
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace
+        .project
         .build_diagnostics
         .insert(uri(root, "main.tex"), found);
     assert!(editing::code_actions(

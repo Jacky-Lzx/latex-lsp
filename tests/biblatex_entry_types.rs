@@ -14,7 +14,10 @@ fn open(workspace: &mut Workspace, source: &str) -> Url {
 #[test]
 fn entry_type_conditions_offer_output_types_and_share_database_descriptions() {
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let bib = Url::parse("file:///entry-type-tests/refs.bib").unwrap();

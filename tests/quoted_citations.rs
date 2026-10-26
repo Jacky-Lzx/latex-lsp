@@ -78,7 +78,10 @@ fn quoted_keys_navigate_and_rename_across_all_citation_argument_styles() {
                 format!("\\bibitem[Display]{{% keep\r\n{key}% tail\r\n}} Body"),
             ] {
                 let mut workspace = Workspace {
-                    versioned_edits: versioned,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: versioned,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 let bib = insert(
@@ -155,7 +158,10 @@ fn rename_into_quotes_converts_each_quoted_relationship_value_once() {
     for versioned in [false, true] {
         for tail in ["\"}", ""] {
             let mut workspace = Workspace {
-                versioned_edits: versioned,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: versioned,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let source = format!("% 😀\r\n@book{{old,title={{old}}}}\r\n@misc{{child, crossref = \" old \", xref={{old}}, xdata=\"old, keep, old\", related = \"keep, old , old \" % note\r\n, entryset = \" old, old {tail}");
@@ -376,11 +382,17 @@ fn quoted_undefined_citations_have_exact_warning_ranges_and_spelling_repairs() {
             Text::new(source.clone()).range(start, start + "O\"Cononr".len())
         );
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.open(uri.clone(), source.clone(), 7);
-        workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+        workspace
+            .project
+            .build_diagnostics
+            .insert(uri.clone(), diagnostics);
         let context = CodeActionContext {
             diagnostics: vec![diagnostic.clone()],
             only: None,

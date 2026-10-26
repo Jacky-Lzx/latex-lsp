@@ -158,7 +158,7 @@ fn unsupported_stars_dynamic_names_and_branch_text_are_not_counter_references() 
 fn etoolbox_counter_commands_offer_snippets_and_protect_their_command_names() {
     for (prefix, command) in [(r"\defcou", "defcounter"), (r"\ifltxcou", "ifltxcounter")] {
         let (_directory, mut workspace, content, definitions) = project(prefix);
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let at = workspace.documents[&content].text.position(prefix.len());
         let items = features::completion(&workspace, &content, at);
         let item = items.iter().find(|item| item.label == command).unwrap();
@@ -401,8 +401,9 @@ fn real_missing_counter_assignments_offer_a_spelling_fix_and_compile_after_repai
                 diagnostic.code,
                 Some(NumberOrString::String("undefined-counter".into()))
             );
-            workspace.code_action_literals = true;
+            workspace.client.code_action_literals = true;
             workspace
+                .project
                 .build_diagnostics
                 .insert(Url::from_file_path(&main).unwrap(), before.diagnostics);
             let actions = editing::code_actions(

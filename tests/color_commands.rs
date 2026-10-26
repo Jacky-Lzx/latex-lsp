@@ -40,7 +40,7 @@ fn color_command_snippets_and_hover_describe_their_model_and_required_arguments(
         ("pagecolor", "pagecolor{${1:color}}"),
     ] {
         for snippets in [false, true] {
-            workspace.snippets = snippets;
+            workspace.client.snippets = snippets;
             let source = format!("😀 \\{}", &command[..command.len() - 1]);
             let uri = open(&mut workspace, &source);
             let position = Text::new(source.clone()).position(source.len());
@@ -75,7 +75,10 @@ fn color_command_snippets_and_hover_describe_their_model_and_required_arguments(
 #[test]
 fn middle_of_word_completion_preserves_existing_color_arguments_and_comment_continuations() {
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Workspace::default()
     };
     for (command, arguments) in [

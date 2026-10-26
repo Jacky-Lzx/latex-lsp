@@ -237,7 +237,10 @@ fn context_signatures_track_key_code_and_waiting_parameters_and_respect_user_sig
     for snippets in [false, true] {
         for tail in ["", "{alpha}{code}", "*{alpha}{code}"] {
             let mut workspace = Workspace {
-                snippets,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    snippets,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let source = format!("\\entrydata{tail}");

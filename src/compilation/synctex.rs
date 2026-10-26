@@ -173,6 +173,7 @@ pub fn prepare(workspace: &Workspace, uri: &Url) -> Result<Project> {
         .artifact_path(&path, "pdf")
         .ok_or_else(|| Error::invalid_params("Invalid root filename"))?;
     let checks = workspace
+        .project
         .pdf_checks
         .get(&root)
         .filter(|checks| checks.matches_pdf(&pdf));
@@ -580,6 +581,7 @@ mod tests {
             let image_uri = Url::from_file_path(&image).unwrap();
             if recorded_image {
                 workspace
+                    .project
                     .recorded_inputs
                     .insert(uri.clone(), [uri.clone(), image_uri.clone()].into());
                 workspace.refresh_project(&uri);

@@ -90,8 +90,11 @@ fn fixture(
     std::fs::write(root.join("refs.bib"), "@book{fixture,title={Fixture}}").unwrap();
     std::fs::write(root.join("local,style.bst"), "").unwrap();
     let mut workspace = Workspace {
-        code_action_literals: true,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -130,9 +133,10 @@ fn fixture(
     };
     let scope = std::collections::BTreeSet::from([main.clone(), provider]);
     workspace
+        .project
         .build_diagnostic_sources
         .insert(main.clone(), scope);
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         main.clone(),
         std::collections::BTreeMap::from([(main.clone(), vec![diagnostic.clone()])]),
     );
@@ -233,6 +237,7 @@ fn malformed_unconfirmed_or_outside_project_bibliography_scopes_cannot_offer_rep
         let mut forged = diagnostic.clone();
         forged.data.as_mut().unwrap()["macroSources"] = scope;
         workspace
+            .project
             .build_diagnostics
             .get_mut(&main)
             .unwrap()
@@ -240,11 +245,12 @@ fn malformed_unconfirmed_or_outside_project_bibliography_scopes_cannot_offer_rep
         assert!(actions(&workspace, &main, &forged).is_empty());
     }
     workspace
+        .project
         .build_diagnostics
         .get_mut(&main)
         .unwrap()
         .insert(main.clone(), vec![diagnostic.clone()]);
-    workspace.build_diagnostic_sources.insert(
+    workspace.project.build_diagnostic_sources.insert(
         main.clone(),
         std::collections::BTreeSet::from([main.clone()]),
     );

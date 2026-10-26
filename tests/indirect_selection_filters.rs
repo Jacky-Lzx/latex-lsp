@@ -23,9 +23,12 @@ fn fixture(root: &Path, source: &str, literal: bool) -> (Workspace, Url, Diagnos
     std::fs::write(root.join("chapter.tex"), "Chapter").unwrap();
     let main = Url::from_file_path(root.join("main.tex")).unwrap();
     let mut workspace = Workspace {
-        apply_edits: true,
-        code_action_literals: literal,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            apply_edits: true,
+            code_action_literals: literal,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -43,7 +46,7 @@ fn fixture(root: &Path, source: &str, literal: bool) -> (Workspace, Url, Diagnos
         data: Some(serde_json::json!({"file":"chapte.tex"})),
         ..Default::default()
     };
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         main.clone(),
         [(main.clone(), vec![diagnostic.clone()])].into(),
     );

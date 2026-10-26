@@ -69,7 +69,10 @@ fn custom_type_identifiers_preserve_metadata_and_versioned_cross_file_renames() 
         for (open, close) in [('{', '}'), ('(', ')')] {
             let old = "book(old)";
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let source = format!("% 😀\r\n@ \t{kind}{open}{old}\r\n , title={{Literal {old}}}, author={{A. Author}}, year=2026{close}\r\n@article{{child, crossref={{{old}}}}}");

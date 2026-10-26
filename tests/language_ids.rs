@@ -29,8 +29,11 @@ fn supporting_sources_are_discovered_and_explicit_inputs_keep_project_scope_and_
             std::fs::write(root.join(name), text).unwrap();
         }
         let mut workspace = Workspace {
-            versioned_edits: true,
-            snippets: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                versioned_edits: true,
+                snippets: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());

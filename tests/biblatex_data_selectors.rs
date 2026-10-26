@@ -53,7 +53,10 @@ const COMMANDS: &[(&str, &str, &str)] = &[
 fn data_selector_candidates_follow_output_field_and_list_kinds() {
     for (name, before, expected) in COMMANDS {
         let mut workspace = Workspace {
-            snippets: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                snippets: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         insert(
@@ -315,7 +318,10 @@ fn generated_counter_theorem_and_conditional_commands_disable_conflicting_builti
         ("\\newif\\ifnameundef", "ifnameundef", "author"),
     ] {
         let mut workspace = Workspace {
-            snippets: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                snippets: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let source = format!("{declaration}\\{name}{{{field}}}");

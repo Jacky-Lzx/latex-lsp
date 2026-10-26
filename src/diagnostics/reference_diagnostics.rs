@@ -257,6 +257,7 @@ fn diagnostics_for(
             // An identical compiler-confirmed warning already carries more context.
             let range = doc.text.range(span.start, span.end);
             if ws
+                .project
                 .build_diagnostics
                 .values()
                 .filter_map(|project| project.get(uri))

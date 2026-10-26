@@ -16,8 +16,11 @@ fn project(root: &Path, files: &[(&str, &str)]) -> Workspace {
         std::fs::write(path, source).unwrap();
     }
     let mut workspace = Workspace {
-        versioned_edits: true,
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());

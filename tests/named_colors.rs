@@ -17,7 +17,10 @@ fn insert(workspace: &mut Workspace, name: &str, source: &str, version: Option<i
 }
 fn setup(source: &str) -> (Workspace, Url) {
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let uri = insert(&mut workspace, "main.tex", source, Some(7));
@@ -1225,7 +1228,7 @@ fn declaration_snippets_and_signatures_preserve_existing_parameters() {
         );
         let short = format!("\\{}", &name[..3]);
         let (mut workspace, uri) = setup(&short);
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = features::completion(
             &workspace,
             &uri,

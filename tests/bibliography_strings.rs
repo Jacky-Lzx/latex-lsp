@@ -125,7 +125,7 @@ fn abbreviation_completions_replace_identifiers_and_fill_empty_concatenation_ope
     ] {
         let source = format!("{header}{body}");
         let (mut workspace, uri) = workspace(&source);
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = features::completion(&workspace, &uri, at(&source, marker));
         let journal = items
             .iter()
@@ -232,7 +232,7 @@ fn abbreviation_completions_keep_snippet_metacharacters_literal_and_bound_long_p
         "😀 ".repeat(1000)
     );
     let (mut workspace, uri) = workspace(&source);
-    workspace.snippets = true;
+    workspace.client.snippets = true;
     let items = features::completion(&workspace, &uri, at(&source, "title=Ca"));
     let item = items
         .iter()

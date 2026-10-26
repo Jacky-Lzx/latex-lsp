@@ -227,7 +227,10 @@ fn varioref_signatures_track_the_optional_notes_and_required_label() {
     }
     for name in ["vref", "Vref", "vpageref", "fullref"] {
         let mut workspace = Workspace {
-            snippets: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                snippets: true,
+                ..Default::default()
+            },
             ..Workspace::default()
         };
         let source = format!("\\{name}");
@@ -275,11 +278,15 @@ fn varioref_reference_warnings_have_precise_utf16_ranges_and_label_spelling_repa
             "{call}: {diagnostic:?}"
         );
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Workspace::default()
         };
         workspace.open(uri.clone(), source, 3);
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), diagnostics.clone());
         let actions = editing::code_actions(
@@ -324,12 +331,16 @@ fn spelling_repairs_match_the_selected_warning_before_deduplicating_the_same_edi
             diagnostics.get_mut(&uri).unwrap().reverse();
         }
         let mut workspace = Workspace {
-            code_action_literals: true,
-            apply_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                apply_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.open(uri.clone(), source.into(), 3);
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), diagnostics.clone());
         for diagnostic in &diagnostics[&uri] {
@@ -347,7 +358,7 @@ fn spelling_repairs_match_the_selected_warning_before_deduplicating_the_same_edi
                 action.diagnostics.as_ref().unwrap(),
                 &vec![diagnostic.clone()]
             );
-            workspace.code_action_literals = false;
+            workspace.client.code_action_literals = false;
             let legacy = editing::code_actions(&workspace, &uri, diagnostic.range, &context);
             let CodeActionOrCommand::Command(command) = &legacy[0] else {
                 panic!("missing legacy action")
@@ -355,7 +366,7 @@ fn spelling_repairs_match_the_selected_warning_before_deduplicating_the_same_edi
             let request =
                 serde_json::from_value(command.arguments.as_ref().unwrap()[0].clone()).unwrap();
             assert!(editing::resolve_fix(&workspace, request).is_some());
-            workspace.code_action_literals = true;
+            workspace.client.code_action_literals = true;
         }
         // With no specific warning selected, show a single replacement choice.
         let actions = editing::code_actions(

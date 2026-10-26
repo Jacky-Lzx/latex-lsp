@@ -115,7 +115,7 @@ fn input_warning(workspace: &mut Workspace, root: &Url, uri: &Url, file: &str) -
         data: Some(serde_json::json!({"file":file})),
         ..Default::default()
     };
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         root.clone(),
         [(uri.clone(), vec![diagnostic.clone()])].into(),
     );
@@ -154,8 +154,11 @@ fn input_spelling_fixes_protect_spaces_and_preserve_existing_delimiters_and_comm
         std::fs::write(directory.path().join("main.tex"), &source).unwrap();
         std::fs::write(directory.path().join("my chapter.tex"), "Chapter.").unwrap();
         let mut workspace = Workspace {
-            code_action_literals: true,
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace
@@ -206,9 +209,12 @@ fn unicode_input_fixes_group_paths_and_legacy_commands_revalidate_the_expanded_e
         std::fs::write(root.join("main.tex"), &source).unwrap();
         std::fs::write(root.join("café.tex"), "Chapter.").unwrap();
         let mut workspace = Workspace {
-            code_action_literals: true,
-            apply_edits: true,
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                apply_edits: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace
@@ -236,7 +242,7 @@ fn unicode_input_fixes_group_paths_and_legacy_commands_revalidate_the_expanded_e
             }])
             .unwrap();
         assert_eq!(changed.source, format!("% 😀\r\n{expected}\r\n"));
-        workspace.code_action_literals = false;
+        workspace.client.code_action_literals = false;
         let legacy = actions(&workspace, &uri, diagnostic);
         assert_eq!(legacy.len(), 1);
         let CodeActionOrCommand::Command(command) = &legacy[0] else {
@@ -268,7 +274,10 @@ fn input_file_fixes_ignore_includeonly_and_revalidate_files_and_command_requests
     std::fs::write(root.join("main.tex"), source).unwrap();
     std::fs::write(root.join("chapter.tex"), "Chapter.").unwrap();
     let mut workspace = Workspace {
-        apply_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            apply_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace
@@ -325,12 +334,15 @@ fn shared_input_source_uses_the_diagnostic_build_root_for_filename_suggestions()
     }
     let uri = Url::from_file_path(root.join("shared/source.tex")).unwrap();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     for (folder, expected) in [("a", "chapter"), ("b", "chapert")] {
-        workspace.build_diagnostics.clear();
+        workspace.project.build_diagnostics.clear();
         let main = Url::from_file_path(root.join(folder).join("main.tex")).unwrap();
         let diagnostic = input_warning(&mut workspace, &main, &uri, "chapetr.tex");
         let result = actions(&workspace, &uri, diagnostic);
@@ -354,7 +366,10 @@ fn input_fixes_reject_incomplete_quotes_and_mismatched_compiler_filename_data() 
     for source in [r#"\input"chapetr"#, r"\input{chapetr}"] {
         std::fs::write(root.join("main.tex"), source).unwrap();
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace
@@ -364,6 +379,7 @@ fn input_fixes_reject_incomplete_quotes_and_mismatched_compiler_filename_data() 
         if source.ends_with('}') {
             diagnostic.data = Some(serde_json::json!({"file":"another.tex"}));
             workspace
+                .project
                 .build_diagnostics
                 .get_mut(&uri)
                 .unwrap()
@@ -405,11 +421,15 @@ fn real_input_filename_fixes_read_the_intended_source_for_braced_bare_and_quoted
                 .unwrap_or_else(|| panic!("{command}: {:?}\n{}", failed.diagnostics, failed.output))
                 .clone();
             let mut workspace = Workspace {
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri.clone(), failed.diagnostics);
             let result = actions(&workspace, &uri, diagnostic);

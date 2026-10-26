@@ -72,7 +72,10 @@ fn variants_complete_navigate_and_rename_wrapped_root_paths_with_versions() {
     }
     let child = uri(root, "chapters/child.tex");
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -193,6 +196,7 @@ fn mixed_display_and_execution_retains_source_labels_without_importing_unrelated
             std::fs::write(root.join("main.tex"), &source).unwrap();
             workspace.open(main.clone(), source.clone(), 7);
             workspace
+                .project
                 .recorded_inputs
                 .insert(main.clone(), [code.clone(), data.clone()].into());
             assert!(
@@ -241,6 +245,7 @@ fn family_customizations_do_not_guess_paths_or_exclude_recorded_executable_sourc
             let source = format!(r"{settings}\{command}{{sample.rs}}");
             workspace.open(main.clone(), source, 7);
             workspace
+                .project
                 .recorded_inputs
                 .insert(main.clone(), [code.clone()].into());
             assert!(
@@ -299,13 +304,17 @@ fn variant_missing_diagnostics_and_fixes_keep_the_actual_command_and_wrappers() 
             let start = source.find(wrong).unwrap();
             assert_eq!(item.range, text.range(start, start + wrong.len()));
             let mut workspace = Workspace {
-                code_action_literals: true,
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace.open(main.clone(), source.clone(), 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(main.clone(), items.clone());
             let fixes = editing::code_actions(
@@ -392,13 +401,17 @@ fn real_variant_missing_fixes_compile_wrapped_paths_with_both_engines() {
                 let start = source.find(wrong).unwrap();
                 assert_eq!(item.range, text.range(start, start + wrong.len()));
                 let mut workspace = Workspace {
-                    code_action_literals: true,
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        code_action_literals: true,
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(root.into());
                 workspace.open(main.clone(), source.clone(), 7);
                 workspace
+                    .project
                     .build_diagnostics
                     .insert(main.clone(), first.diagnostics);
                 let fixes = editing::code_actions(
@@ -486,6 +499,7 @@ fn real_mixed_execution_keeps_labels_and_excludes_other_displayed_sources() {
                 workspace.add_root(root.into());
                 workspace.open(main.clone(), source.clone(), 7);
                 workspace
+                    .project
                     .recorded_inputs
                     .insert(main.clone(), outcome.inputs.unwrap());
                 let sources = workspace.project_documents(&main);

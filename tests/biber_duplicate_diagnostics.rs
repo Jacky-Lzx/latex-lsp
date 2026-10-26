@@ -215,11 +215,15 @@ fn ambiguous_duplicate_keys_link_each_exact_candidate_without_selecting_a_declar
         assert!(related.message.contains("alpha😀"));
     }
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace
+        .project
         .build_diagnostics
         .insert(uri(root, "main.tex"), diagnostics.clone());
     assert!(editing::code_actions(

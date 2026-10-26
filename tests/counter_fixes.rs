@@ -9,8 +9,11 @@ fn setup(source: &str, definitions: &str) -> (Workspace, Url, Url) {
     let uri = Url::parse("file:///counter-fixes/main.tex").unwrap();
     let declarations = Url::parse("file:///counter-fixes/definitions.tex").unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace
@@ -21,6 +24,7 @@ fn setup(source: &str, definitions: &str) -> (Workspace, Url, Url) {
         Document::new(&declarations, definitions.into(), None),
     );
     workspace
+        .project
         .recorded_inputs
         .insert(uri.clone(), [uri.clone(), declarations.clone()].into());
     (workspace, uri, declarations)
@@ -42,7 +46,7 @@ fn diagnostic(workspace: &mut Workspace, uri: &Url, name: &str) -> Diagnostic {
 }
 
 fn store(workspace: &mut Workspace, uri: &Url, diagnostic: Diagnostic) {
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         uri.clone(),
         BTreeMap::from([(uri.clone(), vec![diagnostic])]),
     );
@@ -126,10 +130,12 @@ fn counter_spelling_repairs_recheck_macro_operands_across_project_sources() {
     let (mut workspace, uri, definitions) = setup(source, declarations);
     let mut error = diagnostic(&mut workspace, &uri, "equatoin");
     workspace
+        .project
         .build_diagnostic_sources
         .insert(uri.clone(), [uri.clone()].into());
     assert!(actions(&workspace, &uri, &error).is_empty());
     workspace
+        .project
         .build_diagnostic_sources
         .insert(uri.clone(), [uri.clone(), definitions.clone()].into());
     assert_eq!(
@@ -148,11 +154,13 @@ fn counter_spelling_repairs_recheck_macro_operands_across_project_sources() {
         Document::new(&later, r"\renewcommand{\done}[3]{}".into(), None),
     );
     workspace
+        .project
         .recorded_inputs
         .get_mut(&uri)
         .unwrap()
         .insert(later.clone());
     workspace
+        .project
         .build_diagnostic_sources
         .get_mut(&uri)
         .unwrap()
@@ -208,11 +216,12 @@ fn counter_fixes_recheck_paused_parent_declarations_and_metadata() {
         .documents
         .insert(child.clone(), Document::new(&child, source.into(), Some(3)));
     workspace
+        .project
         .recorded_inputs
         .get_mut(&root)
         .unwrap()
         .insert(child.clone());
-    workspace.build_diagnostic_sources.insert(
+    workspace.project.build_diagnostic_sources.insert(
         root.clone(),
         [root.clone(), child.clone(), definitions.clone()].into(),
     );
@@ -227,7 +236,7 @@ fn counter_fixes_recheck_paused_parent_declarations_and_metadata() {
         ),
         ..Default::default()
     };
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         root.clone(),
         BTreeMap::from([(child.clone(), vec![error.clone()])]),
     );
@@ -240,6 +249,7 @@ fn counter_fixes_recheck_paused_parent_declarations_and_metadata() {
         let mut malformed = error.clone();
         malformed.data.as_mut().unwrap()["macroPausedSources"] = value;
         workspace
+            .project
             .build_diagnostics
             .get_mut(&root)
             .unwrap()
@@ -247,6 +257,7 @@ fn counter_fixes_recheck_paused_parent_declarations_and_metadata() {
         assert!(actions(&workspace, &child, &malformed).is_empty());
     }
     workspace
+        .project
         .build_diagnostics
         .get_mut(&root)
         .unwrap()
@@ -293,7 +304,7 @@ fn optional_counter_repairs_protect_closing_brackets_without_changing_titles() {
     ] {
         for versioned in [false, true] {
             let (mut workspace, uri, _) = setup(source, r"\newcounter{counter]new}");
-            workspace.versioned_edits = versioned;
+            workspace.client.versioned_edits = versioned;
             let mut diagnostic = diagnostic(&mut workspace, &uri, "counterNnew");
             if source.starts_with(r"\newtheorem{within}") {
                 let start = source.rfind("counterNnew").unwrap();
@@ -337,7 +348,7 @@ fn counter_fixes_preserve_values_whitespace_utf16_and_other_calls() {
             let source =
                 format!("😀 \\{command}  {{equatoin}}{value}\r\n\\stepcounter{{equatoin}}\r\n");
             let (mut workspace, uri, _) = setup(&source, "");
-            workspace.versioned_edits = versioned;
+            workspace.client.versioned_edits = versioned;
             let diagnostic = diagnostic(&mut workspace, &uri, "equatoin");
             let response = actions(&workspace, &uri, &diagnostic);
             assert!(response.len() <= 5);
@@ -527,8 +538,8 @@ fn counter_fixes_reject_unknown_context_known_names_ambiguous_candidates_and_for
 fn legacy_counter_fixes_revalidate_versions_candidates_and_source_arguments() {
     let source = r"\setcounter{seqeunce}{2}";
     let (mut workspace, uri, declarations) = setup(source, r"\newcounter{sequence}");
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
     let diagnostic = diagnostic(&mut workspace, &uri, "seqeunce");
     let response = actions(&workspace, &uri, &diagnostic);
     let CodeActionOrCommand::Command(command) = &response[0] else {
@@ -596,13 +607,17 @@ fn counter_spelling_fixes_turn_a_real_failed_build_into_a_successful_one() {
         .unwrap()
         .clone();
     let mut workspace = Workspace {
-        versioned_edits: true,
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace.open(uri.clone(), source.into(), 9);
     workspace
+        .project
         .build_diagnostics
         .insert(Url::from_file_path(&main).unwrap(), before.diagnostics);
     let response = actions(&workspace, &uri, &diagnostic);

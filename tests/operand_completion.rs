@@ -10,7 +10,10 @@ fn complete(marked: &str, label: &str) -> (CompletionItem, Text, usize) {
     let source = marked.replacen('|', "", 1);
     let uri = Url::parse("file:///operand-completion/main.tex").unwrap();
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Workspace::default()
     };
     // Inspect edits for specific names across the complete command catalog.
@@ -221,7 +224,10 @@ fn operand_completions_use_cross_file_definitions_and_preserve_following_text() 
         let source = format!("\\meaning % comment\r\n  \\{prefix}$ suffix");
         std::fs::write(temp.path().join("content.tex"), &source).unwrap();
         let mut workspace = Workspace {
-            snippets: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                snippets: true,
+                ..Default::default()
+            },
             ..Workspace::default()
         };
         workspace.add_root(temp.path().into());
@@ -267,7 +273,10 @@ fn literal_text_and_escaped_backslashes_do_not_complete_commands() {
         let source = marked.replacen('|', "", 1);
         let text = Text::new(source.clone());
         let mut workspace = Workspace {
-            snippets: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                snippets: true,
+                ..Default::default()
+            },
             ..Workspace::default()
         };
         workspace

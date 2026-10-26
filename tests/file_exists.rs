@@ -304,7 +304,10 @@ fn unsafe_or_nonexistent_checks_and_nonfilename_arguments_do_not_offer_file_edit
 fn existence_check_command_snippets_and_signatures_show_the_two_branches() {
     let main = Url::parse("file:///file-exists/main.tex").unwrap();
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.open(main.clone(), r"\IfFileEx".into(), 1);

@@ -8,7 +8,10 @@ use lsp_types::*;
 fn workspace(source: &str, snippets: bool) -> (Workspace, Url) {
     let uri = Url::parse("file:///bib-completion/refs.bib").unwrap();
     let mut workspace = Workspace {
-        snippets,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace

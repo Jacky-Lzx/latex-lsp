@@ -285,7 +285,10 @@ fn conditional_inputs_ignore_unexpanded_paths_and_unsupported_star_and_option_sy
 fn conditional_input_command_completion_and_signature_describe_the_pre_input_hook() {
     let main = Url::parse("file:///conditional-input/main.tex").unwrap();
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.open(main.clone(), r"\InputIfFi".into(), 1);

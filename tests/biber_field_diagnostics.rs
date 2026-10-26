@@ -319,11 +319,15 @@ fn unqualified_sources_are_checked_at_each_warning_without_borrowing_future_inpu
     );
     assert!(items(&diagnostics, &uri(root, "second.data")).is_empty());
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace
+        .project
         .build_diagnostics
         .insert(uri(root, "main.tex"), diagnostics.clone());
     assert!(editing::code_actions(
@@ -1156,11 +1160,15 @@ fn field_location_caches_refresh_between_logs_without_proposing_deletions() {
         let item = &items(&diagnostics, &uri(root, "refs.data"))[0];
         assert_eq!(item.range, span(source, "wrong"));
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
         workspace
+            .project
             .build_diagnostics
             .insert(uri(root, "main.tex"), diagnostics.clone());
         assert!(editing::code_actions(

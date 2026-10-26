@@ -129,7 +129,10 @@ fn file_moves_use_the_project_root_and_versioned_edits_preserve_language_and_opt
     let source = "% 😀\r\n\\inputminted[linenos]{rust}% path\r\n{code/sample.rs}\r\n";
     std::fs::write(child.to_file_path().unwrap(), source).unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -195,6 +198,7 @@ fn displayed_tex_files_are_data_dependencies_while_explicit_source_inputs_keep_t
         for recorded in [false, true] {
             if recorded {
                 workspace
+                    .project
                     .recorded_inputs
                     .insert(main.clone(), [data.clone()].into());
             }

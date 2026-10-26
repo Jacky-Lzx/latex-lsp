@@ -109,7 +109,7 @@ fn subfigure_reference_completion_signatures_and_snippets_preserve_stars() {
             .unwrap()
             .is_none());
     }
-    workspace.snippets = true;
+    workspace.client.snippets = true;
     let main = insert(&mut workspace, "snippet.tex", r"\subr");
     let items = features::completion(&workspace, &main, Position::new(0, 5));
     let item = items.iter().find(|item| item.label == "subref").unwrap();
@@ -170,11 +170,15 @@ fn subfigure_warning_prefixes_select_source_keys_and_repair_their_own_namespace(
         let start = source.rfind('{').unwrap() + 1;
         let expected = Text::new(source.clone()).range(start, source.rfind('}').unwrap());
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.open(uri.clone(), source.clone(), 3);
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), diagnostics.clone());
         let actions = editing::code_actions(
@@ -262,12 +266,16 @@ fn real_subfigure_warning_repairs_and_label_renames_keep_both_auxiliary_labels()
         .unwrap()
         .clone();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace.open(uri.clone(), source.into(), 3);
     workspace
+        .project
         .build_diagnostics
         .insert(uri.clone(), before.diagnostics);
     let actions = editing::code_actions(

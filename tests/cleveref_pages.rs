@@ -79,7 +79,10 @@ fn label_lists_navigate_and_rename_each_key_preserving_separators_and_ignored_ca
 #[test]
 fn label_list_completion_edits_one_key_and_signatures_keep_a_single_list_parameter() {
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Workspace::default()
     };
     insert(&mut workspace, "labels.tex", r"\label{sec:target}");
@@ -186,11 +189,15 @@ fn label_list_warnings_fix_each_matching_occurrence_without_changing_other_keys(
         let diagnostics = build_log::parse(&main, &log);
         assert_eq!(diagnostics[&uri].len(), 3);
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Workspace::default()
         };
         workspace.open(uri.clone(), source.clone(), 9);
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), diagnostics.clone());
         let text = Text::new(source.clone());

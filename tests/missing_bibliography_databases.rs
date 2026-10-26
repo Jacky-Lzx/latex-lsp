@@ -173,15 +173,18 @@ fn database_fixes_preserve_other_items_comments_directories_suffixes_and_legacy_
             );
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                code_action_literals: true,
-                apply_edits: true,
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    apply_edits: true,
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace.open(main.clone(), source.clone(), 7);
             let diagnostic = database_diagnostic(root, "db/reffs.bib");
-            workspace.build_diagnostics.insert(
+            workspace.project.build_diagnostics.insert(
                 main.clone(),
                 [(main.clone(), vec![diagnostic.clone()])].into(),
             );
@@ -204,7 +207,7 @@ fn database_fixes_preserve_other_items_comments_directories_suffixes_and_legacy_
                 format!("Replace with bibliography database file `{replacement}`")
             );
             let modern = action.edit.clone().unwrap();
-            workspace.code_action_literals = false;
+            workspace.client.code_action_literals = false;
             let legacy = actions(&workspace, &main, &diagnostic);
             let CodeActionOrCommand::Command(command) = &legacy[0] else {
                 panic!()
@@ -255,14 +258,17 @@ fn database_candidates_are_bounded_and_cannot_introduce_commas_spaces_or_wrong_e
     std::fs::write(root.join("main.tex"), source).unwrap();
     let main = uri(root, "main.tex");
     let mut workspace = Workspace {
-        code_action_literals: true,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace.open(main.clone(), source.into(), 7);
     let diagnostic = database_diagnostic(root, "refsg.bib");
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         main.clone(),
         [(main.clone(), vec![diagnostic.clone()])].into(),
     );
@@ -283,7 +289,7 @@ fn database_candidates_are_bounded_and_cannot_introduce_commas_spaces_or_wrong_e
     ] {
         let mut mismatch = diagnostic.clone();
         mismatch.data = Some(data);
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             main.clone(),
             [(main.clone(), vec![mismatch.clone()])].into(),
         );

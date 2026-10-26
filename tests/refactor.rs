@@ -13,8 +13,11 @@ fn setup(marked: &str, only: CodeActionKind) -> (Workspace, Url, Range, CodeActi
     let text = Text::new(source.clone());
     let range = text.range(start, end);
     let mut ws = Workspace {
-        code_action_literals: true,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     ws.documents
@@ -204,7 +207,10 @@ fn refactor_parameter_context_follows_related_unsaved_definitions_and_ambiguity(
     std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
     std::fs::write(macros.to_file_path().unwrap(), "\\newcommand{\\take}[1]{}").unwrap();
     let mut ws = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     ws.config.distribution.enabled = false;

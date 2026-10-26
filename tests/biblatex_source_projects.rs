@@ -467,7 +467,8 @@ fn recorded_theme_name_operands_preserve_citation_completion_and_navigation() {
         let uri = Url::from_file_path(path).unwrap();
         // Themes loaded through Beamer enter the source scope through the
         // compiler recorder, without a literal usepackage in the main file.
-        ws.recorded_inputs
+        ws.project
+            .recorded_inputs
             .insert(main.clone(), std::collections::BTreeSet::from([uri]));
         ws.refresh_project(&main);
         let doc = &ws.documents[&main];

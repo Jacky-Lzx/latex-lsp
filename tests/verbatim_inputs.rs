@@ -164,7 +164,7 @@ fn file_and_directory_moves_produce_versioned_edits_and_keep_stars_and_comments(
     let mut workspace = Workspace::default();
     workspace.add_root(root.into());
     workspace.open(child.clone(), source.into(), 7);
-    workspace.versioned_edits = true;
+    workspace.client.versioned_edits = true;
     assert_eq!(
         navigation::document_links(&workspace, &child)[0].target,
         Some(uri(root, "code/sample.rs"))
@@ -224,6 +224,7 @@ fn static_code_files_are_build_inputs_without_importing_apparent_source_dependen
     for recorded in [false, true] {
         if recorded {
             workspace
+                .project
                 .recorded_inputs
                 .insert(main.clone(), [uri(root, "example.tex")].into());
         }
@@ -272,6 +273,7 @@ fn code_and_source_roles_are_independent_for_shared_files_and_explicit_inputs_wi
     for name in ["listing.tex", "source.tex", "both.tex"] {
         let main = uri(root, name);
         workspace
+            .project
             .recorded_inputs
             .insert(main, [code.clone()].into());
     }
@@ -416,6 +418,7 @@ fn displayed_settings_are_ignored_but_redefined_commands_do_not_hide_executed_se
             );
             workspace.open(main.clone(), source, 2);
             workspace
+                .project
                 .recorded_inputs
                 .insert(main.clone(), [settings.clone()].into());
             let links = navigation::document_links(&workspace, &main);

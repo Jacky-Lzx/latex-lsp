@@ -404,7 +404,7 @@ fn repeated_static_named_declarations_keep_unicode_ranges_and_document_versions(
         let source = format!("% 😀\r\n{declare}{{parent}}{{member}}");
         std::fs::write(dir.path().join("sets.tex"), &source).unwrap();
         ws.open(sets.clone(), source, 9);
-        ws.versioned_edits = true;
+        ws.client.versioned_edits = true;
         let query = key(&ws, &sets, &format!("{declare}{{"), "parent");
         assert_eq!(
             features::prepare_rename(&ws, &sets, query.range.start)
@@ -788,7 +788,7 @@ fn coupled_edits_keep_versions_repeatable_queries_and_disjoint_name_spaces() {
         "@book{parent} @book{member} @book{child,crossref={parent}}".into(),
         8,
     );
-    ws.versioned_edits = true;
+    ws.client.versioned_edits = true;
     let source = key(&ws, &main, r"\defbibentryset{", "parent");
     assert_eq!(
         features::prepare_rename(&ws, &main, source.range.start).unwrap(),

@@ -338,11 +338,15 @@ fn commented_bibitems_supply_static_candidates_for_precise_missing_citation_repa
         Range::new(Position::new(4, 0), Position::new(4, 6))
     );
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Workspace::default()
     };
     workspace.open(uri.clone(), source.into(), 7);
     workspace
+        .project
         .build_diagnostics
         .insert(uri.clone(), diagnostics.clone());
     let actions = editing::code_actions(

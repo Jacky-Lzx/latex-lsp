@@ -64,13 +64,17 @@ fn missing_local_resources_from_biber_and_bibtex_offer_exact_versioned_filename_
                 ))
             );
             let mut workspace = Workspace {
-                code_action_literals: true,
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace.open(main.clone(), source.clone(), 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(main.clone(), diagnostics.clone());
             let fixes = actions(&workspace, &main, diagnostic);
@@ -151,13 +155,17 @@ fn biber_resource_fixes_preserve_literal_names_options_and_explicit_extensions()
                 "{missing}: {diagnostic:?}"
             );
             let mut workspace = Workspace {
-                code_action_literals: true,
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace.open(main.clone(), source.clone(), 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(main.clone(), diagnostics.clone());
             let fixes = actions(&workspace, &main, diagnostic);
@@ -221,12 +229,16 @@ fn malformed_biber_messages_and_unconfirmed_resource_sources_do_not_offer_edits(
             "{body}: {diagnostic:?}"
         );
         let mut workspace = Workspace {
-            code_action_literals: true,
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
         workspace
+            .project
             .build_diagnostics
             .insert(main.clone(), diagnostics.clone());
         assert!(actions(&workspace, &main, diagnostic).is_empty(), "{body}");
@@ -254,13 +266,17 @@ fn resource_candidates_are_bounded_and_recheck_diagnostic_identity() {
         build_log::parse_bibliography(&root.join("main.tex"), "ERROR - Cannot find 'refsx.bib'!\n");
     let diagnostic = &diagnostics[&main][0];
     let mut workspace = Workspace {
-        code_action_literals: true,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace.open(main.clone(), source.into(), 7);
     workspace
+        .project
         .build_diagnostics
         .insert(main.clone(), diagnostics.clone());
     let fixes = actions(&workspace, &main, diagnostic);
@@ -277,6 +293,7 @@ fn resource_candidates_are_bounded_and_recheck_diagnostic_identity() {
         let mut changed = diagnostic.clone();
         changed.data = Some(data);
         workspace
+            .project
             .build_diagnostics
             .insert(main.clone(), [(main.clone(), vec![changed.clone()])].into());
         assert!(actions(&workspace, &main, &changed).is_empty());
@@ -322,13 +339,17 @@ fn real_biber_missing_resources_offer_fixes_that_load_the_selected_database() {
                 })
                 .unwrap();
             let mut workspace = Workspace {
-                code_action_literals: true,
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace.open(main.clone(), source.clone(), 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(main.clone(), diagnostics.clone());
             let fixes = actions(&workspace, &main, diagnostic);
@@ -401,13 +422,17 @@ fn real_bibtex_resource_file_fixes_restore_compilation() {
             })
             .unwrap();
         let mut workspace = Workspace {
-            code_action_literals: true,
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
         workspace.open(main.clone(), source.clone(), 7);
         workspace
+            .project
             .build_diagnostics
             .insert(main.clone(), diagnostics.clone());
         let fixes = actions(&workspace, &main, diagnostic);

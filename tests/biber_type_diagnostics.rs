@@ -245,11 +245,15 @@ fn type_diagnostics_refresh_raw_name_ranges_without_an_unverified_misc_replaceme
         let item = &items(&diagnostics, &uri(root, "refs.data"))[0];
         assert_eq!(item.range, span(&source, "Straße"));
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
         workspace
+            .project
             .build_diagnostics
             .insert(uri(root, "main.tex"), diagnostics.clone());
         assert!(editing::code_actions(

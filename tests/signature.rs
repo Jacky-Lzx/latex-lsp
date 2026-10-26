@@ -63,7 +63,7 @@ fn optional_default_previews_remove_comments_without_joining_control_words() {
             let label = format!("\\pair[#1={preview}]{{#2}}");
             check(&declaration, r"\pair{BO¦DY}", &label, 1);
             let (mut workspace, uri, position) = setup(&declaration, r"\pa¦");
-            workspace.snippets = true;
+            workspace.client.snippets = true;
             let item = latex_lsp::language::features::completion(&workspace, &uri, position)
                 .into_iter()
                 .find(|item| item.label == "pair")
@@ -174,7 +174,7 @@ fn commented_argument_counts_preserve_cross_file_signatures_and_completion_defau
         let declaration = format!("\\newcommand{{\\pair}}[{count}][DEF]{{#1:#2}}");
         check(&declaration, r"\pair{BO¦DY}", r"\pair[#1=DEF]{#2}", 1);
         let (mut workspace, uri, position) = setup(&declaration, r"\pa¦");
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let item = latex_lsp::language::features::completion(&workspace, &uri, position)
             .into_iter()
             .find(|item| item.label == "pair")
@@ -536,7 +536,7 @@ fn declaration_completions_preserve_existing_control_word_targets() {
         ("\\newcom¦mand % continued\n \\pair{BODY}", "newcommand"),
     ] {
         let (mut workspace, uri, position) = setup("", call);
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -546,7 +546,7 @@ fn declaration_completions_preserve_existing_control_word_targets() {
         assert_eq!(item.insert_text_format, Some(InsertTextFormat::PLAIN_TEXT));
     }
     let (mut workspace, uri, position) = setup("", "\\newcom¦mand\n\\end{document}");
-    workspace.snippets = true;
+    workspace.client.snippets = true;
     let items = latex_lsp::language::features::completion(&workspace, &uri, position);
     let item = items
         .iter()
@@ -567,7 +567,7 @@ fn builtin_completions_preserve_existing_ungrouped_required_arguments() {
         ("\\textb¦f % ignored\r\n a", "textbf"),
     ] {
         let (mut workspace, uri, position) = setup("", call);
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -613,7 +613,7 @@ fn completion_placeholders_remain_before_surrounding_tex_boundaries() {
         ] {
             let call = format!("\\{}¦{} {suffix}", &name[..2], &name[2..]);
             let (mut workspace, uri, position) = setup(definition, &call);
-            workspace.snippets = true;
+            workspace.client.snippets = true;
             let items = latex_lsp::language::features::completion(&workspace, &uri, position);
             let item = items.iter().find(|item| item.label == name).unwrap();
             let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -633,7 +633,7 @@ fn completion_placeholders_remain_before_surrounding_tex_boundaries() {
         ),
     ] {
         let (mut workspace, uri, position) = setup(definition, call);
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "probe").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -652,7 +652,7 @@ fn bare_text_keeps_catalog_templates_for_commands_without_required_arguments() {
         (r"\su¦m1", "sum", "sum_{${1:i=1}}^{${2:n}} $0"),
     ] {
         let (mut workspace, uri, position) = setup("", call);
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -691,7 +691,7 @@ fn custom_completions_preserve_existing_ungrouped_required_arguments() {
             "\\pa¦ir% first\n % second\n \\payload{BODY}",
         ] {
             let (mut workspace, uri, position) = setup(definition, call);
-            workspace.snippets = true;
+            workspace.client.snippets = true;
             let items = latex_lsp::language::features::completion(&workspace, &uri, position);
             let item = items.iter().find(|item| item.label == "pair").unwrap();
             let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -723,7 +723,7 @@ fn custom_completions_keep_snippets_before_unrelated_lines() {
     ] {
         let call = format!("\\pa¦ir{suffix}");
         let (mut workspace, uri, position) = setup(definition, &call);
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "pair").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -1513,7 +1513,7 @@ fn xparse_flag_completions_omit_flags_and_preserve_already_written_tokens() {
         ),
     ] {
         let (mut workspace, uri, position) = setup(definition, &format!("\\pro¦{following}"));
-        workspace.snippets = snippets;
+        workspace.client.snippets = snippets;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "probe").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -1746,7 +1746,7 @@ fn xparse_delimited_completions_insert_required_tokens_and_preserve_existing_arg
         ),
     ] {
         let (mut workspace, uri, position) = setup(definition, &format!("\\pro¦{following}"));
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "probe").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -1850,7 +1850,7 @@ fn text_font_commands_skip_encodings_and_retain_optional_defaults_in_call_signat
             0,
         );
         let (mut workspace, uri, position) = setup(&definition, r"\cust¦");
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "custom").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -1920,7 +1920,7 @@ fn command_copy_declarations_hint_both_command_tokens_with_or_without_groups() {
             check("", &format!("\\{name}{arguments}"), &label, active);
         }
         let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -1955,7 +1955,7 @@ fn document_command_declarations_hint_grouped_and_bare_targets_and_preserve_snip
             check("", &format!("\\{name}{arguments}"), &label, active);
         }
         let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -2009,7 +2009,7 @@ fn fontspec_declarations_accept_bare_and_grouped_switches_and_both_feature_lists
             check("", &format!("\\{name}{arguments}"), &label, active);
         }
         let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -2098,7 +2098,7 @@ fn classic_font_declarations_hint_font_fields_and_offer_valid_command_snippets()
         ),
     ] {
         let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -2134,7 +2134,7 @@ fn paired_delimiter_signatures_follow_body_counts_and_exclusive_sizing_modes() {
             );
         }
         let (mut workspace, uri, position) = setup(definition, r"\no¦");
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "norm").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -2155,7 +2155,7 @@ fn paired_delimiter_signatures_follow_body_counts_and_exclusive_sizing_modes() {
             3,
         );
         let (mut workspace, uri, position) = setup(definition, r"\pa¦");
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "pair").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -2246,7 +2246,7 @@ fn paired_delimiter_declarations_offer_target_count_and_body_hints_and_snippets(
         ),
     ] {
         let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -2271,7 +2271,7 @@ fn pdfbookmark_hints_distinguish_level_title_and_destination_base_and_offer_a_sn
         check("", marked, r"\pdfbookmark[level]{title}{name}", active);
     }
     let (mut workspace, uri, position) = setup("", r"\pdfbook¦");
-    workspace.snippets = true;
+    workspace.client.snippets = true;
     let items = latex_lsp::language::features::completion(&workspace, &uri, position);
     let item = items
         .iter()
@@ -2364,7 +2364,7 @@ fn full_citation_signatures_and_snippets_preserve_optional_notes() {
         check("", &format!("\\{command}[see][p.~2]{{pa¦rent}}"), &label, 2);
         let marked = format!("\\{command}¦");
         let (mut workspace, uri, at) = setup("", &marked);
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, at);
         let item = items.iter().find(|item| item.label == command).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -2426,7 +2426,7 @@ fn hyperdef_signatures_offer_optional_labels_and_separate_destination_fields() {
         check("", marked, r"\hyperdef[key]{category}{name}{text}", active);
     }
     let (mut workspace, uri, position) = setup("", r"\hyperd¦");
-    workspace.snippets = true;
+    workspace.client.snippets = true;
     let items = latex_lsp::language::features::completion(&workspace, &uri, position);
     let item = items.iter().find(|item| item.label == "hyperdef").unwrap();
     let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -2486,7 +2486,7 @@ fn refcount_queries_offer_label_field_default_and_branch_parameters() {
         check("", marked, label, active);
     }
     let (mut workspace, uri, position) = setup("", r"\getrefb¦");
-    workspace.snippets = true;
+    workspace.client.snippets = true;
     let items = latex_lsp::language::features::completion(&workspace, &uri, position);
     let item = items
         .iter()
@@ -2677,7 +2677,7 @@ fn custom_macro_completions_insert_required_tabstops_and_preserve_existing_argum
         ),
     ] {
         let (mut workspace, uri, position) = setup(definitions, source);
-        workspace.snippets = snippets;
+        workspace.client.snippets = snippets;
         let items = features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -2695,7 +2695,7 @@ fn custom_macro_completions_insert_required_tabstops_and_preserve_existing_argum
         r"\newcommand{\pair}[2]{#1#2}\newcommand{\pair}[1]{#1}",
         r"\pa¦",
     );
-    workspace.snippets = true;
+    workspace.client.snippets = true;
     let items = features::completion(&workspace, &uri, position);
     let item = items.iter().find(|item| item.label == "pair").unwrap();
     assert_eq!(item.insert_text_format, Some(InsertTextFormat::PLAIN_TEXT));
@@ -2851,7 +2851,7 @@ fn alias_completions_insert_only_required_arguments_and_preserve_existing_calls(
             signature::completion(&workspace, "bridge", &scope),
             Some((label.into(), Some(snippet.into())))
         );
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, at);
         let item = items.iter().find(|i| i.label == "bridge").unwrap();
         assert_eq!(item.detail.as_deref(), Some(label));
@@ -2881,7 +2881,7 @@ fn alias_completions_insert_only_required_arguments_and_preserve_existing_calls(
         ),
     ] {
         let (mut workspace, uri, at) = setup(definitions, &format!("\\bri¦dge{suffix}"));
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let item = latex_lsp::language::features::completion(&workspace, &uri, at)
             .into_iter()
             .find(|i| i.label == "bridge")
@@ -2901,7 +2901,7 @@ fn alias_completions_insert_only_required_arguments_and_preserve_existing_calls(
 #[test]
 fn alias_completions_follow_changed_target_and_alias_definitions() {
     let (mut workspace, uri, at) = setup("", r"\bri¦");
-    workspace.snippets = true;
+    workspace.client.snippets = true;
     let definitions_uri = Url::parse("file:///signature/macros.sty").unwrap();
     for (version, definitions, expected) in [
         (
@@ -3103,7 +3103,7 @@ fn classic_macro_defaults_and_calls_end_at_the_first_unbraced_closing_bracket() 
         }
     }
     let (mut workspace, uri, at) = setup(r"\newcommand{\pair}[2][x[y]{#1:#2}", r"\pa¦");
-    workspace.snippets = true;
+    workspace.client.snippets = true;
     let items = latex_lsp::language::features::completion(&workspace, &uri, at);
     let item = items.iter().find(|item| item.label == "pair").unwrap();
     let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
@@ -3705,7 +3705,7 @@ fn direct_environment_completions_insert_required_arguments_and_omit_optional_de
         ),
     ] {
         let (mut workspace, uri, position) = setup(definitions, marked);
-        workspace.snippets = snippets;
+        workspace.client.snippets = snippets;
         let items = features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         assert_eq!(item.detail.as_deref(), Some(label));
@@ -3939,7 +3939,7 @@ fn package_and_class_loader_signatures_include_minimum_versions_and_forwarded_op
         "LoadClassWithOptions",
     ] {
         let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = latex_lsp::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {

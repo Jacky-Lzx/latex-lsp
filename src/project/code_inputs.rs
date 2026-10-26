@@ -203,7 +203,7 @@ fn context_sources(workspace: &Workspace, uri: &Url, root: &Url) -> BTreeSet<Url
     // the file as real source, including settings for the other package.
     let displayed = displayed_inputs(workspace, &explicit, root);
     let mut sources = explicit;
-    if let Some(recorded) = workspace.recorded_inputs.get(root) {
+    if let Some(recorded) = workspace.project.recorded_inputs.get(root) {
         sources.extend(recorded.difference(&displayed).cloned());
     }
     sources

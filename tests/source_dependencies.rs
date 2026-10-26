@@ -16,7 +16,10 @@ fn workspace(root: &Path, files: &[(&str, &str)]) -> Workspace {
         std::fs::write(path, source).unwrap();
     }
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -243,6 +246,7 @@ fn recorder_confirmed_dynamic_sources_and_redefined_primitives_keep_save_depende
     let main = uri(root, "main.tex");
     let chapter = uri(root, "chapter.tex");
     workspace
+        .project
         .recorded_inputs
         .insert(main.clone(), BTreeSet::from([chapter.clone()]));
     assert!(workspace.project_files(&main).contains(&chapter));
@@ -252,7 +256,7 @@ fn recorder_confirmed_dynamic_sources_and_redefined_primitives_keep_save_depende
     let at = command_position(&workspace, &main, r"\fromchapter");
     assert_eq!(features::definitions(&workspace, &main, at)[0].uri, chapter);
     workspace.documents.insert(main.clone(), Document::new(&main, r"\documentclass{article}\def\meaning#1{#1}\begin{document}\meaning\input{chapter}\end{document}".into(), Some(8)));
-    workspace.recorded_inputs.clear();
+    workspace.project.recorded_inputs.clear();
     assert!(workspace.project_files(&main).contains(&chapter));
     // Unknown user macros may execute their arguments and keep their sources.
     workspace.documents.insert(main.clone(), Document::new(&main, r"\documentclass{article}\newcommand{\hold}[1]{\detokenize{#1}}\begin{document}\hold{\input{chapter}}\end{document}".into(), Some(9)));

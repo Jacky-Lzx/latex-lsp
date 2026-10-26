@@ -394,7 +394,10 @@ fn volume_command_snippets_supply_volume_and_keys_and_preserve_existing_calls_an
     for (name, _) in commands() {
         for following in ["", "{2}{alpha}", "[pre]{2}[12]{alpha}", "2{alpha}"] {
             let mut workspace = Workspace {
-                snippets: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    snippets: true,
+                    ..Default::default()
+                },
                 ..Workspace::default()
             };
             let source = format!("\\{name}{following}");
@@ -451,7 +454,10 @@ fn volume_citation_warnings_and_spelling_fixes_target_keys_across_the_lookahead_
         );
         let uri = Url::from_file_path(&main).unwrap();
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Workspace::default()
         };
         workspace.open(uri.clone(), source.clone(), 6);
@@ -461,6 +467,7 @@ fn volume_citation_warnings_and_spelling_fixes_target_keys_across_the_lookahead_
             6,
         );
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), diagnostics.clone());
         assert_eq!(

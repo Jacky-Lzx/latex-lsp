@@ -11,7 +11,10 @@ use std::{collections::BTreeSet, sync::atomic::AtomicBool};
 fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///saved-name-commands/main.tex").unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.open(uri.clone(), source.into(), 7);

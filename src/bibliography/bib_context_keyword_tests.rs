@@ -598,7 +598,7 @@ fn keyword_assignments_have_native_parameter_help_and_preserve_keyword_namespace
     let name = "assignrefcontextkeyws";
     let source = format!("\\{name}");
     let (_dir, mut ws, uri) = keyword_setup(&source);
-    ws.snippets = true;
+    ws.client.snippets = true;
     let pos = ws.documents[&uri]
         .text
         .position(ws.documents[&uri].text.source.find(&source).unwrap() + source.len());

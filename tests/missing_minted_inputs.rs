@@ -139,13 +139,17 @@ fn spelling_repairs_preserve_headers_and_are_rechecked_after_global_settings_cha
         let item = missing(&items).unwrap().clone();
         std::fs::write(directory.path().join(right), "\\label{data-only}").unwrap();
         let mut workspace = Workspace {
-            code_action_literals: true,
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(directory.path().into());
         workspace.open(main.clone(), text.source.clone(), 7);
         workspace
+            .project
             .build_diagnostics
             .insert(main.clone(), [(main.clone(), items)].into());
         let fixes = actions(&workspace, &main, &item);
@@ -180,7 +184,7 @@ fn spelling_repairs_preserve_headers_and_are_rechecked_after_global_settings_cha
         .unwrap();
         workspace.open(settings, r"\setminted{escapeinside=||}".into(), 8);
         // A recorded source can install settings without a literal input call.
-        workspace.recorded_inputs.insert(
+        workspace.project.recorded_inputs.insert(
             main.clone(),
             [Url::from_file_path(directory.path().join("settings.tex")).unwrap()].into(),
         );
@@ -227,13 +231,17 @@ fn real_missing_inputminted_files_offer_repairs_that_compile_in_both_reader_mode
             .unwrap_or_else(|| panic!("{log}\n{diagnostics:?}"))
             .clone();
         let mut workspace = Workspace {
-            code_action_literals: true,
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
         workspace.open(main.clone(), source.clone(), 7);
         workspace
+            .project
             .build_diagnostics
             .insert(main.clone(), diagnostics);
         let fixes = actions(&workspace, &main, &item);

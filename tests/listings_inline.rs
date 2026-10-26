@@ -300,7 +300,10 @@ fn ordinary_groups_and_consumed_formatter_controls_keep_source_catcodes() {
 fn headers_have_signatures_hover_snippets_and_preserve_existing_code() {
     let main = uri();
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     for marked in [

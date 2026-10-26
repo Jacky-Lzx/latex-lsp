@@ -65,7 +65,10 @@ fn check(source: &str, root: &std::path::Path, expected: &[&str]) -> String {
         std::fs::write(root.join(format!("{phase}.tex")), "Chapter text").unwrap();
     }
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());

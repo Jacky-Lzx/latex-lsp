@@ -75,7 +75,10 @@ fn header_markers_mixed_end_lines_and_closing_suffixes_remain_literal() {
             let source = format!("{before}{block}{after}");
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
@@ -369,7 +372,10 @@ fn real_minted_environment_boundaries_and_versioned_renames_match_both_reader_mo
             let body = "\\end{other}\\end{minted}\\label{falseend}\n\\label{kept}\\label{phantom} % MINTEDBODY\n";
             let source = format!("\\documentclass{{article}}\n\\usepackage[{options}]{{minted}}\n\\begin{{document}}\n\\label{{kept}}\n\\begin{{minted}}[label={{\\detokenize{{\\end{{minted}}}}}}]\n{{latex}}\n{body}\\end{{minted}}{tail}\nReal.\\ref{{kept}}\n\\end{{document}}\n");
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.open(main.clone(), source.clone(), 7);

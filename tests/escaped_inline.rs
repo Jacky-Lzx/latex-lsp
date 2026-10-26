@@ -52,7 +52,10 @@ fn escaped_code_uses_ordinary_balanced_tokens_without_executing_its_commands() {
             let source = format!("% 😀\r\n\\usepackage{{fvextra}}\\fvset{{extra=false}}\\label{{kept}}\\newcommand{{\\say}}{{Text}}{before}{literal}{after}\\input{{chapter}}\\say\\ref{{kept}}");
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
@@ -163,7 +166,10 @@ fn escaped_reader_copies_and_forwarders_keep_their_own_rename_identity() {
             "{declaration}\\textbf{{\\code{{\\label{{phantom}}\\input{{fake}}}}}}\\label{{real}}"
         );
         let mut workspace = Workspace {
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.open(main.clone(), source.clone(), 7);
@@ -239,7 +245,10 @@ fn escaped_command_completion_hover_and_option_hints_preserve_code() {
         let at = marked.find('¦').unwrap();
         let source = marked.replace('¦', "");
         let mut workspace = Workspace {
-            snippets: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                snippets: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.open(main.clone(), source.clone(), 7);
@@ -311,7 +320,10 @@ fn real_escaped_code_never_executes_commands_even_when_escapes_are_invalid() {
                 let source = format!("\\documentclass{{article}}\n\\usepackage{{fvextra}}\n\\fvset{{extra=false}}\n{declaration}\n\\begin{{document}}\n\\label{{kept}}{call}\\ref{{kept}}\\label{{real}}\n\\end{{document}}\n");
                 let main = Url::from_file_path(root.join("main.tex")).unwrap();
                 let mut workspace = Workspace {
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.open(main.clone(), source.clone(), 7);

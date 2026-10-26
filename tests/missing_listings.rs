@@ -163,13 +163,17 @@ fn listing_spelling_fixes_preserve_full_names_options_and_versioned_ranges() {
         let item = missing(&items).unwrap().clone();
         std::fs::write(directory.path().join(right), r"\input{main}").unwrap();
         let mut workspace = Workspace {
-            code_action_literals: true,
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(directory.path().into());
         workspace.open(main.clone(), text.source.clone(), 7);
         workspace
+            .project
             .build_diagnostics
             .insert(main.clone(), [(main.clone(), vec![item.clone()])].into());
         let fixes = actions(&workspace, &main, &item);
@@ -208,12 +212,16 @@ fn listing_fixes_reject_tampered_metadata_and_tex_suffix_shadowing() {
     let item = missing(&items).unwrap().clone();
     std::fs::write(directory.path().join("sample.rs"), "Intended.").unwrap();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(directory.path().into());
     workspace.open(main.clone(), text.source, 7);
     workspace
+        .project
         .build_diagnostics
         .insert(main.clone(), [(main.clone(), vec![item.clone()])].into());
     assert_eq!(actions(&workspace, &main, &item).len(), 1);
@@ -225,11 +233,13 @@ fn listing_fixes_reject_tampered_metadata_and_tex_suffix_shadowing() {
             _ => forged.message = "Package Listings Error: File `different(.rs)' not found.".into(),
         }
         workspace
+            .project
             .build_diagnostics
             .insert(main.clone(), [(main.clone(), vec![forged.clone()])].into());
         assert!(actions(&workspace, &main, &forged).is_empty(), "{field}");
     }
     workspace
+        .project
         .build_diagnostics
         .insert(main.clone(), [(main.clone(), vec![item.clone()])].into());
     std::fs::write(
@@ -266,13 +276,17 @@ fn real_missing_listing_fixes_compile_the_intended_code_file() {
             let start = source.find(wrong).unwrap();
             assert_eq!(diagnostic.range, text.range(start, start + wrong.len()));
             let mut workspace = Workspace {
-                code_action_literals: true,
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace.open(main.clone(), source.clone(), 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(main.clone(), first.diagnostics);
             let fixes = actions(&workspace, &main, &diagnostic);

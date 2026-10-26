@@ -158,7 +158,7 @@ fn category_assignments_have_native_required_brackets_stars_and_command_snippets
         let name = "assignrefcontextcats";
         let source = format!("\\{name}{following}");
         let (mut ws, uri) = setup(&source);
-        ws.snippets = true;
+        ws.client.snippets = true;
         let items = features::completion(&ws, &uri, Text::new(source).position(name.len() + 1));
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {

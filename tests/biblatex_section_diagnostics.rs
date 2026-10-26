@@ -23,7 +23,7 @@ fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url) {
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let mut ws = Workspace::default();
     ws.config.distribution.enabled = false;
-    ws.code_action_literals = true;
+    ws.client.code_action_literals = true;
     ws.open(main.clone(), source, 5);
     (dir, ws, main)
 }
@@ -167,12 +167,12 @@ fn disabled_and_compiler_confirmed_citation_warnings_are_not_duplicated() {
     compiler.code = None;
     compiler.message =
         "LaTeX Warning: Citation 'defaultonly' on page 1 undefined on input line 1.".into();
-    ws.build_diagnostics.insert(
+    ws.project.build_diagnostics.insert(
         main.clone(),
         std::collections::BTreeMap::from([(main.clone(), vec![compiler])]),
     );
     assert!(citations(&ws, &main).is_empty());
-    ws.build_diagnostics.clear();
+    ws.project.build_diagnostics.clear();
     ws.config.diagnostics.undefined_citations = false;
     assert!(citations(&ws, &main).is_empty());
 }
@@ -196,7 +196,7 @@ fn compiler_citation_spelling_repairs_also_reject_out_of_section_libraries() {
             }
         })
         .collect();
-    ws.build_diagnostics.insert(
+    ws.project.build_diagnostics.insert(
         main.clone(),
         std::collections::BTreeMap::from([(main.clone(), diagnostics.clone())]),
     );
@@ -212,7 +212,7 @@ fn compiler_citation_spelling_repairs_also_reject_out_of_section_libraries() {
         .any(|title| title.contains("sectiononly")));
     // An unresolvable section owns these compiler warnings too: no union fallback.
     ws.open(main.clone(), source.replace("[chosen]", "[absent]"), 6);
-    ws.build_diagnostics.insert(
+    ws.project.build_diagnostics.insert(
         main.clone(),
         std::collections::BTreeMap::from([(main.clone(), diagnostics.clone())]),
     );
@@ -259,7 +259,9 @@ fn real_compiler_citation_repairs_use_each_sections_resources_and_clear_the_warn
         .cloned()
         .collect();
     assert_eq!(warnings.len(), 2, "{:?}", first.diagnostics);
-    ws.build_diagnostics.insert(main.clone(), first.diagnostics);
+    ws.project
+        .build_diagnostics
+        .insert(main.clone(), first.diagnostics);
     assert!(citations(&ws, &main).is_empty());
     let mut edits = Vec::new();
     for diagnostic in warnings {
@@ -305,7 +307,7 @@ fn real_compiler_citation_repairs_use_each_sections_resources_and_clear_the_warn
         .unwrap();
     std::fs::write(dir.path().join("main.tex"), &updated.source).unwrap();
     ws.open(main.clone(), updated.source, 6);
-    ws.build_diagnostics.clear();
+    ws.project.build_diagnostics.clear();
     assert!(citations(&ws, &main).is_empty());
     let result = latex_lsp::compilation::build::run(
         &dir.path().join("main.tex"),

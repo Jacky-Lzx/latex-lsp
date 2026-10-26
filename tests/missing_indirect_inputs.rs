@@ -53,15 +53,21 @@ fn indirect_missing_input_errors_fix_only_the_filename_with_versioned_edits() {
                 "{form}/{argument}: {diagnostic:?}"
             );
             let mut workspace = Workspace {
-                code_action_literals: true,
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace
                 .documents
                 .insert(uri.clone(), Document::new(&uri, source.clone(), Some(7)));
             let diagnostic = diagnostic.clone();
-            workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+            workspace
+                .project
+                .build_diagnostics
+                .insert(uri.clone(), diagnostics);
             let actions = editing::code_actions(
                 &workspace,
                 &uri,
@@ -149,8 +155,11 @@ fn legacy_indirect_input_fixes_recheck_alias_dependencies_without_changing_the_p
         std::fs::write(root.join("definitions.tex"), r"\def\readpart{\input}").unwrap();
         std::fs::write(root.join("chapter.tex"), "Chapter.").unwrap();
         let mut workspace = Workspace {
-            apply_edits: true,
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                apply_edits: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace
@@ -171,7 +180,7 @@ fn legacy_indirect_input_fixes_recheck_alias_dependencies_without_changing_the_p
             data: Some(serde_json::json!({"file":"chapte.tex", "macroSources":[uri,definitions]})),
             ..Default::default()
         };
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             uri.clone(),
             [(uri.clone(), vec![diagnostic.clone()])].into(),
         );

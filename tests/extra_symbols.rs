@@ -153,7 +153,7 @@ fn shared_glossary_updates_consumers_and_rejects_ambiguous_roots() {
     ws.open(declaration.clone(), terms.into(), 3);
     let at = Text::new(terms.into()).position(terms.find("shared").unwrap() + 2);
     assert_eq!(features::references(&ws, &declaration, at, false).len(), 2);
-    ws.versioned_edits = true;
+    ws.client.versioned_edits = true;
     let edit = features::rename(&ws, &declaration, at, "renamed")
         .unwrap()
         .unwrap();

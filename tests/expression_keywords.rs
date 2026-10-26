@@ -209,8 +209,11 @@ fn commented_expression_keywords_keep_exact_compiler_ranges_and_spelling_repairs
             error.range,
             Text::new(source.clone()).range(start, start + 5)
         );
-        workspace.code_action_literals = true;
-        workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+        workspace.client.code_action_literals = true;
+        workspace
+            .project
+            .build_diagnostics
+            .insert(uri.clone(), diagnostics);
         let actions = editing::code_actions(
             &workspace,
             &uri,
@@ -377,14 +380,19 @@ fn real_commented_keywords_preserve_cross_file_renames_and_compile_repairs_in_th
                 .collect::<Vec<_>>();
             assert_eq!(errors.len(), 2, "{}", failed.output);
             workspace = Workspace {
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri.clone(), failed.diagnostics);
             workspace
+                .project
                 .build_diagnostic_sources
                 .insert(uri.clone(), failed.diagnostic_sources);
             let mut edits = vec![];

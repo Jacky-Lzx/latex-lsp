@@ -815,6 +815,7 @@ mod tests {
         expected.insert(local_source_uri.clone());
         assert_eq!(selected, expected);
         workspace
+            .project
             .recorded_binary_inputs
             .insert(root_uri, files.binary.clone());
         for uri in &selected {

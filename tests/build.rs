@@ -70,7 +70,7 @@ fn valid_and_zero_line_warnings_both_survive_parsing_and_publication() {
             .concat();
         let mut workspace = Workspace::default();
         workspace.open(uri.clone(), source.into(), 1);
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             uri.clone(),
             latex_lsp::compilation::build_log::parse(&main, &log),
         );
@@ -183,7 +183,10 @@ fn trusted_and_unresolved_numbered_warnings_do_not_suppress_each_other() {
             let uri = Url::from_file_path(&main).unwrap();
             let mut workspace = Workspace::default();
             workspace.open(uri.clone(), source.into(), 1);
-            workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+            workspace
+                .project
+                .build_diagnostics
+                .insert(uri.clone(), diagnostics);
             assert_eq!(workspace.diagnostics(&uri).len(), 2);
         }
     }
@@ -2449,6 +2452,7 @@ fn real_fancyverb_internal_customizations_keep_executed_labels_as_source() {
             let mut workspace = Workspace::default();
             workspace.add_root(root.into());
             workspace
+                .project
                 .recorded_inputs
                 .insert(main_uri.clone(), outcome.inputs.unwrap());
             assert!(workspace.project_documents(&main_uri).contains(&code));

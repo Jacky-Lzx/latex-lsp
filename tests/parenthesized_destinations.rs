@@ -46,7 +46,10 @@ fn parenthesized_pdf_destinations_rename_across_simple_compound_and_bookmark_for
         ];
         for (full, declaration, calls, new_name, expected_declaration, expected_calls) in fixtures {
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let protected_declaration =
@@ -309,7 +312,10 @@ fn parenthesized_pdf_destination_spelling_fixes_preserve_compound_comments_and_l
             format!("pdfTeX warning (dest): name{{{encoded}}} has been referenced but does not exist, replaced by a fixed one"),
         ] {
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let source = format!("{declaration}\n😀 {link}\\label{{{missing}}}");
@@ -325,7 +331,7 @@ fn parenthesized_pdf_destination_spelling_fixes_preserve_compound_comments_and_l
             message,
             ..Default::default()
         };
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             main.clone(),
             [(main.clone(), vec![diagnostic.clone()])].into(),
         );

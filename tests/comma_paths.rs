@@ -143,7 +143,7 @@ fn graphics_optional_calls_and_nested_roots_complete_then_link_and_rename_the_sa
         let links = navigation::document_links(&workspace, &child);
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].target, Some(uri(root, "images,one/图,one.pdf")));
-        workspace.versioned_edits = true;
+        workspace.client.versioned_edits = true;
         let changes = file_operations::will_rename(
             &workspace,
             &[FileRename {

@@ -451,11 +451,15 @@ fn real_natbib_citation_fixes_and_alias_renames_preserve_text_and_compile_cleanl
     compile();
     let outcome = compile();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace
+        .project
         .build_diagnostics
         .insert(main_uri.clone(), outcome.diagnostics.clone());
     let warnings: Vec<_> = outcome.diagnostics[&child_uri]

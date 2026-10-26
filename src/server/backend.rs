@@ -1,4 +1,5 @@
 //! LSP backend and protocol handlers.
+use crate::project::store::WorkspaceStore;
 use crate::{
     compilation::{auxiliary, build, recorder, synctex},
     config::{self, project_config},
@@ -22,7 +23,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 fn file_operation_options() -> FileOperationRegistrationOptions {
     FileOperationRegistrationOptions {
@@ -49,7 +50,7 @@ fn validate_diagnostic_identifier(identifier: Option<&str>) -> Result<()> {
 
 pub struct Backend {
     client: Client,
-    workspace: Arc<RwLock<Workspace>>,
+    workspace: WorkspaceStore,
     builds: build::BuildManager,
     sync_queries: synctex::Queries,
     external_tasks: tasks::Tasks,
@@ -61,7 +62,7 @@ pub struct Backend {
 
 impl Backend {
     pub fn new(client: Client) -> Self {
-        let workspace = Arc::new(RwLock::new(Workspace::default()));
+        let workspace = WorkspaceStore::default();
         Self {
             builds: build::BuildManager::new(client.clone(), workspace.clone()),
             sync_queries: synctex::Queries::default(),
@@ -128,11 +129,11 @@ impl Backend {
     ) -> Result<T> {
         let (workspace, revision) = {
             let workspace = self.workspace.read().await;
-            (workspace.clone(), workspace.diagnostic_delivery.revision())
+            (workspace.clone(), self.workspace.revision())
         };
         dispatch::release();
         let result = self.queries.run(move |_| query(&workspace)).await?;
-        if self.workspace.read().await.diagnostic_delivery.revision() != revision {
+        if self.workspace.revision() != revision {
             return Err(crate::rpc::Error {
                 code: crate::rpc::ErrorCode::ServerError(-32801),
                 message: "Analysis inputs changed; request edits again".into(),
@@ -157,8 +158,8 @@ impl Backend {
         }) {
             if let Ok(distribution) = task.wait().await {
                 let mut workspace = self.workspace.write().await;
-                workspace.diagnostic_delivery.invalidate();
-                if workspace.config.distribution == config {
+                if workspace.config.distribution == config && workspace.distribution != distribution
+                {
                     workspace.distribution = distribution;
                 }
             }
@@ -244,7 +245,6 @@ impl Backend {
 
     async fn reindex(&self) -> Result<serde_json::Value> {
         let mut workspace = self.workspace.write().await;
-        workspace.diagnostic_delivery.invalidate();
         let state = Arc::new(std::sync::Mutex::new(Some(std::mem::take(&mut *workspace))));
         let input = state.clone();
         let task = self.external_tasks.start(move |cancel| {
@@ -303,7 +303,6 @@ impl Backend {
             Err(error) => Err(error),
         };
         let mut workspace = self.workspace.write().await;
-        workspace.diagnostic_delivery.invalidate();
         if workspace.settings(uri).diagnostics.chktex != config
             || !workspace.documents.get(uri).is_some_and(|doc| {
                 doc.version == version && doc.version.is_some() && doc.text.source == source
@@ -313,10 +312,13 @@ impl Backend {
         }
         match result {
             Ok(diagnostics) => {
-                workspace.lint_diagnostics.insert(uri.clone(), diagnostics);
+                workspace
+                    .project
+                    .lint_diagnostics
+                    .insert(uri.clone(), diagnostics);
             }
             Err(error) => {
-                workspace.lint_diagnostics.remove(uri);
+                workspace.project.lint_diagnostics.remove(uri);
                 drop(workspace);
                 self.client
                     .log_message(MessageType::WARNING, error.message)
@@ -339,17 +341,17 @@ impl Backend {
         uris: std::collections::BTreeSet<Url>,
         previous: std::collections::BTreeMap<Url, String>,
     ) -> Result<Vec<(Url, Option<i32>, DocumentDiagnosticReportKind)>> {
-        let revision = workspace.diagnostic_delivery.revision();
+        let revision = self.workspace.revision();
         let snapshot = (*workspace).clone();
         drop(workspace);
         let workspace = snapshot;
         let delivery = workspace.diagnostic_delivery.clone();
-        let analysis_delivery = delivery.clone();
+        let revisions = self.workspace.clone();
+        let refresh_supported = delivery.supports_refresh();
         dispatch::release();
         let mut cache = self.diagnostic_cache.clone().lock_owned().await;
         let result = tokio::task::spawn_blocking(move || {
-            let superseded =
-                || analysis_delivery.supports_refresh() && analysis_delivery.revision() != revision;
+            let superseded = || refresh_supported && revisions.revision() != revision;
             let cancelled = || crate::rpc::Error {
                 code: crate::rpc::ErrorCode::ServerError(-32802),
                 message: "Diagnostic inputs changed".into(),
@@ -450,7 +452,6 @@ impl Backend {
         }
         let affected = {
             let mut workspace = self.workspace.write().await;
-            workspace.diagnostic_delivery.invalidate();
             if from_watcher {
                 changes.refresh_watched(&mut workspace)
             } else {
@@ -478,7 +479,6 @@ impl Backend {
 impl Backend {
     pub(crate) async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let mut workspace = self.workspace.write().await;
-        workspace.diagnostic_delivery.invalidate();
         let pull_diagnostics = params
             .capabilities
             .text_document
@@ -493,7 +493,7 @@ impl Backend {
             .unwrap_or(false);
         workspace.diagnostic_delivery =
             diagnostic::Delivery::new(pull_diagnostics, diagnostic_refresh);
-        workspace.build_progress = params
+        workspace.client.build_progress = params
             .capabilities
             .window
             .as_ref()
@@ -503,34 +503,34 @@ impl Backend {
             workspace.config =
                 config::Config::parse(options).map_err(crate::rpc::Error::invalid_params)?;
         }
-        workspace.inlay_refresh = params
+        workspace.client.inlay_refresh = params
             .capabilities
             .workspace
             .as_ref()
             .and_then(|cap| cap.inlay_hint.as_ref())
             .and_then(|cap| cap.refresh_support)
             .unwrap_or(false);
-        workspace.versioned_edits = params
+        workspace.client.versioned_edits = params
             .capabilities
             .workspace
             .as_ref()
             .and_then(|workspace| workspace.workspace_edit.as_ref())
             .and_then(|edit| edit.document_changes)
             .unwrap_or(false);
-        workspace.apply_edits = params
+        workspace.client.apply_edits = params
             .capabilities
             .workspace
             .as_ref()
             .and_then(|workspace| workspace.apply_edit)
             .unwrap_or(false);
-        workspace.watch_files = params
+        workspace.client.watch_files = params
             .capabilities
             .workspace
             .as_ref()
             .and_then(|workspace| workspace.did_change_watched_files.as_ref())
             .and_then(|watch| watch.dynamic_registration)
             .unwrap_or(false);
-        workspace.snippets = params
+        workspace.client.snippets = params
             .capabilities
             .text_document
             .as_ref()
@@ -538,7 +538,7 @@ impl Backend {
             .and_then(|completion| completion.completion_item.as_ref())
             .and_then(|item| item.snippet_support)
             .unwrap_or(false);
-        workspace.completion_resolve_documentation = params
+        workspace.client.completion_resolve_documentation = params
             .capabilities
             .text_document
             .as_ref()
@@ -551,20 +551,20 @@ impl Backend {
                     .iter()
                     .any(|property| property == "documentation")
             });
-        workspace.hierarchical_symbols = params
+        workspace.client.hierarchical_symbols = params
             .capabilities
             .text_document
             .as_ref()
             .and_then(|doc| doc.document_symbol.as_ref())
             .and_then(|symbols| symbols.hierarchical_document_symbol_support)
             .unwrap_or(false);
-        workspace.code_action_literals = params
+        workspace.client.code_action_literals = params
             .capabilities
             .text_document
             .as_ref()
             .and_then(|doc| doc.code_action.as_ref())
             .is_some_and(|action| action.code_action_literal_support.is_some());
-        workspace.code_action_resolve_edits = workspace.code_action_literals
+        workspace.client.code_action_resolve_edits = workspace.client.code_action_literals
             && params
                 .capabilities
                 .text_document
@@ -576,7 +576,7 @@ impl Backend {
                             support.properties.iter().any(|property| property == "edit")
                         })
                 });
-        workspace.folding_capabilities = params
+        workspace.client.folding_capabilities = params
             .capabilities
             .text_document
             .as_ref()
@@ -750,7 +750,7 @@ impl Backend {
         // while waiting for the external tool or the client's registration ACK.
         dispatch::release();
         self.reload_distribution().await;
-        if self.workspace.read().await.watch_files {
+        if self.workspace.read().await.client.watch_files {
             let binary_inputs = syntax::file_extensions("includegraphics")
                 .unwrap()
                 .iter()
@@ -798,7 +798,6 @@ impl Backend {
     pub(crate) async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let item = params.text_document;
         let mut workspace = self.workspace.write().await;
-        workspace.diagnostic_delivery.invalidate();
         workspace.open_with_language(item.uri, item.text, item.version, &item.language_id);
         drop(workspace);
         self.publish_open().await;
@@ -807,7 +806,6 @@ impl Backend {
     pub(crate) async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = document_uri(params.text_document.uri);
         let mut workspace = self.workspace.write().await;
-        workspace.diagnostic_delivery.invalidate();
         let Some(doc) = workspace.documents.get(&uri) else {
             return;
         };
@@ -845,7 +843,7 @@ impl Backend {
                 .filter(|doc| doc.text.source != source)
             {
                 let updated = doc.with_text(&uri, source, doc.version);
-                workspace.diagnostic_delivery.invalidate();
+
                 workspace.documents.insert(uri.clone(), updated);
                 workspace.clear_build_diagnostics(&uri);
                 workspace.load_dependencies(&uri, 0);
@@ -866,9 +864,8 @@ impl Backend {
     pub(crate) async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = document_uri(params.text_document.uri);
         let mut workspace = self.workspace.write().await;
-        workspace.diagnostic_delivery.invalidate();
         workspace.close(&uri);
-        workspace.lint_diagnostics.remove(&uri);
+        workspace.project.lint_diagnostics.remove(&uri);
         self.semantic_cache.lock().await.remove(&uri);
         self.diagnostic_cache.lock().await.remove(&uri);
         let delivery = workspace.diagnostic_delivery.clone();
@@ -900,8 +897,7 @@ impl Backend {
                     self.workspace.read().await.config.distribution != config.distribution;
                 {
                     let mut workspace = self.workspace.write().await;
-                    workspace.diagnostic_delivery.invalidate();
-                    workspace.lint_diagnostics.clear();
+                    workspace.project.lint_diagnostics.clear();
                     project_config::invalidate();
                     workspace.config = config;
                 }
@@ -956,21 +952,19 @@ impl Backend {
                 )
             })?;
         match params.command.as_str() {
+            // Keep the ordered turn until the editor acknowledges command edits.
             "latex.applyCodeAction" => {
                 let mut request: refactor::Request = serde_json::from_value(
                     argument.cloned().unwrap_or_default(),
                 )
                 .map_err(|_| crate::rpc::Error::invalid_params("Invalid code action request"))?;
                 request.uri = document_uri(request.uri);
-                let edit = self
-                    .read_edit_query(move |workspace| {
-                        refactor::resolve(workspace, request).ok_or_else(|| {
-                            crate::rpc::Error::invalid_params(
-                                "Code action is outdated; request code actions again",
-                            )
-                        })
-                    })
-                    .await?;
+                let edit =
+                    refactor::resolve(&*self.workspace.read().await, request).ok_or_else(|| {
+                        crate::rpc::Error::invalid_params(
+                            "Code action is outdated; request code actions again",
+                        )
+                    })?;
                 let response = self.client.apply_edit(edit).await?;
                 Ok(Some(serde_json::to_value(response).unwrap()))
             }
@@ -980,15 +974,12 @@ impl Backend {
                 )
                 .map_err(|_| crate::rpc::Error::invalid_params("Invalid quick fix request"))?;
                 request.uri = document_uri(request.uri);
-                let edit = self
-                    .read_edit_query(move |workspace| {
-                        editing::resolve_fix(workspace, request).ok_or_else(|| {
-                            crate::rpc::Error::invalid_params(
-                                "Quick fix is outdated; request code actions again",
-                            )
-                        })
-                    })
-                    .await?;
+                let edit = editing::resolve_fix(&*self.workspace.read().await, request)
+                    .ok_or_else(|| {
+                        crate::rpc::Error::invalid_params(
+                            "Quick fix is outdated; request code actions again",
+                        )
+                    })?;
                 let response = self.client.apply_edit(edit).await?;
                 Ok(Some(serde_json::to_value(response).unwrap()))
             }
@@ -1103,7 +1094,6 @@ impl Backend {
             }
         }
         let mut workspace = self.workspace.write().await;
-        workspace.diagnostic_delivery.invalidate();
         match file_operations::did_rename(&mut workspace, &params.files) {
             Ok(affected) => {
                 drop(workspace);
@@ -1123,7 +1113,6 @@ impl Backend {
         params: DidChangeWorkspaceFoldersParams,
     ) {
         let mut workspace = self.workspace.write().await;
-        workspace.diagnostic_delivery.invalidate();
         for folder in params.event.removed {
             if let Ok(root) = folder.uri.to_file_path() {
                 workspace.roots.remove(&root);
@@ -1197,6 +1186,7 @@ impl Backend {
             .cloned()
             .chain(
                 workspace
+                    .project
                     .build_diagnostics
                     .values()
                     .flat_map(|project| project.keys().cloned()),
@@ -1544,7 +1534,7 @@ impl Backend {
         self.read_query(move |workspace| {
             let uri = document_uri(params.text_document.uri);
             workspace.documents.get(&uri).map(|doc| {
-                if workspace.hierarchical_symbols {
+                if workspace.client.hierarchical_symbols {
                     DocumentSymbolResponse::Nested(features::symbols(doc))
                 } else {
                     DocumentSymbolResponse::Flat(features::flat_symbols(doc, &uri))
@@ -1573,7 +1563,10 @@ impl Backend {
                 .documents
                 .get(&document_uri(params.text_document.uri))
                 .map(|doc| {
-                    navigation::folding_ranges_for_client(doc, &workspace.folding_capabilities)
+                    navigation::folding_ranges_for_client(
+                        doc,
+                        &workspace.client.folding_capabilities,
+                    )
                 })
         })
         .await
@@ -1721,8 +1714,7 @@ mod read_query_tests {
         start.await.unwrap();
         let writer = queue.ordered(async move {
             let mut workspace = backend.workspace.write().await;
-            workspace.diagnostic_delivery.invalidate();
-            workspace.snippets = true;
+            workspace.client.snippets = true;
         });
         let updated = tokio::time::timeout(Duration::from_secs(1), writer).await;
         let _ = finish.send(());
@@ -1743,7 +1735,7 @@ mod read_query_tests {
                 .read_query(move |workspace| {
                     let _ = started.send(());
                     let _ = finished.blocking_recv();
-                    workspace.snippets
+                    workspace.client.snippets
                 })
                 .await
                 .unwrap()
@@ -1753,7 +1745,7 @@ mod read_query_tests {
         let read_service = service.clone();
         let read = queue.ordered(async move {
             read_service
-                .read_query(|workspace| workspace.snippets)
+                .read_query(|workspace| workspace.client.snippets)
                 .await
                 .unwrap()
         });
@@ -1769,12 +1761,12 @@ mod read_query_tests {
         let writer_service = service.clone();
         let writer = tokio::spawn(queue.ordered(async move {
             let _ = writing.send(());
-            writer_service.workspace.write().await.snippets = true;
+            writer_service.workspace.write().await.client.snippets = true;
         }));
         write_started.await.unwrap();
         let later = tokio::spawn(queue.ordered(async move {
             service
-                .read_query(|workspace| workspace.snippets)
+                .read_query(|workspace| workspace.client.snippets)
                 .await
                 .unwrap()
         }));
@@ -1809,7 +1801,7 @@ mod read_query_tests {
         let (writing, write_started) = oneshot::channel();
         let writer = tokio::spawn(queue.ordered(async move {
             let _ = writing.send(());
-            backend.workspace.write().await.snippets = true;
+            backend.workspace.write().await.client.snippets = true;
         }));
         write_started.await.unwrap();
         let result = tokio::time::timeout(Duration::from_secs(1), writer).await;
@@ -1848,7 +1840,6 @@ mod read_query_tests {
         let writer_uri = uri.clone();
         let writer = queue.ordered(async move {
             let mut workspace = writer_backend.workspace.write().await;
-            workspace.diagnostic_delivery.invalidate();
             workspace.open(writer_uri, "{".into(), 2);
         });
         let result = tokio::time::timeout(Duration::from_secs(1), writer).await;
@@ -1904,7 +1895,6 @@ mod read_query_tests {
             Duration::from_secs(1),
             queue.ordered(async move {
                 let mut workspace = update_backend.workspace.write().await;
-                workspace.diagnostic_delivery.invalidate();
                 workspace.open(update_uri, "{".into(), 2);
             }),
         )

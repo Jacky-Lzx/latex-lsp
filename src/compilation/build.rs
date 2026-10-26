@@ -1,3 +1,4 @@
+use crate::project::store::WorkspaceStore;
 use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
@@ -23,7 +24,7 @@ use crate::{
 };
 use lsp_types::*;
 use serde_json::{json, Value};
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::Notify;
 
 const MAX_OUTPUT: usize = 4 * 1024 * 1024;
 
@@ -107,7 +108,7 @@ struct QueuedBuild {
 #[derive(Clone)]
 pub struct BuildManager {
     client: Client,
-    workspace: Arc<RwLock<Workspace>>,
+    workspace: WorkspaceStore,
     state: Arc<Mutex<BTreeMap<Url, Record>>>,
     sequence: Arc<AtomicU64>,
     idle: Arc<Notify>,
@@ -142,7 +143,7 @@ impl Drop for TaskGuard {
 }
 
 impl BuildManager {
-    pub fn new(client: Client, workspace: Arc<RwLock<Workspace>>) -> Self {
+    pub fn new(client: Client, workspace: WorkspaceStore) -> Self {
         Self {
             client,
             workspace,
@@ -165,7 +166,6 @@ impl BuildManager {
 
     pub(crate) async fn clean(&self, uri: Url, artifacts: bool, dry_run: bool) -> Result<Value> {
         let mut workspace = self.workspace.write().await;
-        workspace.diagnostic_delivery.invalidate();
         let root = workspace
             .root_document(&uri)
             .map_err(Error::invalid_params)?;
@@ -266,13 +266,13 @@ impl BuildManager {
                 record.result = None;
                 record.inputs.clear();
                 record.checks = Arc::default();
-                if let Some(old) = workspace.build_diagnostics.remove(&root) {
+                if let Some(old) = workspace.project.build_diagnostics.remove(&root) {
                     affected.extend(old.into_keys());
                 }
-                workspace.build_diagnostic_sources.remove(&root);
-                workspace.build_checks.remove(&root);
+                workspace.project.build_diagnostic_sources.remove(&root);
+                workspace.project.build_checks.remove(&root);
                 if artifacts {
-                    workspace.pdf_checks.remove(&root);
+                    workspace.project.pdf_checks.remove(&root);
                 }
                 affected.insert(root.clone());
                 affected.extend(
@@ -334,7 +334,6 @@ impl BuildManager {
         guard: Option<crate::editing::RebuildGuard>,
     ) -> Result<Value> {
         let mut workspace = self.workspace.write().await;
-        workspace.diagnostic_delivery.invalidate();
         let root = workspace
             .root_document(&uri)
             .map_err(Error::invalid_params)?;
@@ -464,7 +463,7 @@ impl BuildManager {
         let checks = Arc::new(crate::compilation::file_checks::Snapshot::capture(
             &workspace, &root, &config,
         ));
-        let progress_supported = workspace.build_progress;
+        let progress_supported = workspace.client.build_progress;
         let root_path = root
             .to_file_path()
             .map_err(|_| Error::invalid_params("Compilation requires a local file"))?;
@@ -691,7 +690,13 @@ impl BuildManager {
                     .await;
             }
             let worker_root = root_path.clone();
-            let previous_pdf = workspace.read().await.pdf_checks.get(&root_uri).cloned();
+            let previous_pdf = workspace
+                .read()
+                .await
+                .project
+                .pdf_checks
+                .get(&root_uri)
+                .cloned();
             let worker_inputs: Vec<_> = project
                 .iter()
                 .filter_map(|uri| uri.to_file_path().ok())
@@ -711,7 +716,6 @@ impl BuildManager {
             let mut outcome = outcome
                 .unwrap_or_else(|error| Outcome::error(format!("Compiler task failed: {error}")));
             let mut current = workspace.write().await;
-            current.diagnostic_delivery.invalidate();
             let mut checks = checks;
             if let Some(inputs) = &outcome.inputs {
                 let recorded =
@@ -719,9 +723,10 @@ impl BuildManager {
                 project.extend(recorded.iter().cloned());
                 if matches!(outcome.status, "success" | "error") {
                     current
+                        .project
                         .recorded_inputs
                         .insert(root_uri.clone(), recorded.clone());
-                    current.recorded_binary_inputs.insert(
+                    current.project.recorded_binary_inputs.insert(
                         root_uri.clone(),
                         outcome
                             .binary_inputs
@@ -738,6 +743,7 @@ impl BuildManager {
                         .filter(|(path, target)| {
                             Url::from_file_path(target).is_ok_and(|uri| recorded.contains(&uri))
                                 || current
+                                    .project
                                     .recorded_bindings
                                     .get(&root_uri)
                                     .is_some_and(|previous| previous.contains_key(*path))
@@ -745,13 +751,17 @@ impl BuildManager {
                         .map(|(path, target)| (path.clone(), target.clone()))
                         .chain(outcome.unresolved_bindings.iter().filter_map(|path| {
                             current
+                                .project
                                 .recorded_bindings
                                 .get(&root_uri)?
                                 .get(path)
                                 .map(|target| (path.clone(), target.clone()))
                         }))
                         .collect();
-                    current.recorded_bindings.insert(root_uri.clone(), bindings);
+                    current
+                        .project
+                        .recorded_bindings
+                        .insert(root_uri.clone(), bindings);
                     for uri in &recorded {
                         current.reload_recorded(uri, outcome.binary_inputs.contains(uri));
                     }
@@ -765,6 +775,7 @@ impl BuildManager {
                 project.extend(recorded.iter().cloned());
                 if matches!(outcome.status, "success" | "error") {
                     current
+                        .project
                         .bibliography_inputs
                         .insert(root_uri.clone(), recorded.clone());
                     let bindings =
@@ -774,6 +785,7 @@ impl BuildManager {
                             .filter(|(path, target)| {
                                 Url::from_file_path(target).is_ok_and(|uri| recorded.contains(&uri))
                                     || current
+                                        .project
                                         .bibliography_bindings
                                         .get(&root_uri)
                                         .is_some_and(|previous| previous.contains_key(*path))
@@ -782,6 +794,7 @@ impl BuildManager {
                             .chain(outcome.bibliography_unresolved_bindings.iter().filter_map(
                                 |path| {
                                     current
+                                        .project
                                         .bibliography_bindings
                                         .get(&root_uri)?
                                         .get(path)
@@ -790,9 +803,10 @@ impl BuildManager {
                             ))
                             .collect();
                     current
+                        .project
                         .bibliography_bindings
                         .insert(root_uri.clone(), bindings);
-                    current.bibliography_databases.insert(
+                    current.project.bibliography_databases.insert(
                         root_uri.clone(),
                         outcome
                             .bibliography_databases
@@ -810,7 +824,11 @@ impl BuildManager {
                 checks = Arc::new(
                     checks.with_bindings([
                         (
-                            current.recorded_bindings.get(&root_uri).unwrap_or(&empty),
+                            current
+                                .project
+                                .recorded_bindings
+                                .get(&root_uri)
+                                .unwrap_or(&empty),
                             if outcome.inputs.is_some() {
                                 crate::compilation::file_checks::BindingStatus::Updated
                             } else if outcome.pdf_updated {
@@ -821,6 +839,7 @@ impl BuildManager {
                         ),
                         (
                             current
+                                .project
                                 .bibliography_bindings
                                 .get(&root_uri)
                                 .unwrap_or(&empty),
@@ -836,6 +855,7 @@ impl BuildManager {
             if outcome.bibliography_inputs.is_none() {
                 if let Some(previous) =
                     current
+                        .project
                         .bibliography_checks
                         .get(&root_uri)
                         .filter(|previous| {
@@ -852,12 +872,13 @@ impl BuildManager {
             // file. Prefer recorded inputs when available, retaining BibTeX
             // sources which TeX's own recorder does not normally list.
             let mut artifact_inputs = current
+                .project
                 .recorded_inputs
                 .get(&root_uri)
                 .cloned()
                 .unwrap_or_else(|| project.clone());
             artifact_inputs.insert(root_uri.clone());
-            if let Some(inputs) = current.bibliography_inputs.get(&root_uri) {
+            if let Some(inputs) = current.project.bibliography_inputs.get(&root_uri) {
                 artifact_inputs.extend(inputs.iter().cloned());
             }
             artifact_inputs.extend(current.bibliography_files(&root_uri));
@@ -877,11 +898,12 @@ impl BuildManager {
                 artifact_inputs
                     .iter()
                     .filter_map(|uri| uri.to_file_path().ok()),
-                current.pdf_checks.get(&root_uri).map(Arc::as_ref),
+                current.project.pdf_checks.get(&root_uri).map(Arc::as_ref),
             );
             if outcome.status == "success" && !outcome.pdf_updated {
                 if let Some(reason) = outcome.pdf.as_ref().and_then(|pdf| {
                     current
+                        .project
                         .pdf_checks
                         .get(&root_uri)
                         .filter(|previous| previous.matches_pdf(pdf))
@@ -1088,12 +1110,14 @@ impl BuildManager {
                 && matches!(outcome.status, "success" | "error")
             {
                 let mut bibliography = current
+                    .project
                     .bibliography_inputs
                     .get(&root_uri)
                     .cloned()
                     .unwrap_or_default();
                 bibliography.extend(
                     current
+                        .project
                         .bibliography_bindings
                         .get(&root_uri)
                         .into_iter()
@@ -1113,7 +1137,7 @@ impl BuildManager {
                     })
                     .collect();
                 crate::compilation::file_checks::Snapshot::remember(
-                    &mut current.bibliography_checks,
+                    &mut current.project.bibliography_checks,
                     root_uri.clone(),
                     Arc::new(checks.with_inputs(contents)),
                 );
@@ -1127,13 +1151,14 @@ impl BuildManager {
                 && outcome.pdf.as_ref().is_some_and(|pdf| {
                     outcome.pdf_updated
                         || current
+                            .project
                             .pdf_checks
                             .get(&root_uri)
                             .is_none_or(|previous| !previous.matches_pdf(pdf))
                 })
             {
                 crate::compilation::file_checks::Snapshot::remember(
-                    &mut current.pdf_checks,
+                    &mut current.project.pdf_checks,
                     root_uri.clone(),
                     Arc::new(
                         checks
@@ -1149,28 +1174,30 @@ impl BuildManager {
                 );
             }
             if stale {
-                if let Some(old) = current.build_diagnostics.remove(&root_uri) {
+                if let Some(old) = current.project.build_diagnostics.remove(&root_uri) {
                     affected.extend(old.into_keys());
                 }
-                current.build_diagnostic_sources.remove(&root_uri);
-                current.build_checks.remove(&root_uri);
+                current.project.build_diagnostic_sources.remove(&root_uri);
+                current.project.build_checks.remove(&root_uri);
                 affected.insert(root_uri.clone());
             } else if matches!(outcome.status, "success" | "error") {
                 crate::compilation::file_checks::Snapshot::remember(
-                    &mut current.build_checks,
+                    &mut current.project.build_checks,
                     root_uri.clone(),
                     Arc::new(checks.with_inputs(inputs)),
                 );
                 current
+                    .project
                     .build_diagnostic_sources
                     .insert(root_uri.clone(), diagnostic_sources);
                 if let Some(old) = current
+                    .project
                     .build_diagnostics
                     .insert(root_uri.clone(), outcome.diagnostics)
                 {
                     affected.extend(old.into_keys());
                 }
-                if let Some(new) = current.build_diagnostics.get(&root_uri) {
+                if let Some(new) = current.project.build_diagnostics.get(&root_uri) {
                     affected.extend(new.keys().cloned());
                 }
                 affected.insert(root_uri.clone());
@@ -1181,7 +1208,7 @@ impl BuildManager {
                     .iter()
                     .filter_map(|(uri, doc)| doc.version.is_some().then_some(uri.clone())),
             );
-            let inlay_refresh = current.inlay_refresh;
+            let inlay_refresh = current.client.inlay_refresh;
             let delivery = current.diagnostic_delivery.clone();
             let notifications = if delivery.is_pull() {
                 vec![]
@@ -2273,7 +2300,7 @@ mod tests {
         workspace.config.build.root_file = Some("second.tex".into());
         workspace.config.build.executable = "unavailable-custom-compiler".into();
         workspace.config.build.rebuild_arguments = Some(vec![]);
-        let workspace = Arc::new(RwLock::new(workspace));
+        let workspace = WorkspaceStore::new(workspace);
         let (client, _outgoing) = Client::new();
         let manager = BuildManager::new(client, workspace);
         manager
@@ -2303,7 +2330,7 @@ mod tests {
         let uri = Url::from_file_path(main).unwrap();
         let mut workspace = Workspace::default();
         workspace.open(uri.clone(), source.into(), 1);
-        let workspace = Arc::new(RwLock::new(workspace));
+        let workspace = WorkspaceStore::new(workspace);
         let (client, _outgoing) = Client::new();
         let manager = BuildManager::new(client, workspace);
         manager.state.lock().unwrap().insert(
@@ -2363,7 +2390,7 @@ mod tests {
         workspace.open(uri.clone(), source.into(), 1);
         workspace.config.build.executable = "unavailable-custom-compiler".into();
         workspace.config.build.rebuild_arguments = Some(vec![]);
-        let workspace = Arc::new(RwLock::new(workspace));
+        let workspace = WorkspaceStore::new(workspace);
         let (client, _outgoing) = Client::new();
         let manager = BuildManager::new(client, workspace);
         manager

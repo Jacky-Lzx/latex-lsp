@@ -22,15 +22,18 @@ fn project(root: &Path, source: &str, definitions: &str, log: &str) -> (Workspac
     std::fs::write(root.join("refs.bib"), source).unwrap();
     std::fs::write(root.join("later.bib"), "@string{Journals={Later}}").unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     for doc in workspace.documents.values_mut() {
         doc.version = Some(7);
     }
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         uri(root, "main.tex"),
         build_log::parse_bibliography(&root.join("main.tex"), log),
     );
@@ -45,6 +48,7 @@ fn history(tail: &str) -> String {
 
 fn diagnostics(workspace: &Workspace, target: &Url) -> Vec<Diagnostic> {
     workspace
+        .project
         .build_diagnostics
         .values()
         .flat_map(|map| map.get(target).into_iter().flatten())
@@ -117,7 +121,7 @@ fn two_line_warnings_use_exact_utf16_ranges_and_preserve_other_warnings() {
         );
         assert!(diagnostic.data.as_ref().unwrap()["bibliographyInputs"].is_array());
     }
-    assert!(workspace.build_diagnostics.values().any(|map| map
+    assert!(workspace.project.build_diagnostics.values().any(|map| map
         .values()
         .flatten()
         .any(|diagnostic| diagnostic.message == "BibTeX: empty author in entry")));
@@ -377,8 +381,8 @@ fn legacy_repairs_revalidate_versions_replacements_and_source_proofs() {
         "@string{Journal={Text}}",
         &history(&warning("jouranl", 1, "refs.bib")),
     );
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
     let diagnostic = diagnostics(&workspace, &target).remove(0);
     let request = |version, name: &str| editing::FixRequest {
         uri: target.clone(),
@@ -422,6 +426,7 @@ fn error_looking_style_paths_do_not_invalidate_confirmed_abbreviation_repairs() 
         &log,
     );
     let all: Vec<_> = workspace
+        .project
         .build_diagnostics
         .values()
         .flat_map(|map| map.values().flatten())
@@ -543,7 +548,7 @@ fn real_bibtex_warning_corrections_restore_the_expected_bibliography() {
     };
     let log = compile();
     assert!(log.contains("--line 2 of file refs.bib"), "{log}");
-    workspace.build_diagnostics = BTreeMap::from([(
+    workspace.project.build_diagnostics = BTreeMap::from([(
         uri(root, "main.tex"),
         build_log::parse_bibliography(&root.join("main.tex"), &log),
     )]);

@@ -485,8 +485,8 @@ pub(crate) fn fixes(
     // Include TeX/configuration and opened-path changes when this diagnostic
     // came from a build, including a symlink selecting a different database.
     if [
-        workspace.build_checks.get(root),
-        workspace.bibliography_checks.get(root),
+        workspace.project.build_checks.get(root),
+        workspace.project.bibliography_checks.get(root),
     ]
     .into_iter()
     .flatten()

@@ -193,7 +193,7 @@ fn default_only_biblatex_ignores_stale_recorded_library_dependencies() {
     let (_dir, mut ws, main) = setup("", r"\cite{collision}");
     let selected = main.join("section.bib").unwrap();
     // A previous build may still list a library after its resource role changes.
-    ws.bibliography_inputs.insert(
+    ws.project.bibliography_inputs.insert(
         main.clone(),
         std::collections::BTreeSet::from([selected.clone()]),
     );

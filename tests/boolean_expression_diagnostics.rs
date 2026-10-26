@@ -77,11 +77,17 @@ fn expression_repairs_preserve_operators_branches_and_the_other_namespace() {
         let diagnostics = build_log::parse(&main, &log(2, call, detail, true));
         let error = diagnostics[&uri][0].clone();
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(directory.path().into());
-        workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+        workspace
+            .project
+            .build_diagnostics
+            .insert(uri.clone(), diagnostics);
         let edit = actions(&workspace, &uri, &error)
             .into_iter()
             .find_map(|item| match item {
@@ -424,13 +430,19 @@ fn expression_fixes_revalidate_tests_candidates_versions_and_readonly_builtins()
     let uri = Url::from_file_path(&main).unwrap();
     let error = diagnostics[&uri][0].clone();
     let mut workspace = Workspace {
-        code_action_literals: true,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(directory.path().into());
     workspace.open(uri.clone(), source.clone(), 9);
-    workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+    workspace
+        .project
+        .build_diagnostics
+        .insert(uri.clone(), diagnostics);
     let response = actions(&workspace, &uri, &error);
     let CodeActionOrCommand::CodeAction(action) = &response[0] else {
         panic!("missing action")
@@ -440,8 +452,8 @@ fn expression_fixes_revalidate_tests_candidates_versions_and_readonly_builtins()
         panic!("missing versioned edit")
     };
     assert_eq!(edits[0].text_document.version, Some(9));
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
     let response = actions(&workspace, &uri, &error);
     let CodeActionOrCommand::Command(command) = &response[0] else {
         panic!("missing legacy action")
@@ -480,11 +492,17 @@ fn expression_fixes_revalidate_tests_candidates_versions_and_readonly_builtins()
     );
     let errors = diagnostics[&uri].clone();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(directory.path().into());
-    workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+    workspace
+        .project
+        .build_diagnostics
+        .insert(uri.clone(), diagnostics);
     for (error, value) in errors.iter().zip(["true", "false"]) {
         assert!(actions(&workspace, &uri, error).iter().any(|item| matches!(item, CodeActionOrCommand::CodeAction(action) if action.title == format!("Replace with boolean `{value}`"))));
     }
@@ -577,14 +595,18 @@ fn real_expression_repairs_preserve_logic_loops_literals_and_wrapped_names_in_al
                     before.output
                 );
                 let mut workspace = Workspace {
-                    code_action_literals: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        code_action_literals: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(root.into());
                 workspace
+                    .project
                     .build_diagnostics
                     .insert(Url::from_file_path(&main).unwrap(), before.diagnostics);
-                workspace.build_diagnostic_sources.insert(
+                workspace.project.build_diagnostic_sources.insert(
                     Url::from_file_path(&main).unwrap(),
                     before.diagnostic_sources,
                 );

@@ -281,7 +281,7 @@ fn snippets_and_signatures_use_one_optional_options_group_and_the_full_filename(
         for following in ["", "{refs.bib}", "[label=refs]{refs.bib}"] {
             let source = format!("\\{name}{following}");
             let (_directory, mut workspace, main, _bib) = fixture(&source, "refs.bib");
-            workspace.snippets = true;
+            workspace.client.snippets = true;
             let items = features::completion(&workspace, &main, Position::new(0, 4));
             let item = items.iter().find(|item| item.label == name).unwrap();
             let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {

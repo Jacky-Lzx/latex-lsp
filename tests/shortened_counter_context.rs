@@ -180,12 +180,16 @@ fn real_shortened_counter_contexts_reject_wrong_repairs_and_keep_unique_repairs(
                 let mut expected = source.clone();
                 expected.replace_range(start..start + name.len(), &correct);
                 let mut workspace = Workspace {
-                    versioned_edits: true,
-                    code_action_literals: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        code_action_literals: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.open(uri.clone(), source.clone(), 7);
                 workspace
+                    .project
                     .build_diagnostics
                     .insert(uri.clone(), before.diagnostics.clone());
                 let repair = repaired(&workspace, &uri, diagnostic, &correct);

@@ -256,7 +256,10 @@ fn duplicate_dynamic_sets_and_database_collisions_reject_ambiguous_renames() {
 fn set_commands_offer_snippets_and_existing_arguments_are_preserved() {
     for following in ["", "{group}{alpha}"] {
         let mut workspace = Workspace {
-            snippets: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                snippets: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let source = format!("\\defbibentryset{following}");

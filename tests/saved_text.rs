@@ -10,7 +10,10 @@ use std::sync::atomic::AtomicBool;
 fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///saved-text/main.tex").unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.open(uri.clone(), source.into(), 7);
@@ -458,7 +461,10 @@ fn real_saved_key_renames_keep_compilation_and_literal_bodies_intact() {
                 };
                 let source = format!("\\documentclass{{article}}\r\n\\usepackage{{fancyvrb}}\r\n\\begin{{document}}\\label{{kept}}\r\n{saved}\r\nReal.\\ref{{kept}}\\end{{document}}\r\n");
                 let mut workspace = Workspace {
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(root.into());

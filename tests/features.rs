@@ -211,7 +211,7 @@ fn snippets_respect_client_capabilities() {
         panic!();
     };
     assert_eq!(edit.new_text, "section");
-    workspace.snippets = true;
+    workspace.client.snippets = true;
     let snippets = features::completion(&workspace, &main, Position::new(0, 4));
     let section = snippets
         .iter()
@@ -508,7 +508,10 @@ fn environment_name_completion_does_not_guess_computed_names_or_overlap_edits_on
 #[test]
 fn snippet_completion_preserves_existing_arguments() {
     let mut workspace = Workspace {
-        snippets: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            snippets: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     for source in [r"\section{Title}", r"\section*[Short]{Title}"] {

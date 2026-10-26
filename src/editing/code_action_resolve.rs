@@ -25,7 +25,7 @@ fn fingerprint(ws: &Workspace, uri: &Url) -> String {
     let scope = ws.symbol_scope(uri);
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     ws.index_truncated.hash(&mut hash);
-    ws.versioned_edits.hash(&mut hash);
+    ws.client.versioned_edits.hash(&mut hash);
     serde_json::to_vec(&ws.config).unwrap().hash(&mut hash);
     for uri in scope {
         uri.hash(&mut hash);
@@ -44,8 +44,8 @@ pub(crate) fn actions(
     context: &CodeActionContext,
 ) -> CodeActionResponse {
     let mut actions = editing::code_actions(ws, uri, range, context);
-    if !ws.code_action_resolve_edits
-        || !ws.code_action_literals
+    if !ws.client.code_action_resolve_edits
+        || !ws.client.code_action_literals
         || !actions.iter().any(|action| {
             matches!(action,
             CodeActionOrCommand::CodeAction(action)
@@ -130,9 +130,12 @@ mod tests {
         let uri = Url::parse("untitled:actions.tex").unwrap();
         let source = "\\begin{document}\r\n😀 Hello world\r\n\\end{document}";
         let mut ws = Workspace {
-            code_action_literals: true,
-            code_action_resolve_edits: true,
-            versioned_edits: true,
+            client: crate::project::state::ClientCapabilities {
+                code_action_literals: true,
+                code_action_resolve_edits: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         ws.documents
@@ -190,7 +193,7 @@ mod tests {
         let (mut ws, uri, range) = fixture();
         let context = context(CodeActionKind::REFACTOR);
         let deferred = actions(&ws, &uri, range, &context);
-        ws.code_action_resolve_edits = false;
+        ws.client.code_action_resolve_edits = false;
         let eager = actions(&ws, &uri, range, &context);
         assert_eq!(deferred.len(), 4);
         for (deferred, eager) in deferred.into_iter().zip(eager) {
@@ -269,7 +272,7 @@ mod tests {
     fn absent_or_malformed_data_and_legacy_actions_follow_protocol() {
         let (mut ws, uri, range) = fixture();
         let context = context(CodeActionKind::REFACTOR);
-        ws.code_action_resolve_edits = false;
+        ws.client.code_action_resolve_edits = false;
         let inline = first(&ws, &uri, range, &context);
         assert!(inline.edit.is_some() && inline.data.is_none());
         assert_eq!(resolve(&ws, inline.clone()).unwrap(), inline);
@@ -279,9 +282,9 @@ mod tests {
             resolve(&ws, invalid).unwrap_err().code,
             ErrorCode::InvalidParams
         );
-        ws.code_action_literals = false;
-        ws.apply_edits = true;
-        ws.code_action_resolve_edits = true;
+        ws.client.code_action_literals = false;
+        ws.client.apply_edits = true;
+        ws.client.code_action_resolve_edits = true;
         assert!(actions(&ws, &uri, range, &context)
             .iter()
             .all(|action| matches!(action, CodeActionOrCommand::Command(_))));
@@ -304,8 +307,11 @@ mod tests {
             std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
         }
         let mut ws = Workspace {
-            code_action_literals: true,
-            code_action_resolve_edits: true,
+            client: crate::project::state::ClientCapabilities {
+                code_action_literals: true,
+                code_action_resolve_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         ws.config.distribution.enabled = false;
@@ -350,15 +356,20 @@ mod tests {
         let source = "\\documentclass{article}\n\\begin{document}\nA & B\n\\end{document}";
         std::fs::write(&path, source).unwrap();
         let mut ws = Workspace {
-            code_action_literals: true,
-            code_action_resolve_edits: true,
+            client: crate::project::state::ClientCapabilities {
+                code_action_literals: true,
+                code_action_resolve_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         ws.config.distribution.enabled = false;
         ws.add_root(dir.path().into());
         ws.open(uri.clone(), source.into(), 1);
         let diagnostics = crate::compilation::build_log::parse(&path, "(./main.tex\n! Misplaced alignment tab character &.\nl.3 A &\n      B\n\nLaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.\n)\n");
-        ws.build_diagnostics.insert(uri.clone(), diagnostics);
+        ws.project
+            .build_diagnostics
+            .insert(uri.clone(), diagnostics);
         let range = Range::new(Position::new(0, 0), Position::new(4, 0));
         let context = context(CodeActionKind::QUICKFIX);
         let deferred = actions(&ws, &uri, range, &context);
@@ -384,7 +395,7 @@ mod tests {
         }
         assert!(rebuild);
         let fix = fix.expect("compiled alignment error must have a deferred fix");
-        ws.build_diagnostics.clear();
+        ws.project.build_diagnostics.clear();
         assert_eq!(
             resolve(&ws, fix).unwrap_err().code,
             ErrorCode::ServerError(-32801)

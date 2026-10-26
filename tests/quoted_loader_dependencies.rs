@@ -26,7 +26,10 @@ fn project(root: &Path, source: &str, extension: &str) -> Workspace {
     )
     .unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -173,6 +176,7 @@ fn recorder_sources_dynamic_inputs_and_primitive_rebindings_keep_potential_loade
             let target = uri(root, &format!("refs.{extension}"));
             if recorded {
                 workspace
+                    .project
                     .recorded_inputs
                     .insert(main.clone(), BTreeSet::from([target.clone()]));
             }

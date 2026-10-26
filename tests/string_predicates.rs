@@ -468,14 +468,19 @@ fn real_string_tests_keep_branches_tokens_and_cross_file_rename_results_in_three
             Text::new(broken.clone()).range(start, start + 7)
         );
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
         workspace
+            .project
             .build_diagnostics
             .insert(uri.clone(), failed.diagnostics);
         workspace
+            .project
             .build_diagnostic_sources
             .insert(uri.clone(), failed.diagnostic_sources);
         let actions = latex_lsp::editing::code_actions(

@@ -27,9 +27,9 @@ pub fn code_actions(
         return vec![];
     };
     let mut actions = Vec::new();
-    if workspace.code_action_literals || workspace.apply_edits {
+    if workspace.client.code_action_literals || workspace.client.apply_edits {
         actions.extend(crate::editing::refactor::actions(workspace, uri, range, context).into_iter().map(|action| {
-            if workspace.code_action_literals { CodeActionOrCommand::CodeAction(action) }
+            if workspace.client.code_action_literals { CodeActionOrCommand::CodeAction(action) }
             else { CodeActionOrCommand::Command(Command {
                 title: action.title.clone(), command: "latex.applyCodeAction".into(),
                 arguments: Some(vec![serde_json::json!({"uri":uri,"version":doc.version,"range":range,"kind":action.kind,"title":action.title})]),
@@ -40,7 +40,7 @@ pub fn code_actions(
         return actions;
     }
     actions.extend(rebuild_actions(workspace, uri, range, context));
-    if !workspace.code_action_literals && !workspace.apply_edits {
+    if !workspace.client.code_action_literals && !workspace.client.apply_edits {
         return actions;
     }
     let mut fixes = crate::diagnostics::environment_diagnostics::fixes(workspace, uri, doc);
@@ -64,7 +64,7 @@ pub fn code_actions(
                     }))
         })
         .map(|fix| {
-            if !workspace.code_action_literals {
+            if !workspace.client.code_action_literals {
                 return CodeActionOrCommand::Command(Command {
                     title: fix.title.clone(),
                     command: "latex.applyQuickFix".into(),
@@ -121,6 +121,7 @@ fn rebuild_actions(
     context: &CodeActionContext,
 ) -> CodeActionResponse {
     workspace
+        .project
         .build_diagnostics
         .iter()
         .filter_map(|(root, project)| {
@@ -163,7 +164,7 @@ fn rebuild_actions(
                     },
                 })]),
             };
-            Some(if workspace.code_action_literals {
+            Some(if workspace.client.code_action_literals {
                 CodeActionOrCommand::CodeAction(CodeAction {
                     title,
                     kind: Some(CodeActionKind::QUICKFIX),
@@ -194,6 +195,7 @@ pub(crate) fn valid_rebuild_guard(workspace: &Workspace, root: &Url, guard: &Reb
         .get(&guard.uri)
         .is_some_and(|doc| doc.version == guard.version)
         && workspace
+            .project
             .build_diagnostics
             .get(root)
             .and_then(|project| project.get(&guard.uri))

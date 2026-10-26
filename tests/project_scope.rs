@@ -66,6 +66,7 @@ fn recorded_local_and_shared_data_remains_outside_the_latex_symbol_index() {
         .into();
     assert_eq!(selected, expected);
     workspace
+        .project
         .recorded_inputs
         .insert(uri.clone(), selected.clone());
     workspace.refresh_project(&uri);
@@ -159,7 +160,7 @@ fn completions_and_user_snippets_exclude_symbols_from_independent_papers() {
     let (directory, mut workspace) = project();
     let root = directory.path();
     let main = uri(root, "a/main.tex");
-    workspace.snippets = true;
+    workspace.client.snippets = true;
     let prefix =
         "\\documentclass{article}\\usepackage{macros}\\input{chapter}\\bibliography{refs}\n";
     for (suffix, present, absent) in [
@@ -219,11 +220,12 @@ fn recorded_binary_roles_do_not_block_explicit_source_inclusion() {
     workspace.add_root(directory.path().into());
     let main_uri = Url::from_file_path(&main).unwrap();
     let data_uri = Url::from_file_path(&data).unwrap();
-    workspace.recorded_inputs.insert(
+    workspace.project.recorded_inputs.insert(
         main_uri.clone(),
         [main_uri.clone(), data_uri.clone()].into(),
     );
     workspace
+        .project
         .recorded_binary_inputs
         .insert(main_uri.clone(), [data_uri.clone()].into());
     workspace.refresh_project(&main_uri);
@@ -255,14 +257,15 @@ fn directory_renames_preserve_recorded_binary_roles_for_new_source_looking_paths
     workspace.add_root(old.clone());
     let main_uri = Url::from_file_path(old.join("main.tex")).unwrap();
     let data_uri = Url::from_file_path(old.join("data.payload")).unwrap();
-    workspace.recorded_inputs.insert(
+    workspace.project.recorded_inputs.insert(
         main_uri.clone(),
         [main_uri.clone(), data_uri.clone()].into(),
     );
     workspace
+        .project
         .recorded_binary_inputs
         .insert(main_uri.clone(), [data_uri].into());
-    workspace.recorded_bindings.insert(
+    workspace.project.recorded_bindings.insert(
         main_uri,
         [(old.join("alias.csv"), old.join("data.payload"))].into(),
     );
@@ -288,12 +291,12 @@ fn directory_renames_preserve_recorded_binary_roles_for_new_source_looking_paths
     )
     .unwrap();
     assert_eq!(
-        workspace.recorded_binary_inputs[&main_uri],
+        workspace.project.recorded_binary_inputs[&main_uri],
         [data_uri.clone()].into()
     );
-    assert!(workspace.recorded_inputs[&main_uri].contains(&data_uri));
+    assert!(workspace.project.recorded_inputs[&main_uri].contains(&data_uri));
     assert_eq!(
-        workspace.recorded_bindings[&main_uri],
+        workspace.project.recorded_bindings[&main_uri],
         [(new.join("alias.csv"), new.join("data.tex"))].into()
     );
     workspace.refresh_project(&main_uri);
@@ -310,7 +313,7 @@ fn directory_and_file_moves_update_bibliography_binding_names_and_targets() {
     std::fs::write(old.join("physical.bib"), "@book{entry}\n").unwrap();
     let main = Url::from_file_path(old.join("main.tex")).unwrap();
     let mut workspace = Workspace::default();
-    workspace.bibliography_bindings.insert(
+    workspace.project.bibliography_bindings.insert(
         main,
         [(old.join("refs.bib"), old.join("physical.bib"))].into(),
     );
@@ -336,7 +339,8 @@ fn directory_and_file_moves_update_bibliography_binding_names_and_targets() {
     )
     .unwrap();
     assert_eq!(
-        workspace.bibliography_bindings[&Url::from_file_path(new.join("main.tex")).unwrap()],
+        workspace.project.bibliography_bindings
+            [&Url::from_file_path(new.join("main.tex")).unwrap()],
         [(new.join("refs.bib"), target)].into()
     );
 }
@@ -510,11 +514,12 @@ fn current_static_roles_replace_previous_recorder_roles_without_losing_unsaved_t
         "\\documentclass{article}\\usepackage{alias}\\fromalias\n".into(),
         1,
     );
-    workspace.recorded_bindings.insert(
+    workspace.project.recorded_bindings.insert(
         main.clone(),
         [(root.join("alias.sty"), target.clone())].into(),
     );
     workspace
+        .project
         .recorded_inputs
         .insert(main.clone(), [target_uri.clone()].into());
     let bibliography = "@book{entry,title={Book}}\n";

@@ -322,7 +322,7 @@ fn real_missing_alias_images_have_precise_diagnostics_and_repairable_names() {
         let root = directory.path();
         let source = format!("\\documentclass{{article}}\n\\usepackage{{graphicx,etoolbox}}\n\\def\\Image{{\\includegraphics}}\n\\graphicspath{{{{assets/}}}}\n\\begin{{document}}\n{call}[width=1cm]{{plto}}\n\\end{{document}}\n");
         let mut workspace = project(root, &source);
-        workspace.code_action_literals = true;
+        workspace.client.code_action_literals = true;
         std::fs::write(root.join("assets/plot.png"), PNG).unwrap();
         let config = latex_lsp::config::BuildConfig {
             executable: "pdflatex".into(),
@@ -344,6 +344,7 @@ fn real_missing_alias_images_have_precise_diagnostics_and_repairable_names() {
         let start = source.find("plto").unwrap();
         assert_eq!(diagnostic.range, text.range(start, start + 4));
         workspace
+            .project
             .build_diagnostics
             .insert(main.clone(), outcome.diagnostics);
         let fixes = latex_lsp::editing::code_actions(
@@ -409,6 +410,7 @@ fn recorder_sources_keep_image_links_completion_and_file_rename_edits() {
         std::fs::write(root.join("plot.png"), PNG).unwrap();
         workspace.reload(&generated);
         workspace
+            .project
             .recorded_inputs
             .insert(main.clone(), [main.clone(), generated.clone()].into());
         assert_eq!(
@@ -480,6 +482,7 @@ fn recorder_definitions_determine_image_meaning_and_argument_boundaries() {
         std::fs::write(root.join("plot.png"), PNG).unwrap();
         workspace.reload(&generated);
         workspace
+            .project
             .recorded_inputs
             .insert(main.clone(), [main.clone(), generated].into());
         assert_eq!(
@@ -528,6 +531,7 @@ fn shared_recorded_sources_keep_root_specific_targets_and_reject_partial_moves()
     for name in ["a", "b"] {
         let main = uri(root, &format!("{name}/main.tex"));
         workspace
+            .project
             .recorded_inputs
             .insert(main.clone(), [main, shared.clone()].into());
     }
@@ -551,9 +555,10 @@ fn recorded_image_fixes_recheck_alias_definitions_before_editing() {
     std::fs::write(root.join("plot.png"), PNG).unwrap();
     workspace.reload(&generated);
     workspace
+        .project
         .recorded_inputs
         .insert(main.clone(), [main.clone(), generated.clone()].into());
-    workspace.code_action_literals = true;
+    workspace.client.code_action_literals = true;
     let offset = body.find("plto.png").unwrap();
     let diagnostic = Diagnostic {
         range: Text::new(body.into()).range(offset, offset + 8),
@@ -564,7 +569,7 @@ fn recorded_image_fixes_recheck_alias_definitions_before_editing() {
         data: Some(serde_json::json!({"file":"plto.png"})),
         ..Default::default()
     };
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         main.clone(),
         [(generated.clone(), vec![diagnostic.clone()])].into(),
     );
@@ -624,6 +629,7 @@ fn real_dynamic_source_images_keep_navigation_and_build_inputs_after_moves() {
             assert!(inputs.contains(&generated));
             assert!(inputs.contains(&image));
             workspace
+                .project
                 .recorded_inputs
                 .insert(main.clone(), workspace.project_inputs(&main, &inputs));
             assert_eq!(
@@ -655,7 +661,7 @@ fn displayed_recorder_files_do_not_define_image_aliases_until_input_as_source() 
         let mut workspace = project(root, &source);
         std::fs::write(root.join("plot.png"), PNG).unwrap();
         let main = uri(root, "main.tex");
-        workspace.recorded_inputs.insert(
+        workspace.project.recorded_inputs.insert(
             main.clone(),
             [main.clone(), uri(root, "generated.tex")].into(),
         );

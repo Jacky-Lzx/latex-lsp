@@ -43,6 +43,7 @@ impl<'a> Commands<'a> {
             origin,
             index: command_docs::Index::new(ws, scope),
             fingerprint: ws
+                .client
                 .completion_resolve_documentation
                 .then(|| fingerprint(ws, scope)),
         }
@@ -128,8 +129,8 @@ mod tests {
         let uri = Url::parse("untitled:completion.tex").unwrap();
         let mut ws = Workspace::default();
         ws.config.distribution.enabled = false;
-        ws.snippets = true;
-        ws.completion_resolve_documentation = deferred;
+        ws.client.snippets = true;
+        ws.client.completion_resolve_documentation = deferred;
         ws.open(
             uri.clone(),
             "% 中文😀 **plain** <tag>\r\n\\newcommand{\\example}[1]{#1}\r\n😀 \\exaBAD".into(),
@@ -156,7 +157,7 @@ mod tests {
             panic!()
         };
         assert!(text.ends_with("中文😀 **plain** <tag>"));
-        ws.completion_resolve_documentation = true;
+        ws.client.completion_resolve_documentation = true;
         let deferred = candidate(&ws, &uri);
         assert!(deferred.documentation.is_none());
         let resolved = resolve(&ws, deferred.clone()).unwrap();
@@ -247,7 +248,7 @@ mod tests {
         }
         let mut ws = Workspace::default();
         ws.config.distribution.enabled = false;
-        ws.completion_resolve_documentation = true;
+        ws.client.completion_resolve_documentation = true;
         ws.open(root.clone(), source.into(), 1);
         ws.open(child.clone(), definitions.into(), 1);
         ws.open(
@@ -294,7 +295,10 @@ mod tests {
         let uri = Url::parse("untitled:environments.tex").unwrap();
         let source = "% Macro documentation\r\n\\newcommand{\\example}[1]{#1}\r\n% 中文😀 **Environment** <tag>\r\n\\NewDocumentEnvironment{example}{O{x} m}{}{}\r\n% Direct environment\r\n\\newenvironment{onlyenv}[1]{}{}\r\n😀 \\begin{exaBAD}\r\n\\end{exaBAD}\r\n\\exaBAD\r\n\\onlyBAD";
         let mut ws = Workspace {
-            snippets: true,
+            client: crate::project::state::ClientCapabilities {
+                snippets: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         ws.open(uri.clone(), source.into(), 1);
@@ -319,11 +323,11 @@ mod tests {
                 "Macro documentation",
             ),
         ] {
-            ws.completion_resolve_documentation = false;
+            ws.client.completion_resolve_documentation = false;
             let inline = environment_item(&ws, &uri, needle, name);
             assert!(documentation(&inline).contains(expected));
             assert!(!documentation(&inline).contains(excluded));
-            ws.completion_resolve_documentation = true;
+            ws.client.completion_resolve_documentation = true;
             let deferred = environment_item(&ws, &uri, needle, name);
             assert!(deferred.documentation.is_none());
             let resolved = resolve(&ws, deferred.clone()).unwrap();
@@ -339,7 +343,10 @@ mod tests {
     fn environment_documentation_resolution_rejects_updates_and_duplicate_declarations() {
         let uri = Url::parse("untitled:environment-updates.tex").unwrap();
         let mut ws = Workspace {
-            completion_resolve_documentation: true,
+            client: crate::project::state::ClientCapabilities {
+                completion_resolve_documentation: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let source = "% Environment notes\n\\newenvironment{example}{}{}\n\\begin{exa}";
@@ -371,7 +378,10 @@ mod tests {
     fn environment_name_completion_retains_multiline_edits_and_builtin_fallback() {
         let uri = Url::parse("untitled:multiline-environment.tex").unwrap();
         let mut ws = Workspace {
-            completion_resolve_documentation: true,
+            client: crate::project::state::ClientCapabilities {
+                completion_resolve_documentation: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         ws.open(uri.clone(), "% Environment notes\r\n\\newenvironment{example}{}{}\r\n\\begin{ \r\n  exaBAD \r\n }\r\n\\begin{ite}".into(), 1);

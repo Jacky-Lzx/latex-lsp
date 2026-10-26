@@ -366,7 +366,7 @@ fn alias_spelling_repairs_share_the_certified_owner_and_member_candidate_context
         r"\defbibentryset{collected}{oldd}\csuse{cite}{oldd}",
         "@book{parent,title={Parent},ids={old}}",
     );
-    ws.code_action_literals = true;
+    ws.client.code_action_literals = true;
     for diagnostic in ws
         .diagnostics(&main)
         .into_iter()

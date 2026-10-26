@@ -277,7 +277,10 @@ fn granular_diagnostics_move_with_whole_values_and_do_not_guess_xdata_repairs() 
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -300,6 +303,7 @@ fn granular_diagnostics_move_with_whole_values_and_do_not_guess_xdata_repairs() 
         assert_eq!(item.range, Text::new(source.into()).range(start, end));
         workspace.open_with_language(uri(root, "refs.data"), source.into(), 7, "bibtex");
         workspace
+            .project
             .build_diagnostics
             .insert(uri(root, "main.tex"), diagnostics);
         assert!(editing::code_actions(

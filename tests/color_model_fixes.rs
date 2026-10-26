@@ -27,8 +27,11 @@ fn setup(source: &str, definitions: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///model-fixes/main.tex").unwrap();
     let palette = Url::parse("file:///model-fixes/palette.tex").unwrap();
     let mut workspace = Workspace {
-        code_action_literals: true,
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace
@@ -39,12 +42,13 @@ fn setup(source: &str, definitions: &str) -> (Workspace, Url) {
         Document::new(&palette, definitions.into(), None),
     );
     workspace
+        .project
         .recorded_inputs
         .insert(uri.clone(), [uri.clone(), palette].into());
     (workspace, uri)
 }
 fn store(workspace: &mut Workspace, uri: &Url, diagnostic: Diagnostic) {
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         uri.clone(),
         BTreeMap::from([(uri.clone(), vec![diagnostic])]),
     );
@@ -349,8 +353,11 @@ fn real_model_spelling_repairs_compile_and_preserve_color_specifications() {
                 "{engine}/{call}: {error:?}"
             );
             let mut workspace = Workspace {
-                versioned_edits: true,
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
@@ -385,10 +392,12 @@ fn project_macro_arities_revalidate_cross_file_color_fixes_and_reject_changed_ta
     };
     store(&mut workspace, &uri, error.clone());
     workspace
+        .project
         .build_diagnostic_sources
         .insert(uri.clone(), [uri.clone()].into());
     assert!(actions(&workspace, &uri, &error).is_empty());
     workspace
+        .project
         .build_diagnostic_sources
         .insert(uri.clone(), [uri.clone(), palette.clone()].into());
     assert_eq!(
@@ -402,11 +411,13 @@ fn project_macro_arities_revalidate_cross_file_color_fixes_and_reject_changed_ta
         Document::new(&later, r"\renewcommand{\bridge}[3]{}".into(), Some(9)),
     );
     workspace
+        .project
         .recorded_inputs
         .get_mut(&uri)
         .unwrap()
         .insert(later.clone());
     workspace
+        .project
         .build_diagnostic_sources
         .get_mut(&uri)
         .unwrap()
@@ -443,11 +454,12 @@ fn paused_parent_declarations_are_rechecked_without_lending_signatures_to_childr
         .documents
         .insert(child.clone(), Document::new(&child, source.into(), Some(7)));
     workspace
+        .project
         .recorded_inputs
         .get_mut(&root)
         .unwrap()
         .insert(child.clone());
-    workspace.build_diagnostic_sources.insert(
+    workspace.project.build_diagnostic_sources.insert(
         root.clone(),
         [root.clone(), child.clone(), palette.clone()].into(),
     );
@@ -462,7 +474,7 @@ fn paused_parent_declarations_are_rechecked_without_lending_signatures_to_childr
         ),
         ..Default::default()
     };
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         root.clone(),
         BTreeMap::from([(child.clone(), vec![error.clone()])]),
     );

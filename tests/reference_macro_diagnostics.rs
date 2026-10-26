@@ -177,12 +177,18 @@ fn key_macro_diagnostics_reuse_versioned_command_spelling_fixes() {
         let diagnostics = build_log::parse(&main, &format!("(./main.tex\n./main.tex:1: Undefined control sequence.\n<argument> \\keynme\nl.1 {source}\n)\n"));
         let diagnostic = diagnostics[&uri][0].clone();
         let mut workspace = Workspace {
-            versioned_edits: true,
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                versioned_edits: true,
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.open(uri.clone(), source.clone(), 7);
-        workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+        workspace
+            .project
+            .build_diagnostics
+            .insert(uri.clone(), diagnostics);
         assert_eq!(
             repaired(&workspace, &uri, &diagnostic),
             source.replace(r"\keynme", r"\keyname")
@@ -226,12 +232,16 @@ fn real_key_macro_repairs_restore_successful_compilation() {
                     )
                 });
             let mut workspace = Workspace {
-                versioned_edits: true,
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.open(uri.clone(), source, 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri.clone(), before.diagnostics.clone());
             std::fs::write(&main, repaired(&workspace, &uri, diagnostic)).unwrap();
@@ -343,12 +353,16 @@ fn real_additional_key_macro_repairs_restore_successful_compilation() {
                     )
                 });
             let mut workspace = Workspace {
-                versioned_edits: true,
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.open(uri.clone(), source, 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri.clone(), before.diagnostics.clone());
             std::fs::write(&main, repaired(&workspace, &uri, diagnostic)).unwrap();
@@ -470,12 +484,16 @@ fn real_remaining_direct_key_macro_repairs_restore_successful_compilation() {
                     )
                 });
             let mut workspace = Workspace {
-                versioned_edits: true,
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.open(uri.clone(), source, 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri.clone(), before.diagnostics.clone());
             std::fs::write(&main, repaired(&workspace, &uri, diagnostic)).unwrap();
@@ -610,12 +628,16 @@ fn real_prefixed_key_macro_repairs_restore_successful_compilation() {
                     )
                 });
             let mut workspace = Workspace {
-                versioned_edits: true,
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.open(uri.clone(), source, 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri.clone(), before.diagnostics.clone());
             std::fs::write(&main, repaired(&workspace, &uri, diagnostic)).unwrap();
@@ -883,12 +905,16 @@ fn real_refcount_key_macro_repairs_restore_successful_compilation() {
                     )
                 });
             let mut workspace = Workspace {
-                versioned_edits: true,
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.open(uri.clone(), source, 7);
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri.clone(), before.diagnostics.clone());
             std::fs::write(&main, repaired(&workspace, &uri, diagnostic)).unwrap();

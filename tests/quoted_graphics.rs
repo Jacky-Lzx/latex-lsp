@@ -537,11 +537,15 @@ fn real_quoted_images_compile_after_moves_and_missing_filename_repairs() {
             let start = text.source.find(missing).unwrap();
             assert_eq!(diagnostic.range, text.range(start, start + missing.len()));
             let mut workspace = Workspace {
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
             workspace
+                .project
                 .build_diagnostics
                 .insert(main.clone(), outcome.diagnostics);
             let actions = latex_lsp::editing::code_actions(
@@ -721,12 +725,16 @@ fn real_quoted_search_directories_keep_images_and_repairs_after_directory_and_ro
                 text.range(start, start + r#""plto image""#.len())
             );
             let mut workspace = Workspace {
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.config.build = config.clone();
             workspace.add_root(root.into());
             workspace
+                .project
                 .build_diagnostics
                 .insert(main.clone(), outcome.diagnostics);
             let actions = latex_lsp::editing::code_actions(

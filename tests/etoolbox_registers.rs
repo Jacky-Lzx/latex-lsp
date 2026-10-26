@@ -118,7 +118,7 @@ fn register_interfaces_offer_signatures_snippets_and_name_completion() {
     ] {
         let prefix = format!("\\{}", &command[..command.len() - 1]);
         let (directory, mut workspace, content) = project(&prefix);
-        workspace.snippets = true;
+        workspace.client.snippets = true;
         let items = features::completion(
             &workspace,
             &content,
@@ -225,7 +225,7 @@ fn direct_type_checks_inspect_the_operand_without_executing_declarations_or_verb
             let marked = format!("\\{command}{marked_operand}");
             let source = marked.replace('¦', "");
             let (directory, mut workspace, content) = project(&source);
-            workspace.snippets = true;
+            workspace.client.snippets = true;
             let items = features::completion(
                 &workspace,
                 &content,
@@ -301,7 +301,7 @@ fn direct_register_interface_completion_keeps_existing_grouped_and_bare_operands
             let offset = marked.find('¦').unwrap();
             let source = marked.replace('¦', "");
             let (_directory, mut workspace, content) = project(&source);
-            workspace.snippets = true;
+            workspace.client.snippets = true;
             let items = features::completion(
                 &workspace,
                 &content,

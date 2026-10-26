@@ -9,8 +9,11 @@ use lsp_types::*;
 fn setup(source: &str, versioned: bool) -> (Workspace, Url) {
     let uri = Url::parse("file:///editing/main.tex").unwrap();
     let mut workspace = Workspace {
-        versioned_edits: versioned,
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: versioned,
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace
@@ -50,7 +53,7 @@ fn include_warning(workspace: &mut Workspace, root: &Url, uri: &Url, name: &str)
         message: format!("Included file `{name}` not found"),
         ..Default::default()
     };
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         root.clone(),
         [(uri.clone(), vec![diagnostic.clone()])].into(),
     );
@@ -71,7 +74,10 @@ fn include_fix_requests_never_exceed_the_total_suggestion_limit() {
         .unwrap();
     }
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace
@@ -93,6 +99,7 @@ fn include_fix_requests_never_exceed_the_total_suggestion_limit() {
         .collect();
     let range = text.range(0, source.len());
     workspace
+        .project
         .build_diagnostics
         .insert(uri.clone(), [(uri.clone(), diagnostics.clone())].into());
     let actions = editing::code_actions(&workspace, &uri, range, &context(diagnostics));
@@ -112,8 +119,11 @@ fn missing_include_fixes_preserve_comments_utf16_prefixes_and_explicit_extension
                 format!("😀 \\include % keep\r\n{{ sections/chapetr{extension} }} % keep\r\n");
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                versioned_edits: versioned,
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: versioned,
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace
@@ -150,7 +160,10 @@ fn include_fix_commands_recheck_candidate_existence_original_existence_and_versi
     std::fs::write(root.join("main.tex"), source).unwrap();
     std::fs::write(root.join("chapter.tex"), "Chapter.\n").unwrap();
     let mut workspace = Workspace {
-        apply_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            apply_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace
@@ -212,12 +225,15 @@ fn include_candidates_use_the_diagnostic_build_root_instead_of_another_project_o
     }
     let uri = Url::from_file_path(root.join("shared/source.tex")).unwrap();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     for (folder, expected) in [("a", "chapter"), ("b", "chapert")] {
-        workspace.build_diagnostics.clear();
+        workspace.project.build_diagnostics.clear();
         let main = Url::from_file_path(root.join(folder).join("main.tex")).unwrap();
         let diagnostic = include_warning(&mut workspace, &main, &uri, "chapetr.tex");
         let actions = editing::code_actions(
@@ -248,7 +264,10 @@ fn include_fixes_suppress_self_inclusion_known_cycles_nonfiles_and_mismatched_wa
         std::fs::write(root.join("bridge.tex"), "\\input{main}").unwrap();
         let uri = Url::from_file_path(root.join(main_name)).unwrap();
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
@@ -272,7 +291,10 @@ fn include_fixes_suppress_self_inclusion_known_cycles_nonfiles_and_mismatched_wa
         std::fs::write(root.join("chapter.TEX"), "Wrong extension.").unwrap();
     }
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -289,6 +311,7 @@ fn include_fixes_suppress_self_inclusion_known_cycles_nonfiles_and_mismatched_wa
     let mut stale = diagnostic.clone();
     stale.message = "Included file `different.tex` not found".into();
     workspace
+        .project
         .build_diagnostics
         .get_mut(&uri)
         .unwrap()
@@ -337,7 +360,10 @@ fn include_fixes_bound_suggestions_support_unicode_and_respect_static_includeonl
         std::fs::write(root.join("main.tex"), source).unwrap();
         std::fs::write(root.join(format!("{candidate}.tex")), "Chapter.").unwrap();
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
@@ -358,7 +384,10 @@ fn include_fixes_bound_suggestions_support_unicode_and_respect_static_includeonl
         std::fs::write(root.join(format!("chapter{index}.tex")), "Chapter.").unwrap();
     }
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -414,7 +443,7 @@ fn destination_diagnostic(workspace: &mut Workspace, uri: &Url) -> Diagnostic {
         ),
         ..Default::default()
     };
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         uri.clone(),
         [(uri.clone(), vec![diagnostic.clone()])].into(),
     );
@@ -454,10 +483,12 @@ fn destination_candidates_use_the_diagnostic_builds_read_sources_before_counting
         ),
     );
     workspace
+        .project
         .recorded_inputs
         .insert(uri.clone(), [uri.clone(), excluded.clone()].into());
     let diagnostic = destination_diagnostic(&mut workspace, &uri);
     workspace
+        .project
         .build_diagnostic_sources
         .insert(uri.clone(), [uri.clone()].into());
     let actions = editing::code_actions(
@@ -469,6 +500,7 @@ fn destination_candidates_use_the_diagnostic_builds_read_sources_before_counting
     assert_eq!(actions.len(), 1, "{actions:?}");
     assert_eq!(action_edit(&actions[0], &uri).new_text, "last");
     workspace
+        .project
         .build_diagnostic_sources
         .insert(uri.clone(), [uri.clone(), excluded].into());
     let actions = editing::code_actions(
@@ -514,6 +546,7 @@ fn destination_spelling_fixes_preserve_compound_comments_and_independent_labels(
                     .insert(target.clone(), Document::new(target, text.into(), None));
             }
             workspace
+                .project
                 .recorded_inputs
                 .insert(uri.clone(), [uri.clone(), declarations].into());
             let diagnostic = destination_diagnostic(&mut workspace, &uri);
@@ -587,7 +620,7 @@ fn destination_fixes_reject_ambiguous_known_stale_and_forged_evidence() {
             }
             _ => {}
         }
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             uri.clone(),
             [(uri.clone(), vec![diagnostic.clone()])].into(),
         );
@@ -608,8 +641,8 @@ fn destination_fixes_reject_ambiguous_known_stale_and_forged_evidence() {
 fn legacy_destination_commands_distinguish_compound_replacements_and_revalidate_candidates() {
     let source = "\\hypertarget{sectionx.foo}{X}\\hypertarget{sectiony.foo}{Y}\n\\hyperref{}{sectionz}% keep\r\n{foo}{Text}";
     let (mut workspace, uri) = setup(source, false);
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
     let diagnostic = destination_diagnostic(&mut workspace, &uri);
     let actions = editing::code_actions(
         &workspace,
@@ -680,7 +713,7 @@ fn hyperref_label_fixes_preserve_link_text_and_reject_forged_text_ranges() {
             ..Default::default()
         };
         // hyperref uses a distinct warning prefix, which must still identify a label.
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             uri.clone(),
             [(uri.clone(), vec![diagnostic.clone()])].into(),
         );
@@ -695,7 +728,7 @@ fn hyperref_label_fixes_preserve_link_text_and_reject_forged_text_ranges() {
         assert_eq!(edit.range, diagnostic.range);
         assert_eq!(edit.new_text, "sec:intro");
         diagnostic.range = body_range;
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             uri.clone(),
             [(uri.clone(), vec![diagnostic.clone()])].into(),
         );
@@ -717,7 +750,7 @@ fn hyperref_label_fixes_preserve_link_text_and_reject_forged_text_ranges() {
             .into(),
         ..Default::default()
     };
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         uri.clone(),
         [(uri.clone(), vec![diagnostic.clone()])].into(),
     );
@@ -769,7 +802,7 @@ fn capitalized_and_named_page_reference_fixes_match_the_warning_kinds_each_star_
                 ),
                 ..Default::default()
             };
-            workspace.build_diagnostics.insert(
+            workspace.project.build_diagnostics.insert(
                 uri.clone(),
                 [(uri.clone(), vec![diagnostic.clone()])].into(),
             );
@@ -814,7 +847,7 @@ fn refcount_assignment_label_fixes_select_the_second_argument_and_reject_counter
                         .into(),
                 ..Default::default()
             };
-            workspace.build_diagnostics.insert(
+            workspace.project.build_diagnostics.insert(
                 uri.clone(),
                 [(uri.clone(), vec![diagnostic.clone()])].into(),
             );
@@ -842,7 +875,7 @@ fn refcount_assignment_label_fixes_select_the_second_argument_and_reject_counter
                 format!("\\label{{sec:intro}}\n\\{command}{{sec:itnro}}{{sec:intro}}\n")
             );
             diagnostic.range = first_range;
-            workspace.build_diagnostics.insert(
+            workspace.project.build_diagnostics.insert(
                 uri.clone(),
                 [(uri.clone(), vec![diagnostic.clone()])].into(),
             );
@@ -1011,7 +1044,7 @@ fn compiler_reference_fixes_use_current_project_keys_and_revalidate_command_requ
             .documents
             .insert(uri.clone(), Document::new(uri, source.into(), None));
     }
-    workspace.recorded_inputs.insert(
+    workspace.project.recorded_inputs.insert(
         uri.clone(),
         [uri.clone(), labels.clone(), bibliography].into(),
     );
@@ -1030,7 +1063,7 @@ fn compiler_reference_fixes_use_current_project_keys_and_revalidate_command_requ
         message: "LaTeX Warning: Citation `smith2025' on page 1 undefined on input line 1.".into(),
         ..Default::default()
     };
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         uri.clone(),
         std::collections::BTreeMap::from([(uri.clone(), vec![label.clone(), citation.clone()])]),
     );
@@ -1056,8 +1089,8 @@ fn compiler_reference_fixes_use_current_project_keys_and_revalidate_command_requ
     assert!(
         editing::code_actions(&workspace, &uri, label.range, &context(vec![forged])).is_empty()
     );
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
     let actions =
         editing::code_actions(&workspace, &uri, label.range, &context(vec![label.clone()]));
     let CodeActionOrCommand::Command(command) = &actions[0] else {
@@ -1111,6 +1144,7 @@ fn compiler_reference_suggestions_reject_ambiguous_dynamic_known_and_inexact_key
             Document::new(&definitions_uri, definitions.into(), None),
         );
         workspace
+            .project
             .recorded_inputs
             .insert(uri.clone(), [uri.clone(), definitions_uri].into());
         let range = if precise {
@@ -1126,7 +1160,7 @@ fn compiler_reference_suggestions_reject_ambiguous_dynamic_known_and_inexact_key
             ),
             ..Default::default()
         };
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             uri.clone(),
             std::collections::BTreeMap::from([(uri.clone(), vec![diagnostic.clone()])]),
         );
@@ -1151,7 +1185,7 @@ fn undefined_command_diagnostic(workspace: &mut Workspace, uri: &Url, name: &str
         data: Some(serde_json::json!({"command":name})),
         ..Default::default()
     };
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         uri.clone(),
         std::collections::BTreeMap::from([(uri.clone(), vec![diagnostic.clone()])]),
     );
@@ -1180,6 +1214,7 @@ fn undefined_command_fixes_use_builtin_and_project_commands_preserving_arguments
             Document::new(&unrelated, format!("\\newcommand{{\\{name}}}{{}}"), None),
         );
         workspace
+            .project
             .recorded_inputs
             .insert(uri.clone(), [uri.clone(), declarations].into());
         let diagnostic = undefined_command_diagnostic(&mut workspace, &uri, name);
@@ -1248,6 +1283,7 @@ fn command_spelling_fixes_reject_known_ambiguous_ignored_and_unproven_names() {
             Document::new(&declarations, definitions.into(), None),
         );
         workspace
+            .project
             .recorded_inputs
             .insert(uri.clone(), [uri.clone(), declarations].into());
         let mut diagnostic = undefined_command_diagnostic(&mut workspace, &uri, name);
@@ -1261,6 +1297,7 @@ fn command_spelling_fixes_reject_known_ambiguous_ignored_and_unproven_names() {
             _ => {}
         }
         workspace
+            .project
             .build_diagnostics
             .get_mut(&uri)
             .unwrap()
@@ -1279,8 +1316,8 @@ fn command_spelling_fixes_reject_known_ambiguous_ignored_and_unproven_names() {
 #[test]
 fn command_spelling_requests_revalidate_version_diagnostic_and_replacement() {
     let (mut workspace, uri) = setup(r"\sectoin{Existing}", true);
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
     let diagnostic = undefined_command_diagnostic(&mut workspace, &uri, "sectoin");
     let actions = editing::code_actions(
         &workspace,

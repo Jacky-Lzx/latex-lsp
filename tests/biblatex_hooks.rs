@@ -28,7 +28,7 @@ const SIMPLE: &[&str] = &[
 fn setup(source: &str) -> (Workspace, Url) {
     let mut ws = Workspace::default();
     ws.config.distribution.enabled = false;
-    ws.snippets = true;
+    ws.client.snippets = true;
     let uri = Url::parse("untitled:bib-hooks.tex").unwrap();
     ws.open(uri.clone(), source.into(), 5);
     (ws, uri)

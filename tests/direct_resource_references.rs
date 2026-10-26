@@ -39,7 +39,10 @@ fn project(root: &Path, source: &str, name: &str) -> Workspace {
     )
     .unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -252,6 +255,7 @@ fn recorded_source_providers_can_change_resource_file_reference_meaning() {
             .documents
             .insert(provider.clone(), Document::new(&provider, text, Some(3)));
         workspace
+            .project
             .recorded_inputs
             .insert(main.clone(), BTreeSet::from([provider]));
         assert!(navigation::document_links(&workspace, &main).is_empty());

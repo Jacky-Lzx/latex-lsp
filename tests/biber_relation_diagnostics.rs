@@ -257,7 +257,10 @@ fn relation_locations_move_after_saving_and_do_not_guess_target_repairs() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -279,6 +282,7 @@ fn relation_locations_move_after_saving_and_do_not_guess_target_repairs() {
             assert_eq!(item.range, span(&source, "pére😀"));
             workspace.open_with_language(uri(root, "refs.data"), source, 7, "bibtex");
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri(root, "main.tex"), diagnostics);
             assert!(editing::code_actions(

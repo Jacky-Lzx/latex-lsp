@@ -67,7 +67,10 @@ fn literal_bodies_do_not_import_symbols_files_or_rename_edits() {
                 let source = format!("{before}{literal}\r\n{after}");
                 std::fs::write(root.join("main.tex"), &source).unwrap();
                 let mut workspace = Workspace {
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(root.into());
@@ -210,7 +213,10 @@ fn global_saved_names_are_data_while_moving_use_options_remain_source() {
             let body = r"\label{active}\label{phantom}\newcommand{\hidden}{Oops}\input{example}";
             let source = format!("\\SaveGVerb *[showspaces=true]% name\r\n{name}{{|}}{body}|\\{used} *[formatcom={{\\label{{active}}\\newcommand{{\\visible}}{{Text}}}}]{name}\\ref{{active}}");
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.open(main.clone(), source.clone(), 7);
@@ -332,7 +338,10 @@ fn real_global_saved_bodies_and_moving_use_options_survive_versioned_rename() {
                 let body = r"\label{kept}\label{phantom}\newcommand{\hidden}{Oops}\input{example}";
                 let source = format!("\\documentclass{{article}}\r\n\\usepackage{{fancyvrb}}\r\n\\begin{{document}}\r\n\\label{{kept}}\\SaveGVerb{header}{name}{delimiter}{body}|\\{used} *[formatcom={{\\label{{active}}}}]{name}\r\nReal.\\ref{{kept}}\\end{{document}}\r\n");
                 let mut workspace = Workspace {
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(root.into());
@@ -478,7 +487,10 @@ fn real_inline_bodies_preserve_literal_text_and_executable_options_after_rename(
                 };
                 let source = format!("\\documentclass{{article}}\r\n\\usepackage{{fancyvrb}}\r\n\\begin{{document}}\r\n\\label{{kept}}\\{command}{header}{name}{delimiter}{body}|{used}\r\nReal.\\ref{{kept}}\\end{{document}}\r\n");
                 let mut workspace = Workspace {
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(root.into());
@@ -561,7 +573,10 @@ fn collected_verb_bodies_keep_executable_commands_and_file_edits() {
                 "\\newcommand{{\\say}}{{Text}}{before}\\Verb{body}{after}\\ref{{kept}}\\say"
             );
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
@@ -693,7 +708,10 @@ fn real_collected_verb_executes_body_commands_before_and_after_rename() {
             let main = Url::from_file_path(root.join("main.tex")).unwrap();
             let source = format!("\\documentclass{{article}}\n\\usepackage{{fancyvrb}}\n\\let\\strong\\textbf\n\\begin{{document}}\n{wrapper}{{\\Verb{body}}}\\ref{{kept}}\n\\end{{document}}\n");
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
@@ -888,7 +906,10 @@ fn static_verb_aliases_preserve_reader_modes_and_editable_command_identity() {
             let after = r"}\ref{live}\code|tail|";
             let source = format!("{before}{literal}{middle}{body}{after}");
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
@@ -1014,7 +1035,10 @@ fn real_static_verb_aliases_keep_literal_names_and_native_body_execution_after_r
                 let literal = r"|\label{phantom}\input{fake}\code|";
                 let source = format!("\\documentclass{{article}}\n\\usepackage{{{package}}}\n{settings}{declaration}\n\\begin{{document}}\n\\code{literal}\n\\textbf{{\\code|a{{b|\\typeout{{LIVEBODY}}\\label{{live}}\\input{{chapter}}}}d|}}\\label{{real}}\\code|tail|\n\\end{{document}}\n");
                 let mut workspace = Workspace {
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(root.into());
@@ -1156,7 +1180,10 @@ fn real_fvextra_special_delimiters_keep_following_labels_editable_after_rename()
                 let main = Url::from_file_path(root.join("main.tex")).unwrap();
                 let source = format!("\\documentclass{{article}}\n\\usepackage{{fvextra}}\n{settings}\\let\\code\\Verb\n\\begin{{document}}\n\\code{options}{body}\\label{{real}}\n\\end{{document}}\n");
                 let mut workspace = Workspace {
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.open(main.clone(), source.clone(), 7);

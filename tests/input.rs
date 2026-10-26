@@ -46,11 +46,15 @@ fn real_missing_include_spelling_fixes_read_the_intended_chapter_after_recompili
             .unwrap()
             .clone();
         let mut workspace = Workspace {
-            code_action_literals: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                code_action_literals: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace.add_root(root.into());
         workspace
+            .project
             .build_diagnostics
             .insert(main_uri.clone(), outcome.diagnostics);
         let actions = editing::code_actions(

@@ -95,7 +95,7 @@ fn compiler_field_locations_suppress_only_precisely_resolved_static_duplicates()
         message: "BibTeX: extra field".into(),
         ..Default::default()
     };
-    ws.build_diagnostics.insert(
+    ws.project.build_diagnostics.insert(
         root.clone(),
         std::collections::BTreeMap::from([(uri.clone(), vec![compiler.clone()])]),
     );
@@ -104,7 +104,8 @@ fn compiler_field_locations_suppress_only_precisely_resolved_static_duplicates()
     assert_eq!(items[0].range, span(source, "TiTlE"));
     let mut unresolved = compiler;
     unresolved.data = Some(serde_json::json!({"field":"title","unresolvedField":true}));
-    ws.build_diagnostics
+    ws.project
+        .build_diagnostics
         .get_mut(&root)
         .unwrap()
         .insert(uri.clone(), vec![unresolved]);
@@ -162,7 +163,7 @@ fn directory_configuration_disables_static_fields_without_affecting_compiler_war
         message: "Native warning".into(),
         ..Default::default()
     };
-    ws.build_diagnostics.insert(
+    ws.project.build_diagnostics.insert(
         uri.clone(),
         std::collections::BTreeMap::from([(uri.clone(), vec![compiler.clone()])]),
     );

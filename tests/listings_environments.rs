@@ -216,7 +216,10 @@ fn header_markers_and_discarded_header_text_preserve_real_source_renames() {
             let source = format!("{before}{block}{tail}");
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());
@@ -452,7 +455,10 @@ fn real_headers_and_body_markers_preserve_native_labels_after_versioned_renames(
             let source=format!("\\documentclass{{article}}\n\\usepackage{{listings}}\n\\begin{{document}}\n\\label{{kept}}\n\\begin{{lstlisting}}{header}\n{body}\n{prefix}\\end{{lstlisting}}\\ref{{kept}}\n\\end{{document}}\n");
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.add_root(root.into());

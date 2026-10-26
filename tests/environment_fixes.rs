@@ -9,8 +9,11 @@ fn setup(source: &str, definitions: &str) -> (Workspace, Url, Url) {
     let uri = Url::parse("file:///environment-fixes/main.tex").unwrap();
     let declarations = Url::parse("file:///environment-fixes/definitions.tex").unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace
@@ -21,6 +24,7 @@ fn setup(source: &str, definitions: &str) -> (Workspace, Url, Url) {
         Document::new(&declarations, definitions.into(), None),
     );
     workspace
+        .project
         .recorded_inputs
         .insert(uri.clone(), [uri.clone(), declarations.clone()].into());
     (workspace, uri, declarations)
@@ -42,7 +46,7 @@ fn diagnostic(workspace: &mut Workspace, uri: &Url, name: &str) -> Diagnostic {
 }
 
 fn store(workspace: &mut Workspace, uri: &Url, diagnostic: Diagnostic) {
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         uri.clone(),
         BTreeMap::from([(uri.clone(), vec![diagnostic])]),
     );
@@ -150,7 +154,7 @@ fn closing_fixes_use_the_confirmed_environment_stack_and_change_only_the_end_nam
     let source = "😀 \\begin{equation}\r\n\\begin{aligned}x&=y\\end{aligned}\r\n\\begin{verbatim}\r\n\\end{algin}\r\n\\end{verbatim}\r\n\\end  {algin}\r\n";
     for versioned in [false, true] {
         let (mut workspace, uri, _) = setup(source, "");
-        workspace.versioned_edits = versioned;
+        workspace.client.versioned_edits = versioned;
         let diagnostic = closing_diagnostic(&mut workspace, &uri, "algin", "equation");
         let response = actions(&workspace, &uri, &diagnostic);
         assert_eq!(response.len(), 1, "{response:?}");
@@ -217,8 +221,8 @@ fn closing_fixes_reject_cascading_undefined_environment_errors_dynamic_stacks_an
 fn legacy_closing_fixes_recheck_the_stack_and_document_version() {
     let source = r"\begin{equation}Content\end{algin}";
     let (mut workspace, uri, _) = setup(source, "");
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
     let diagnostic = closing_diagnostic(&mut workspace, &uri, "algin", "equation");
     let response = actions(&workspace, &uri, &diagnostic);
     let CodeActionOrCommand::Command(command) = &response[0] else {
@@ -274,13 +278,17 @@ fn closing_name_fixes_repair_a_real_compiler_error() {
         .unwrap()
         .clone();
     let mut workspace = Workspace {
-        versioned_edits: true,
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace.open(uri.clone(), source.into(), 9);
     workspace
+        .project
         .build_diagnostics
         .insert(uri.clone(), before.diagnostics);
     let response = actions(&workspace, &uri, &diagnostic);
@@ -302,7 +310,7 @@ fn environment_fixes_update_only_the_selected_pair_and_preserve_nested_and_opaqu
     let source = "😀 \\begin  {algin}\r\n\\begin{aligned}x&=y\\end{aligned}\r\n\\begin{algin}Nested\\end{algin}\r\n\\begin{verbatim}\r\n\\end{algin}\r\n\\begin{fake}\r\n\\end{verbatim}\r\n\\verb|\\end{algin}|\r\n% \\end{algin}\r\n\\end  {algin}\r\n\\begin{algin}Other\\end{algin}\r\n";
     for versioned in [false, true] {
         let (mut workspace, uri, _) = setup(source, "");
-        workspace.versioned_edits = versioned;
+        workspace.client.versioned_edits = versioned;
         let diagnostic = diagnostic(&mut workspace, &uri, "algin");
         let response = actions(&workspace, &uri, &diagnostic);
         assert!(response.len() <= 5);
@@ -454,8 +462,8 @@ fn unsafe_unproven_known_and_ambiguous_environment_fixes_are_not_offered() {
 fn legacy_environment_fixes_revalidate_version_replacement_candidate_and_pair() {
     let source = r"\begin{panle}Content\end{panle}";
     let (mut workspace, uri, declarations) = setup(source, r"\newenvironment{panel}{}{}");
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
     let diagnostic = diagnostic(&mut workspace, &uri, "panle");
     let response = actions(&workspace, &uri, &diagnostic);
     let CodeActionOrCommand::Command(command) = &response[0] else {
@@ -520,13 +528,17 @@ fn paired_environment_spelling_fixes_turn_a_real_failed_build_into_a_successful_
         .unwrap()
         .clone();
     let mut workspace = Workspace {
-        versioned_edits: true,
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace.open(uri.clone(), source.into(), 9);
     workspace
+        .project
         .build_diagnostics
         .insert(Url::from_file_path(&main).unwrap(), before.diagnostics);
     let response = actions(&workspace, &uri, &diagnostic);
@@ -553,10 +565,12 @@ fn environment_repairs_recheck_error_time_project_macro_sources() {
             diagnostic(&mut workspace, &uri, "panle")
         };
         workspace
+            .project
             .build_diagnostic_sources
             .insert(uri.clone(), [uri.clone()].into());
         assert!(actions(&workspace, &uri, &error).is_empty());
         workspace
+            .project
             .build_diagnostic_sources
             .insert(uri.clone(), [uri.clone(), definitions.clone()].into());
         assert!(!actions(&workspace, &uri, &error).is_empty(), "{closing}");
@@ -566,11 +580,13 @@ fn environment_repairs_recheck_error_time_project_macro_sources() {
             Document::new(&later, r"\renewcommand{\done}[2]{}".into(), None),
         );
         workspace
+            .project
             .recorded_inputs
             .get_mut(&uri)
             .unwrap()
             .insert(later.clone());
         workspace
+            .project
             .build_diagnostic_sources
             .get_mut(&uri)
             .unwrap()
@@ -644,11 +660,12 @@ fn environment_repairs_recheck_paused_ancestors_and_reject_callback_metadata() {
             .documents
             .insert(child.clone(), Document::new(&child, source.into(), Some(3)));
         workspace
+            .project
             .recorded_inputs
             .get_mut(&root)
             .unwrap()
             .insert(child.clone());
-        workspace.build_diagnostic_sources.insert(
+        workspace.project.build_diagnostic_sources.insert(
             root.clone(),
             [root.clone(), child.clone(), definitions.clone()].into(),
         );
@@ -657,10 +674,10 @@ fn environment_repairs_recheck_paused_ancestors_and_reject_callback_metadata() {
         } else {
             diagnostic(&mut workspace, &child, "panle")
         };
-        workspace.build_diagnostics.remove(&child);
+        workspace.project.build_diagnostics.remove(&child);
         error.data.as_mut().unwrap()["macroSources"] = serde_json::json!([child, definitions]);
         error.data.as_mut().unwrap()["macroPausedSources"] = serde_json::json!([root]);
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             root.clone(),
             BTreeMap::from([(child.clone(), vec![error.clone()])]),
         );
@@ -673,6 +690,7 @@ fn environment_repairs_recheck_paused_ancestors_and_reject_callback_metadata() {
             let mut malformed = error.clone();
             malformed.data.as_mut().unwrap()["macroPausedSources"] = value;
             workspace
+                .project
                 .build_diagnostics
                 .get_mut(&root)
                 .unwrap()
@@ -680,6 +698,7 @@ fn environment_repairs_recheck_paused_ancestors_and_reject_callback_metadata() {
             assert!(actions(&workspace, &child, &malformed).is_empty());
         }
         workspace
+            .project
             .build_diagnostics
             .get_mut(&root)
             .unwrap()

@@ -18,6 +18,7 @@ pub(crate) fn diagnostics(workspace: &Workspace, uri: &Url) -> Vec<Diagnostic> {
         return vec![];
     }
     let reported: BTreeSet<_> = workspace
+        .project
         .build_diagnostics
         .values()
         .filter_map(|project| project.get(uri))

@@ -236,13 +236,17 @@ fn real_shortened_path_contexts_reject_wrong_repairs_and_preserve_unique_repairs
                 let mut expected = source.clone();
                 expected.replace_range(start..start + name.len(), &correct);
                 let mut workspace = Workspace {
-                    versioned_edits: true,
-                    code_action_literals: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        code_action_literals: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(directory.path().into());
                 workspace.open(uri.clone(), source.clone(), 7);
                 workspace
+                    .project
                     .build_diagnostics
                     .insert(uri.clone(), before.diagnostics.clone());
                 let repair = repaired(&workspace, &uri, diagnostic, &correct);

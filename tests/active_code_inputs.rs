@@ -23,7 +23,10 @@ fn workspace(root: &Path, source: &str) -> Workspace {
     )
     .unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -37,7 +40,7 @@ fn workspace(root: &Path, source: &str) -> Workspace {
         .get_mut(&uri(root, "notes.tex"))
         .unwrap()
         .version = Some(3);
-    workspace.recorded_inputs.insert(
+    workspace.project.recorded_inputs.insert(
         uri(root, "main.tex"),
         BTreeSet::from([uri(root, "notes.tex")]),
     );
@@ -174,6 +177,7 @@ fn recorder_macro_providers_decide_whether_a_following_code_command_is_displayed
                 latex_lsp::project::workspace::Document::new(&provider, text, Some(5)),
             );
             workspace
+                .project
                 .recorded_inputs
                 .get_mut(&main)
                 .unwrap()

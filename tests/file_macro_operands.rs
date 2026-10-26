@@ -485,8 +485,11 @@ fn fixture(command: &str) -> (tempfile::TempDir, Workspace, Url, Url, Diagnostic
     )
     .unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace
@@ -501,6 +504,7 @@ fn fixture(command: &str) -> (tempfile::TempDir, Workspace, Url, Url, Diagnostic
         ),
     );
     workspace
+        .project
         .recorded_inputs
         .insert(uri.clone(), [uri.clone(), definitions.clone()].into());
     let start = source.find("palete").unwrap();
@@ -529,7 +533,7 @@ fn fixture(command: &str) -> (tempfile::TempDir, Workspace, Url, Url, Diagnostic
 }
 
 fn store(workspace: &mut Workspace, root: &Url, uri: &Url, error: &Diagnostic) {
-    workspace.build_diagnostics.insert(
+    workspace.project.build_diagnostics.insert(
         root.clone(),
         BTreeMap::from([(uri.clone(), vec![error.clone()])]),
     );
@@ -553,10 +557,12 @@ fn file_repairs_recheck_loaded_macro_sources_and_ignore_later_redefinitions() {
     for command in ["input", "usepackage", "documentclass"] {
         let (_temp, mut workspace, uri, definitions, mut error) = fixture(command);
         workspace
+            .project
             .build_diagnostic_sources
             .insert(uri.clone(), [uri.clone()].into());
         assert!(actions(&workspace, &uri, &error).is_empty());
         workspace
+            .project
             .build_diagnostic_sources
             .insert(uri.clone(), [uri.clone(), definitions.clone()].into());
         let fixes = actions(&workspace, &uri, &error);
@@ -576,11 +582,13 @@ fn file_repairs_recheck_loaded_macro_sources_and_ignore_later_redefinitions() {
             Document::new(&later, r"\renewcommand{\done}[2]{}".into(), None),
         );
         workspace
+            .project
             .recorded_inputs
             .get_mut(&uri)
             .unwrap()
             .insert(later.clone());
         workspace
+            .project
             .build_diagnostic_sources
             .get_mut(&uri)
             .unwrap()
@@ -614,11 +622,12 @@ fn file_repairs_validate_paused_parent_metadata_and_current_signatures() {
             Document::new(&root, r"\input{content}".into(), Some(7)),
         );
         workspace
+            .project
             .recorded_inputs
             .get_mut(&root)
             .unwrap()
             .insert(child.clone());
-        workspace.build_diagnostic_sources.insert(
+        workspace.project.build_diagnostic_sources.insert(
             root.clone(),
             [root.clone(), child.clone(), definitions.clone()].into(),
         );

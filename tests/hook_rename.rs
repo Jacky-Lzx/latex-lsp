@@ -87,7 +87,7 @@ fn literal_hook_renames_preserve_other_namespaces_and_registration_whitespace() 
             "{source}"
         );
         for versioned in [false, true] {
-            workspace.versioned_edits = versioned;
+            workspace.client.versioned_edits = versioned;
             let edit = features::rename(&workspace, &uri, at, "fresh")
                 .unwrap()
                 .expect("complete hook rename");
@@ -503,7 +503,7 @@ fn shared_hook_identity_expands_all_consumers_and_refreshes_unsaved_conflicts() 
     workspace.documents.remove(&new_root);
     workspace.reload(&new_root);
     check(&workspace);
-    workspace.versioned_edits = true;
+    workspace.client.versioned_edits = true;
     let edit = features::rename(&workspace, &a, at, "fresh")
         .unwrap()
         .unwrap();

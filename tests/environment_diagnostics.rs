@@ -13,8 +13,11 @@ fn project(root: &Path, files: &[(&str, &str)]) -> Workspace {
         std::fs::write(root.join(name), text).unwrap();
     }
     let mut workspace = Workspace {
-        versioned_edits: true,
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -304,6 +307,7 @@ fn uncertain_names_do_not_hide_independent_pairing_errors_or_verbatim_errors() {
         ..Default::default()
     };
     workspace
+        .project
         .build_diagnostics
         .insert(main.clone(), BTreeMap::from([(main.clone(), vec![build])]));
     let diagnostics = workspace.diagnostics(&main);

@@ -7,8 +7,6 @@ use std::{
     time::Duration,
 };
 
-use crate::project::workspace::Workspace;
-
 pub(crate) type Snapshot = (Url, Vec<Diagnostic>, Option<i32>);
 pub(crate) const IDENTIFIER: &str = "latex-lsp";
 
@@ -21,7 +19,6 @@ struct Refresh {
 
 #[derive(Default)]
 struct Push {
-    revision: u64,
     running: bool,
     closed: bool,
     pending: BTreeSet<Url>,
@@ -59,21 +56,12 @@ impl Delivery {
         }
     }
 
-    /// Called under the workspace write lock, before changing its inputs.
-    pub(crate) fn invalidate(&self) {
-        self.push.lock().unwrap().revision += 1;
-    }
-
-    pub(crate) fn revision(&self) -> u64 {
-        self.push.lock().unwrap().revision
-    }
-
     /// A single worker coalesces edits and never holds a workspace lock while
     /// analysing a snapshot or waiting for the client to receive diagnostics.
     pub(crate) fn schedule(
         &self,
         client: &Client,
-        workspace: Arc<tokio::sync::RwLock<Workspace>>,
+        workspace: crate::project::store::WorkspaceStore,
         affected: BTreeSet<Url>,
     ) {
         let mut push = self.push.lock().unwrap();
@@ -92,7 +80,9 @@ impl Delivery {
             loop {
                 tokio::time::sleep(Duration::from_millis(75)).await;
                 let (snapshot, uris, revision) = {
-                    let workspace = workspace.read().await;
+                    let inputs = workspace.read().await;
+                    let revision = workspace.revision();
+                    let workspace = inputs;
                     let push = state.lock().unwrap();
                     if push.closed {
                         return;
@@ -105,13 +95,14 @@ impl Delivery {
                                 doc.version.is_some().then_some(uri.clone())
                             }))
                             .collect();
-                    (workspace.clone(), uris, push.revision)
+                    (workspace.clone(), uris, revision)
                 };
                 let cancellation = state.clone();
+                let revisions = workspace.clone();
                 let notifications = tokio::task::spawn_blocking(move || {
                     snapshot.diagnostic_snapshots_cancelled(uris, || {
                         let push = cancellation.lock().unwrap();
-                        push.closed || push.revision != revision
+                        push.closed || revisions.revision() != revision
                     })
                 })
                 .await;
@@ -120,7 +111,7 @@ impl Delivery {
                     if push.closed {
                         return;
                     }
-                    if push.revision != revision {
+                    if workspace.revision() != revision {
                         continue;
                     }
                     push.pending.clear();
@@ -129,7 +120,7 @@ impl Delivery {
                     for (uri, diagnostics, version) in notifications {
                         {
                             let push = state.lock().unwrap();
-                            if push.closed || push.revision != revision {
+                            if push.closed || workspace.revision() != revision {
                                 break;
                             }
                         }
@@ -137,7 +128,7 @@ impl Delivery {
                     }
                 }
                 let mut push = state.lock().unwrap();
-                if push.closed || push.revision == revision && push.pending.is_empty() {
+                if push.closed || workspace.revision() == revision && push.pending.is_empty() {
                     push.running = false;
                     return;
                 }

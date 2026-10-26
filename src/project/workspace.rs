@@ -256,43 +256,14 @@ fn magic_directive(doc: &Document, fields: &[&str]) -> Option<crate::parser::syn
 
 #[derive(Clone, Default)]
 pub struct Workspace {
+    pub client: super::state::ClientCapabilities,
+    pub project: super::state::ProjectState,
     pub distribution: crate::project::distribution::Distribution,
     pub index_truncated: BTreeSet<String>,
-    pub inlay_refresh: bool,
-    pub lint_diagnostics: BTreeMap<Url, Vec<lsp_types::Diagnostic>>,
     pub documents: super::documents::Documents,
     pub roots: BTreeSet<PathBuf>,
-    pub snippets: bool,
-    pub completion_resolve_documentation: bool,
-    pub watch_files: bool,
-    pub hierarchical_symbols: bool,
-    pub versioned_edits: bool,
-    pub folding_capabilities: lsp_types::FoldingRangeClientCapabilities,
-    pub build_progress: bool,
-    pub code_action_literals: bool,
-    pub code_action_resolve_edits: bool,
-    pub apply_edits: bool,
     pub diagnostic_delivery: crate::diagnostics::diagnostic::Delivery,
     pub config: crate::config::Config,
-    pub build_diagnostics: BTreeMap<Url, BTreeMap<Url, Vec<lsp_types::Diagnostic>>>,
-    /// Sources confirmed read for each root's latest published build diagnostics.
-    pub build_diagnostic_sources: BTreeMap<Url, BTreeSet<Url>>,
-    pub recorded_inputs: BTreeMap<Url, BTreeSet<Url>>,
-    /// Image/data roles retained independently of canonical filename suffixes.
-    pub recorded_binary_inputs: BTreeMap<Url, BTreeSet<Url>>,
-    /// Opened recorder paths and the physical files selected by the last build.
-    pub recorded_bindings: BTreeMap<Url, BTreeMap<PathBuf, PathBuf>>,
-    pub bibliography_inputs: BTreeMap<Url, BTreeSet<Url>>,
-    /// Database parser roles confirmed by complete bibliography tool logs.
-    pub bibliography_databases: BTreeMap<Url, BTreeSet<Url>>,
-    /// Paths selected by the last complete BibTeX/Biber logs, before symlinks.
-    pub bibliography_bindings: BTreeMap<Url, BTreeMap<PathBuf, PathBuf>>,
-    /// Input contents from each root's last complete bibliography tool logs.
-    pub bibliography_checks:
-        BTreeMap<Url, std::sync::Arc<crate::compilation::file_checks::Snapshot>>,
-    /// File conditions and input snapshots for the latest published diagnostics.
-    pub build_checks: BTreeMap<Url, std::sync::Arc<crate::compilation::file_checks::Snapshot>>,
-    pub pdf_checks: BTreeMap<Url, std::sync::Arc<crate::compilation::file_checks::Snapshot>>,
 }
 
 pub(crate) struct SymbolProjects {
@@ -485,13 +456,14 @@ impl Workspace {
             .map(|doc| crate::language::features::diagnostics_at(doc, uri, &labels))
             .unwrap_or_default();
         diagnostics.extend(
-            self.lint_diagnostics
+            self.project
+                .lint_diagnostics
                 .get(uri)
                 .into_iter()
                 .flatten()
                 .cloned(),
         );
-        for project in self.build_diagnostics.values() {
+        for project in self.project.build_diagnostics.values() {
             if let Some(build) = project.get(uri) {
                 diagnostics.extend(build.iter().cloned());
             }
@@ -508,8 +480,8 @@ impl Workspace {
     }
 
     pub fn clear_build_diagnostics(&mut self, uri: &Url) {
-        self.lint_diagnostics.remove(uri);
-        for project in self.build_diagnostics.values_mut() {
+        self.project.lint_diagnostics.remove(uri);
+        for project in self.project.build_diagnostics.values_mut() {
             project.remove(uri);
         }
     }
@@ -541,14 +513,14 @@ impl Workspace {
             .map(|(uri, _)| uri)
             .collect::<Vec<_>>();
         if uri == root {
-            if let Some(recorded) = self.recorded_inputs.get(root) {
+            if let Some(recorded) = self.project.recorded_inputs.get(root) {
                 // Recorder suffixes cannot distinguish displayed TeX code
                 // from executed source. Explicit includes above retain their
                 // source role independently, including in another project.
                 let displayed = crate::project::code_inputs::displayed(self, root);
                 dependencies.extend(recorded.difference(&displayed).cloned());
             }
-            if let Some(recorded) = self.bibliography_inputs.get(root) {
+            if let Some(recorded) = self.project.bibliography_inputs.get(root) {
                 dependencies.extend(recorded.iter().cloned());
             }
         }
@@ -873,10 +845,13 @@ impl Workspace {
         &'a self,
         root: &'a Url,
     ) -> impl Iterator<Item = (&'a PathBuf, &'a PathBuf)> {
-        [&self.recorded_bindings, &self.bibliography_bindings]
-            .into_iter()
-            .filter_map(move |by_root| by_root.get(root))
-            .flat_map(|bindings| bindings.iter())
+        [
+            &self.project.recorded_bindings,
+            &self.project.bibliography_bindings,
+        ]
+        .into_iter()
+        .filter_map(move |by_root| by_root.get(root))
+        .flat_map(|bindings| bindings.iter())
     }
 
     /// Static bibliography references retain their role even when their
@@ -1089,6 +1064,7 @@ impl Workspace {
 
     fn recorded_kind(&self, uri: &Url) -> Option<DocumentKind> {
         if self
+            .project
             .bibliography_databases
             .values()
             .any(|databases| databases.contains(uri))
@@ -1098,6 +1074,7 @@ impl Workspace {
         let path = uri.to_file_path().ok()?;
         let mut style = false;
         for (name, target) in self
+            .project
             .bibliography_bindings
             .values()
             .flat_map(|bindings| bindings.iter())
@@ -1113,7 +1090,8 @@ impl Workspace {
         if style {
             return Some(DocumentKind::BibtexStyle);
         }
-        self.recorded_bindings
+        self.project
+            .recorded_bindings
             .values()
             .flat_map(|bindings| bindings.iter())
             .any(|(name, target)| {
@@ -1178,6 +1156,7 @@ impl Workspace {
                 || !parse_source
                     && (crate::compilation::recorder::is_data(&path)
                         || self
+                            .project
                             .recorded_binary_inputs
                             .values()
                             .any(|inputs| inputs.contains(uri)))
@@ -1220,7 +1199,7 @@ impl Workspace {
                 .is_some_and(|name| name == ".latex-lsp.json")
         }) {
             crate::config::project_config::invalidate();
-            self.lint_diagnostics.clear();
+            self.project.lint_diagnostics.clear();
             for uri in self.documents.keys().cloned().collect::<Vec<_>>() {
                 self.load_dependencies(&uri, 0);
             }

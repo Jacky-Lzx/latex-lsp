@@ -50,15 +50,21 @@ fn indirect_missing_include_warnings_fix_only_the_filename_with_versioned_edits(
                 "{form}/{argument}: {diagnostic:?}"
             );
             let mut workspace = Workspace {
-                code_action_literals: true,
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace
                 .documents
                 .insert(uri.clone(), Document::new(&uri, source.clone(), Some(7)));
             let diagnostic = diagnostic.clone();
-            workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+            workspace
+                .project
+                .build_diagnostics
+                .insert(uri.clone(), diagnostics);
             let actions = editing::code_actions(
                 &workspace,
                 &uri,
@@ -141,8 +147,11 @@ fn legacy_indirect_include_fixes_recheck_alias_dependencies_without_changing_the
         std::fs::write(root.join("definitions.tex"), r"\def\readpart{\include}").unwrap();
         std::fs::write(root.join("chapter.tex"), "Chapter.").unwrap();
         let mut workspace = Workspace {
-            apply_edits: true,
-            versioned_edits: true,
+            client: latex_lsp::project::state::ClientCapabilities {
+                apply_edits: true,
+                versioned_edits: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         workspace
@@ -163,7 +172,7 @@ fn legacy_indirect_include_fixes_recheck_alias_dependencies_without_changing_the
             data: Some(serde_json::json!({"file":"chapte.tex", "macroSources":[uri,definitions]})),
             ..Default::default()
         };
-        workspace.build_diagnostics.insert(
+        workspace.project.build_diagnostics.insert(
             uri.clone(),
             [(uri.clone(), vec![diagnostic.clone()])].into(),
         );
@@ -221,8 +230,11 @@ fn indirect_include_fixes_respect_the_active_includeonly_filter() {
             std::fs::write(&main, &source).unwrap();
             std::fs::write(directory.path().join("chapter.tex"), "Chapter").unwrap();
             let mut workspace = Workspace {
-                code_action_literals: true,
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace
@@ -230,7 +242,10 @@ fn indirect_include_fixes_respect_the_active_includeonly_filter() {
                 .insert(uri.clone(), Document::new(&uri, source, Some(7)));
             let diagnostics = build_log::parse(&main, "(./main.tex\nNo file chapte.tex.\n)");
             let diagnostic = diagnostics[&uri][0].clone();
-            workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+            workspace
+                .project
+                .build_diagnostics
+                .insert(uri.clone(), diagnostics);
             let actions = editing::code_actions(
                 &workspace,
                 &uri,

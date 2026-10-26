@@ -30,12 +30,18 @@ fn fixture_name(
     let uri = Url::from_file_path(&main).unwrap();
     let diagnostic = diagnostics[&uri][0].clone();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(directory.path().into());
     workspace.open(uri.clone(), source, 9);
-    workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+    workspace
+        .project
+        .build_diagnostics
+        .insert(uri.clone(), diagnostics);
     (directory, workspace, uri, diagnostic)
 }
 
@@ -241,7 +247,7 @@ fn boolean_repairs_fail_closed_when_the_candidate_budget_is_exhausted() {
 fn boolean_fixes_recheck_versions_operands_candidate_types_and_macro_sources() {
     let (directory, mut workspace, uri, diagnostic) =
         fixture(r"\newbool{draft}", r"\booltrue{darft}");
-    workspace.versioned_edits = true;
+    workspace.client.versioned_edits = true;
     let response = actions(&workspace, &uri, &diagnostic);
     let CodeActionOrCommand::CodeAction(action) = &response[0] else {
         panic!("missing action")
@@ -252,8 +258,8 @@ fn boolean_fixes_recheck_versions_operands_candidate_types_and_macro_sources() {
     };
     assert_eq!(edits[0].text_document.version, Some(9));
     assert_eq!(edits[0].text_document.uri, uri);
-    workspace.code_action_literals = false;
-    workspace.apply_edits = true;
+    workspace.client.code_action_literals = false;
+    workspace.client.apply_edits = true;
     let response = actions(&workspace, &uri, &diagnostic);
     let CodeActionOrCommand::Command(command) = &response[0] else {
         panic!("missing legacy action")
@@ -455,14 +461,18 @@ fn real_boolean_repairs_preserve_scopes_branches_builtins_and_toggle_independenc
                     before.output
                 );
                 let mut workspace = Workspace {
-                    code_action_literals: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        code_action_literals: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(root.into());
                 workspace
+                    .project
                     .build_diagnostics
                     .insert(Url::from_file_path(&main).unwrap(), before.diagnostics);
-                workspace.build_diagnostic_sources.insert(
+                workspace.project.build_diagnostic_sources.insert(
                     Url::from_file_path(&main).unwrap(),
                     before.diagnostic_sources,
                 );

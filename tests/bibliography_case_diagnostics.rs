@@ -472,11 +472,15 @@ fn related_locations_are_bounded_and_case_warnings_do_not_offer_unverified_merge
     assert_eq!(related[0].location.range.start.line, 1);
     assert_eq!(related[15].location.range.start.line, 16);
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
     workspace
+        .project
         .build_diagnostics
         .insert(uri(root, "main.tex"), diagnostics);
     assert!(editing::code_actions(

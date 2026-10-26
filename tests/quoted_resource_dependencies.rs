@@ -37,7 +37,10 @@ fn project(root: &Path, source: &str, name: &str) -> Workspace {
     )
     .unwrap();
     let mut workspace = Workspace {
-        versioned_edits: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            versioned_edits: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.add_root(root.into());
@@ -169,7 +172,7 @@ fn recorded_resources_and_uncertain_primitive_bindings_remain_potential_build_de
             let directory=tempfile::tempdir().unwrap();let root=directory.path();
             let source=format!(r"\documentclass{{article}}\begin{{document}}{body}\end{{document}}");
             let mut workspace=project(root,&source,name);let main=uri(root,"main.tex");let target=uri(root,&format!("refs.{}",extension(name)));
-            if recorded{workspace.bibliography_inputs.insert(main.clone(),BTreeSet::from([target.clone()]));}
+            if recorded{workspace.project.bibliography_inputs.insert(main.clone(),BTreeSet::from([target.clone()]));}
             assert!(workspace.project_files(&main).contains(&target),"{name}/{body}");
         }
     }

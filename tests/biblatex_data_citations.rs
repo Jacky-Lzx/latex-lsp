@@ -167,7 +167,10 @@ fn data_citation_completion_and_signatures_follow_each_argument_role() {
         for following in ["", "{alpha}{field}", "[pre]{alpha}[fmt]{field}"] {
             let source = format!("\\{name}{following}");
             let mut workspace = Workspace {
-                snippets: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    snippets: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let main = insert(&mut workspace, "main.tex", &source);
@@ -284,7 +287,10 @@ fn multiline_data_citation_warnings_and_spelling_fixes_target_keys_before_the_se
                 "{name}/{line}"
             );
             let mut workspace = Workspace {
-                code_action_literals: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    code_action_literals: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.open(uri.clone(), source.clone(), 5);
@@ -294,6 +300,7 @@ fn multiline_data_citation_warnings_and_spelling_fixes_target_keys_before_the_se
                 5,
             );
             workspace
+                .project
                 .build_diagnostics
                 .insert(uri.clone(), diagnostics.clone());
             let actions = latex_lsp::editing::code_actions(

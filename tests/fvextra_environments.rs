@@ -52,7 +52,10 @@ fn writer_and_buffer_bodies_keep_symbols_paths_and_edits_literal() {
                 let source = format!("{before}{literal}{newline}{after}");
                 std::fs::write(root.join("main.tex"), &source).unwrap();
                 let mut workspace = Workspace {
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 workspace.add_root(root.into());
@@ -227,7 +230,10 @@ fn real_writes_and_buffers_preserve_body_after_label_rename() {
             };
             let source = format!("\\documentclass{{article}}\n\\usepackage{{fvextra}}\n\\newwrite\\codefile\n\\begin{{document}}\n\\label{{kept}}{setup}\n\\begin{{{environment}}}{options}\n{body}\n\\end{{{environment}}}\n{finish}\nText.\\ref{{kept}}\\label{{real}}\n\\end{{document}}\n");
             let mut workspace = Workspace {
-                versioned_edits: true,
+                client: latex_lsp::project::state::ClientCapabilities {
+                    versioned_edits: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             workspace.open(main.clone(), source.clone(), 7);

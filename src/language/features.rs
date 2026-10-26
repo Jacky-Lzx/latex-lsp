@@ -923,7 +923,7 @@ pub fn workspace_edit(
     workspace: &Workspace,
     changes: std::collections::BTreeMap<Url, Vec<TextEdit>>,
 ) -> WorkspaceEdit {
-    if workspace.versioned_edits {
+    if workspace.client.versioned_edits {
         WorkspaceEdit {
             document_changes: Some(DocumentChanges::Edits(
                 changes
@@ -1613,7 +1613,7 @@ fn completion_in_query(
     // Declaration/inspection operands name a control sequence without calling
     // it. Reuse the parser's operand boundaries rather than keyword lookbehind.
     let after_command = syntax::skip_space(&doc.text.source, command_end);
-    let use_snippets = workspace.snippets
+    let use_snippets = workspace.client.snippets
         && !doc.syntax.control_operands.contains(&(line_start + slash))
         && !doc.text.source[after_command..].starts_with(['{', '[', '*']);
     let mut seen = BTreeSet::new();

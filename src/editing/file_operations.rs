@@ -51,6 +51,7 @@ impl FileChanges {
         // A new file may satisfy an earlier missing input. A deleted file may
         // only remain in the previous compiler's source/recorder information.
         let invalidated: Vec<_> = workspace
+            .project
             .build_diagnostics
             .iter()
             .filter(|(root, diagnostics)| {
@@ -60,16 +61,21 @@ impl FileChanges {
                         && (!verify_inputs
                             || *checked.entry(uri.clone()).or_insert_with(|| {
                                 workspace
+                                    .project
                                     .build_checks
                                     .get(*root)
                                     .is_none_or(|checks| checks.input_changed(uri))
                             }))
                 };
                 changed(root)
-                    || workspace.build_checks.get(*root).is_some_and(|checks| {
-                        checks.watched().iter().any(|uri| self.affects(uri))
-                            && checks.changed_path().is_some()
-                    })
+                    || workspace
+                        .project
+                        .build_checks
+                        .get(*root)
+                        .is_some_and(|checks| {
+                            checks.watched().iter().any(|uri| self.affects(uri))
+                                && checks.changed_path().is_some()
+                        })
                     || diagnostics.keys().any(&mut changed)
                     || workspace.project_files(root).iter().any(&mut changed)
                     || workspace
@@ -77,9 +83,9 @@ impl FileChanges {
                         .filter_map(|(_, target)| Url::from_file_path(target).ok())
                         .any(|uri| changed(&uri))
                     || [
-                        &workspace.recorded_inputs,
-                        &workspace.bibliography_inputs,
-                        &workspace.build_diagnostic_sources,
+                        &workspace.project.recorded_inputs,
+                        &workspace.project.bibliography_inputs,
+                        &workspace.project.build_diagnostic_sources,
                     ]
                     .iter()
                     .any(|inputs| {
@@ -91,10 +97,10 @@ impl FileChanges {
             .map(|(root, _)| root.clone())
             .collect();
         for root in invalidated {
-            if let Some(diagnostics) = workspace.build_diagnostics.remove(&root) {
+            if let Some(diagnostics) = workspace.project.build_diagnostics.remove(&root) {
                 affected.extend(diagnostics.into_keys());
             }
-            workspace.build_diagnostic_sources.remove(&root);
+            workspace.project.build_diagnostic_sources.remove(&root);
         }
         // Keep recorder inputs until the next build: they let artifact checks
         // continue to reject PDFs whose inputs have disappeared.
@@ -753,32 +759,33 @@ pub fn did_rename(workspace: &mut Workspace, files: &[FileRename]) -> Result<BTr
     }
     let renames = Renames::new(files)?;
     let mut affected = BTreeSet::new();
-    for project in workspace.build_diagnostics.values() {
+    for project in workspace.project.build_diagnostics.values() {
         affected.extend(project.keys().cloned());
     }
-    workspace.build_diagnostics.clear();
-    workspace.build_diagnostic_sources.clear();
-    workspace.build_checks.clear();
+    workspace.project.build_diagnostics.clear();
+    workspace.project.build_diagnostic_sources.clear();
+    workspace.project.build_checks.clear();
     // Preserve historical condition paths so moving a checked file invalidates
     // its old PDF even after the source reference is updated.
-    workspace.pdf_checks = std::mem::take(&mut workspace.pdf_checks)
+    workspace.project.pdf_checks = std::mem::take(&mut workspace.project.pdf_checks)
         .into_iter()
         .map(|(root, checks)| (renames.uri(&root), checks))
         .collect();
-    workspace.bibliography_checks = std::mem::take(&mut workspace.bibliography_checks)
-        .into_iter()
-        .map(|(root, checks)| {
-            (
-                renames.uri(&root),
-                std::sync::Arc::new(checks.renamed_inputs(|path| renames.path(path))),
-            )
-        })
-        .collect();
+    workspace.project.bibliography_checks =
+        std::mem::take(&mut workspace.project.bibliography_checks)
+            .into_iter()
+            .map(|(root, checks)| {
+                (
+                    renames.uri(&root),
+                    std::sync::Arc::new(checks.renamed_inputs(|path| renames.path(path))),
+                )
+            })
+            .collect();
     for inputs_by_root in [
-        &mut workspace.recorded_inputs,
-        &mut workspace.recorded_binary_inputs,
-        &mut workspace.bibliography_inputs,
-        &mut workspace.bibliography_databases,
+        &mut workspace.project.recorded_inputs,
+        &mut workspace.project.recorded_binary_inputs,
+        &mut workspace.project.bibliography_inputs,
+        &mut workspace.project.bibliography_databases,
     ] {
         *inputs_by_root = std::mem::take(inputs_by_root)
             .into_iter()
@@ -791,8 +798,8 @@ pub fn did_rename(workspace: &mut Workspace, files: &[FileRename]) -> Result<BTr
             .collect();
     }
     for bindings_by_root in [
-        &mut workspace.recorded_bindings,
-        &mut workspace.bibliography_bindings,
+        &mut workspace.project.recorded_bindings,
+        &mut workspace.project.bibliography_bindings,
     ] {
         *bindings_by_root = std::mem::take(bindings_by_root)
             .into_iter()

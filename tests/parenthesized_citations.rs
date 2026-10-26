@@ -132,7 +132,10 @@ fn citation_variants_rename_exact_keys_across_declarations_and_bibtex_fields() {
                 format!("\\citetalias{{{old}}}"),
             ] {
                 let mut workspace = Workspace {
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 let name = if declaration.starts_with('@') {
@@ -333,11 +336,17 @@ fn citation_spelling_fixes_preserve_compiler_ranges_for_parenthesized_keys() {
     let diagnostics = build_log::parse(&main, "(./main.tex\nLaTeX Warning: Citation `book(targte)' on page 1 undefined on input line 4.\n)\n");
     let diagnostic = diagnostics[&uri][0].clone();
     let mut workspace = Workspace {
-        code_action_literals: true,
+        client: latex_lsp::project::state::ClientCapabilities {
+            code_action_literals: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     workspace.open(uri.clone(), source.into(), 7);
-    workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+    workspace
+        .project
+        .build_diagnostics
+        .insert(uri.clone(), diagnostics);
     let actions = editing::code_actions(
         &workspace,
         &uri,
@@ -426,7 +435,10 @@ fn multiline_bibtex_headers_keep_metadata_navigation_and_exact_rename_ranges() {
         for gap in ["\n", "\r\n  ", " \t\n\t", "\n\n"] {
             for (open, close) in [('{', '}'), ('(', ')')] {
                 let mut workspace = Workspace {
-                    versioned_edits: true,
+                    client: latex_lsp::project::state::ClientCapabilities {
+                        versioned_edits: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 let source = format!("% 😀\r\n@book{open}{old}{gap},title={{Literal {old}}}, author={{A. Author}}, year=2026{close}\r\n@article{{child, crossref={{{old}}}}}");
