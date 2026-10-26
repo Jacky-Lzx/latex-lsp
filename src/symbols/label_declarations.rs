@@ -246,7 +246,11 @@ fn readers(
         if doc.syntax.definitions.len() > 4096 {
             return result;
         }
-        let positions = signatures.source_command_positions(&doc.text.source, &doc.syntax);
+        // Only the current consumer can certify a local reader installation.
+        // Other sources still contribute conflicts and the same work budget,
+        // but their execution positions cannot affect this proof.
+        let positions = std::ptr::eq(*doc, consumer)
+            .then(|| signatures.source_command_positions(&doc.text.source, &doc.syntax));
         for entry in &doc.syntax.definitions {
             work += doc.text.source.len();
             if work > 16 * 1024 * 1024 {
@@ -267,7 +271,9 @@ fn readers(
                     .rev()
                     .find(|command| command.name == declaration)
                     .is_some_and(|command| {
-                        positions.contains(&command.span.start)
+                        positions
+                            .as_ref()
+                            .is_some_and(|positions| positions.contains(&command.span.start))
                             && !crate::project::resource_context::grouped(
                                 &doc.text.source,
                                 &doc.syntax,

@@ -105,7 +105,7 @@ def position(source, offset):
             "character": len(prefix.rsplit("\n", 1)[-1].encode("utf-16-le")) // 2}
 
 
-def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_labels=False, lifecycle_labels=False, global_hook_rules=False, default_hook_labels=False):
+def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_labels=False, lifecycle_labels=False, global_hook_rules=False, default_hook_labels=False, document_hook_slots=False):
     chapters, sections = SCALES[scale]
     label_hook = "begindocument" if lifecycle_labels else "benchmark"
     main = ("\\documentclass{article}\n\\usepackage{amsmath,biblatex}\n"
@@ -140,6 +140,12 @@ def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=Fal
             "\\AddToHook{benchmark.other}[contrast]{\\typeout{Other}}\n"
             "\\begin{document}\n"
         ))
+    if document_hook_slots:
+        main = main.replace("\\begin{document}\n", (
+            f"\\AddToHook{{{label_hook}}}[top-level]{{\\typeout{{Document slot}}}}\n"
+            "\\AddToHook{benchmark.other}[top-level]{\\typeout{Other slot}}\n"
+            "\\begin{document}\n"
+        ))
     if lifecycle_labels:
         main = main.replace("\\begin{document}\n", (
             "\\AtEndDocument[contrast]{\\typeout{End}}\n\\begin{document}\n"
@@ -161,6 +167,11 @@ def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=Fal
                 source += ("\\AtBeginDocument[contribution]{\\typeout{Contribution}}\n"
                            if lifecycle_labels else
                            "\\AddToHook{benchmark}[contribution]{\\typeout{Contribution}}\n")
+            if document_hook_slots:
+                source += ("\\AtBeginDocument[top-level]{\\typeout{Document slot}}\n"
+                           if lifecycle_labels else
+                           "\\AddToHook{benchmark}[top-level]{\\typeout{Document slot}}\n")
+                source += "\\AddToHook{benchmark.other}[top-level]{\\typeout{Other slot}}\n"
             if global_hook_rules:
                 source += "\\AddToHook{benchmark.other}[contribution]{\\typeout{Global contribution}}\n"
             if default_hook_labels:
@@ -180,6 +191,9 @@ def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=Fal
         if hook_labels:
             source += (f"\\RemoveFromHook{{{label_hook}}}[contribution]\n"
                        f"\\RemoveFromHook{{{label_hook}}}[conTRIB]\n")
+        if document_hook_slots:
+            source += (f"\\RemoveFromHook{{{label_hook}}}[top-level]\n"
+                       f"\\RemoveFromHook{{{label_hook}}}[toFAKE]\n")
         if global_hook_rules:
             source += ("\\DeclareDefaultHookRule{contribution}{before}{contrast}\n"
                        "\\DeclareDefaultHookRule{conTRIB}{before}{contrast}\n")
@@ -247,10 +261,24 @@ def global_hook_label_locations(sources, declarations_only=True):
                                 key=lambda match: match.start(1))]
 
 
-def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_renames=False, hook_labels=False, lifecycle_labels=False, global_hook_rules=False, default_hook_labels=False):
+
+def document_hook_slot_locations(sources, declarations_only=True, lifecycle=False):
+    """Exact local document-slot ranges; other hooks and ordinary keys are excluded."""
+    commands = "AddToHook" if declarations_only else "(?:AddToHook|RemoveFromHook)"
+    hook = "begindocument" if lifecycle else "benchmark"
+    patterns = [re.compile(r"\\" + commands + r"\{" + hook + r"\}\[(top-level)\]")]
+    if lifecycle:
+        patterns.append(re.compile(r"\\AtBeginDocument\[(top-level)\]"))
+    return [{"uri": uri, "range": {"start": position(source, match.start(1)),
+                                  "end": position(source, match.end(1))}}
+            for uri, source in sorted(sources.items())
+            for match in sorted((match for pattern in patterns for match in pattern.finditer(source)),
+                                key=lambda match: match.start(1))]
+
+def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_renames=False, hook_labels=False, lifecycle_labels=False, global_hook_rules=False, default_hook_labels=False, document_hook_slots=False):
     with tempfile.TemporaryDirectory(prefix="latex-lsp-benchmark-") as directory:
         root = Path(directory)
-        metadata = fixture(root, scale, hooks, hook_wrappers, hook_environments, hook_interfaces, hook_labels, lifecycle_labels, global_hook_rules, default_hook_labels)
+        metadata = fixture(root, scale, hooks, hook_wrappers, hook_environments, hook_interfaces, hook_labels, lifecycle_labels, global_hook_rules, default_hook_labels, document_hook_slots)
         server = Server(binary, root, timeout)
         sources = {p.as_uri(): p.read_text() for p in root.glob("*.tex")}
         versions = {uri: 1 for uri in sources}
@@ -428,6 +456,25 @@ def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hoo
                             "start": position(sources[uri], start),
                             "end": position(sources[uri], start + len("conTRIB"))},
                             "newText": item["label"]}, items
+                if document_hook_slots:
+                    params = at("[top-level]", 4)
+                    definitions = query("definition.document_hook_slot", "textDocument/definition", params)
+                    assert definitions == document_hook_slot_locations(sources, lifecycle=lifecycle_labels), definitions
+                    references = query("references.document_hook_slot", "textDocument/references", {
+                        **params, "context": {"includeDeclaration": True},
+                    })
+                    assert references == document_hook_slot_locations(sources, False, lifecycle_labels), references
+                    hover = query("hover.document_hook_slot", "textDocument/hover", params)
+                    assert "Document-level code slot" in hover["contents"]["value"], hover
+                    label_hook = "begindocument" if lifecycle_labels else "benchmark"
+                    assert f"Hook: {label_hook}" in hover["contents"]["value"], hover
+                    items = query("completion.document_hook_slot", "textDocument/completion", at("[toFAKE]", 3))
+                    assert [item["label"] for item in items] == ["top-level"], items
+                    start = sources[uri].rindex("[toFAKE]") + 1
+                    assert items[0]["textEdit"] == {"range": {
+                        "start": position(sources[uri], start),
+                        "end": position(sources[uri], start + len("toFAKE"))},
+                        "newText": "top-level"}, items
                 if hook_renames:
                     hook_source = sources[main_uri]
                     result = query("rename.hook", "textDocument/rename", {
@@ -514,8 +561,9 @@ def main():
     parser.add_argument("--lifecycle-labels", action="store_true", help="mix AtBeginDocument code labels with direct registration and AtEndDocument interference (implies --hook-labels)")
     parser.add_argument("--global-hook-rules", action="store_true", help="verify global default-rule labels across multiple hooks (implies --hook-labels)")
     parser.add_argument("--default-hook-labels", action="store_true", help="verify literal default-label settings across explicit hook registrations (implies --hook-labels)")
+    parser.add_argument("--document-hook-slots", action="store_true", help="verify explicit document-level hook slots independently of rules and default settings (implies --hook-labels)")
     args = parser.parse_args()
-    args.hook_labels = args.hook_labels or args.lifecycle_labels or args.global_hook_rules or args.default_hook_labels
+    args.hook_labels = args.hook_labels or args.lifecycle_labels or args.global_hook_rules or args.default_hook_labels or args.document_hook_slots
     args.hooks = args.hooks or args.hook_wrappers or args.hook_environments or args.hook_interfaces or args.hook_renames or args.hook_labels
     if args.iterations < 1 or args.runs < 1 or args.warmup < 0 or args.timeout <= 0:
         parser.error("iterations/runs/timeout must be positive; warmup must be nonnegative")
@@ -532,7 +580,8 @@ def main():
                       "hook_interfaces": args.hook_interfaces, "hook_renames": args.hook_renames,
                       "hook_labels": args.hook_labels, "lifecycle_labels": args.lifecycle_labels,
                       "global_hook_rules": args.global_hook_rules,
-                      "default_hook_labels": args.default_hook_labels},
+                      "default_hook_labels": args.default_hook_labels,
+                      "document_hook_slots": args.document_hook_slots},
         "scenarios": {}}
     if baseline and (baseline["parameters"] != output["parameters"]
                      or baseline["workload_sha256"] != output["workload_sha256"]):
@@ -542,7 +591,7 @@ def main():
         for run in range(args.runs):
             print(f"{scale}: run {run + 1}/{args.runs}", file=sys.stderr, flush=True)
             metadata = session(binary, scale, args.iterations, args.warmup, args.timeout,
-                               lambda name, ms: samples.setdefault(name, []).append(ms), args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces, args.hook_renames, args.hook_labels, args.lifecycle_labels, args.global_hook_rules, args.default_hook_labels)
+                               lambda name, ms: samples.setdefault(name, []).append(ms), args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces, args.hook_renames, args.hook_labels, args.lifecycle_labels, args.global_hook_rules, args.default_hook_labels, args.document_hook_slots)
         metrics = {name: summary(values) for name, values in samples.items()}
         output["scenarios"][scale] = {"fixture": metadata, "metrics": metrics, "samples_ms": samples}
         if baseline and baseline["scenarios"][scale]["fixture"] != metadata:

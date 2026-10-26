@@ -56,6 +56,16 @@ python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after tar
   --output target/benchmarks/default-hook-pairs.json
 ```
 
+`--document-hook-slots` 隐含 `--hook-labels`，在当前 hook 的主文档／每节加入显式 `top-level` 注册，另一个 hook 放同名干扰，每章增加移除与 `toFAKE` 后缀补全字段。逐项核验仅本 hook 的全部定义／引用、文档级槽悬停及完整后缀替换，不将排序规则或默认设置并入该槽。三档为 17／129／513 个定义和 18／133／521 项引用；可与生命周期、全局规则和默认设置负载组合。`--query document-hook-definition` 自动启用新负载并逐次校验定义。
+
+```sh
+python3 benchmarks/editing.py --document-hook-slots --lifecycle-labels \
+  --output target/benchmarks/document-hook-slots.json
+python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after target/benchmarks/after \
+  --query document-hook-definition --lifecycle-labels \
+  --output target/benchmarks/document-hook-pairs.json
+```
+
 ## 指标含义
 
 - `initialize`：初始化请求到响应，单独报告，不混入预热后的功能样本；`open` 包含打开两个缓冲区到有序屏障响应。
@@ -609,3 +619,48 @@ python3 benchmarks/rename_pairs.py \
 优化版六项请求缓存测试、严格全目标 Clippy 及七组实际 release／原生审核通过；后者检查精确字段、补全、代码块移除及普通引用实际编辑后的事件和完整 AUX。最终冻结整仓回归为 322 个目标、3408 项通过、0 失败、505 项默认跳过，其中完整串行 stdio 为 412 项通过、29 项默认跳过。96 项含原生 hook 专项、文档、格式及差异检查通过；481 份 Rust 源码集合与 hash 匹配冻结清单，两版 release SHA 与全部原始报告一致。测量后清理本包 dev 产物，保留依赖、release 基线及原始样本。
 
 交互报告已发布；普通定义、默认字段配对及上一轮全局报告各通过十八种档位／统计量／指标组合的 JS VM 校验。`html_preview` 仍返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计视觉验证通过。
+
+## 2026-10-26 第十三轮：文档级代码槽与局部读取器位置分析
+
+功能基线 `af73876` 新增显式 `top-level` 文档级代码槽的定义、引用、悬停、高亮和补全。注册／移除保持本 hook 的独立身份，排序规则及默认设置不关联或推荐该槽，保留槽不提供改名。本轮新增 `--document-hook-slots`，与默认设置、全局规则、生命周期、包装宏、环境及接口负载组合；完整会话还校验 hook 名称的全部编辑。三档为 3／6／10 文件、22236／125286／464574 bytes，独立核验 17／129／513 个槽定义及 18／133／521 项引用。普通与组合会话、全部八种配对查询的 smoke 均通过。
+
+审阅发现 `label_declarations::readers` 为每个消费者重新计算所有含定义文件的命令执行位置，随后局部读取器认证却要求来源就是当前消费者。优化仅为当前文件构造这些位置；其他文件的定义仍进入冲突集合，工作预算与全部来源检查保持原样。没有新增缓存，也未扩大读取器或编辑身份认证。两类声明保护专项（含原生）及七组实际 release 审核通过。
+
+正式配对使用每档三组新进程、每组预热五对并测量三十对，请求交替执行；启动前将所有服务器线程绑定到同一允许 CPU，打开后核验线程亲和性。交换两版启动顺序再测；下表统一按功能基线 → 优化版列出 p50（ms）。
+
+| 查询 | 首组 | 交换后 |
+| --- | ---: | ---: |
+| 普通定义 · small | 4.569 → 4.465 | 4.551 → 4.488 |
+| 普通定义 · medium | 24.539 → 23.950 | 24.524 → 24.033 |
+| 普通定义 · large | 97.765 → 95.253 | 99.048 → 96.812 |
+| 文档级槽定义 · large | 59.341 → 59.463 | 61.342 → 61.365 |
+| 普通改名 · large | 85.143 → 85.015 | 86.239 → 85.648 |
+| hook 名称定义 · large | 54.412 → 54.612 | 54.955 → 54.517 |
+
+大型普通定义分别改善约 2.6%／2.3%，服务器 CPU 均值为 97.778 → 95.556、103.222 → 98.444 ms，下降约 2.3%／4.6%。单个 CPU 样本只有 10 ms 精度，这里比较各档九十个样本的均值。四份前置探测的普通定义也在两种顺序改善约 2%–3%，全部保留；文档级槽不经过该读取器分析，定义耗时基本持平。普通改名和 hook 名称定义没有稳定的实质收益。
+
+完整编辑会话仍为三档、每档三组新进程、三次预热和二十个测量周期，无 CPU 绑定。large 的普通定义略有改善，但多个指标回退，不宣称全面加速：
+
+| large 完整会话 | 功能基线 p50 ms | 优化版 p50 ms |
+| --- | ---: | ---: |
+| 普通定义 | 98.992 | 98.566 |
+| 普通改名 | 85.088 | 87.020 |
+| 文档级槽定义 | 60.266 | 61.902 |
+| 文档级槽引用 | 61.111 | 61.957 |
+| 文档级槽补全 | 59.315 | 59.724 |
+| 默认设置定义 | 64.606 | 68.013 |
+| 全局规则定义 | 66.485 | 65.790 |
+| hook 名称改名 | 67.203 | 67.583 |
+| 连续八次编辑到补全 | 104.136 | 105.833 |
+
+测量未与构建、测试或浏览器渲染并行。十四份原始 JSON 共 533447 bytes、17436 个墙钟样本，全部统计量、CPU 均值、fixture、脚本和二进制 SHA 已复算。两版 release SHA-256 分别为 `9a7a54430b5e5b2ff4ca02c0cf7b0d65cb26a2a8d0bb8ebf419a00aa9e058076`、`01e97f0b65d3b16a42d8ac73640cc29f63c509d1ee462e5d967779b58a895b0d`。主报告、文档级槽报告及第十二轮旧报告兼容性各十八种交互状态通过 JS 检查。headless 预览仍返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计视觉验证通过。
+
+原始报告：
+
+- [功能基线完整会话](../benchmarks/results/2026-10-26/round13-document-slots-baseline.json)、[优化版完整会话](../benchmarks/results/2026-10-26/round13-local-reader-positions-editing.json)
+- [普通定义配对](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-pairs-reversed.json)
+- [文档级槽定义配对](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-pairs-reversed.json)
+- [普通改名配对](../benchmarks/results/2026-10-26/round13-local-reader-positions-rename-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-rename-pairs-reversed.json)
+- [hook 名称定义配对](../benchmarks/results/2026-10-26/round13-local-reader-positions-hook-name-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-hook-name-definition-pairs-reversed.json)
+- [普通定义前置探测](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-probe.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-probe-reversed.json)
+- [文档级槽前置探测](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-probe.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-probe-reversed.json)
