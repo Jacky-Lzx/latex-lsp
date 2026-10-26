@@ -21,6 +21,59 @@ fn locations(uri: &Url, source: &str, needle: &str) -> Vec<Location> {
 }
 
 #[test]
+fn document_level_slots_link_registrations_and_removal_within_each_hook() {
+    let source = "% document slot\r\n😀 \\AddToHook{one}[top-level]{A}\\AddToHook{one}[top-level]{B}\\AddToHook{two}[top-level]{C}\\RemoveFromHook{one}[top-level]\\label{top-level}\\ref{top-level}";
+    let (workspace, uri) = setup(source);
+    let sites = locations(&uri, source, "top-level");
+    assert_eq!(sites.len(), 6);
+    for i in [0, 1, 3] {
+        let at = sites[i].range.start;
+        assert_eq!(features::definitions(&workspace, &uri, at), sites[..2]);
+        assert_eq!(
+            features::references(&workspace, &uri, at, true),
+            [sites[0].clone(), sites[1].clone(), sites[3].clone()]
+        );
+        assert_eq!(
+            features::references(&workspace, &uri, at, false),
+            sites[3..4]
+        );
+        let hover = features::hover(&workspace, &uri, at).unwrap();
+        assert_eq!(hover.range, Some(sites[i].range));
+        assert!(
+            matches!(hover.contents, HoverContents::Markup(MarkupContent { value, .. })
+            if value.contains("Document-level code slot") && value.contains("Hook: one"))
+        );
+        let highlights = editing::highlights(&workspace, &uri, at);
+        assert_eq!(
+            highlights.iter().map(|item| item.kind).collect::<Vec<_>>(),
+            [
+                Some(DocumentHighlightKind::WRITE),
+                Some(DocumentHighlightKind::WRITE),
+                Some(DocumentHighlightKind::READ)
+            ]
+        );
+        assert!(features::prepare_rename(&workspace, &uri, at)
+            .unwrap()
+            .is_none());
+        assert!(features::rename(&workspace, &uri, at, "fresh")
+            .unwrap()
+            .is_none());
+    }
+    assert_eq!(
+        features::definitions(&workspace, &uri, sites[2].range.start),
+        sites[2..3]
+    );
+    assert_eq!(
+        features::references(&workspace, &uri, sites[2].range.start, true),
+        sites[2..3]
+    );
+    assert_eq!(
+        features::definitions(&workspace, &uri, sites[5].range.start),
+        sites[4..5]
+    );
+}
+
+#[test]
 fn default_label_settings_link_explicit_chunks_without_merging_local_definitions() {
     let source = "% defaults\r\n😀 \\AddToHook{one}[alpha]{A}\\AddToHook{two}[alpha]{B}\\AtBeginDocument[alpha]{C}\\PushDefaultHookLabel{alpha}\\SetDefaultHookLabel{alpha}\\PopDefaultHookLabel\\RemoveFromHook{one}[alpha]\\DeclareDefaultHookRule{alpha}{after}{beta}\\label{alpha}\\ref{alpha}\\def\\alpha{}";
     let (workspace, uri) = setup(source);
@@ -1040,7 +1093,7 @@ fn data_operands_dynamic_fields_and_unconfirmed_interfaces_never_create_label_na
             "{source}"
         );
     }
-    for label in ["*", "top-level", "."] {
+    for label in ["*", "."] {
         let source = format!(r"\AddToHook{{one}}[{label}]{{Code}}\RemoveFromHook{{one}}[{label}]");
         let (workspace, uri) = setup(&source);
         let at = workspace.documents[&uri]
@@ -1112,6 +1165,240 @@ fn shared_code_label_calls_require_consensus_and_recover_when_a_consumer_changes
     workspace.open(b.clone(), source.into(), 7);
     let sites = locations(&shared, declarations, "alpha");
     let own = locations(&a, source, "alpha")[0].range.start;
+    assert_eq!(
+        features::definitions(&workspace, &shared, sites[1].range.start),
+        sites[..1]
+    );
+    assert_eq!(features::references(&workspace, &a, own, true).len(), 4);
+    workspace.open(
+        b.clone(),
+        format!(r"\def\RemoveFromHook#1[#2]{{}}{source}"),
+        9,
+    );
+    assert!(features::definitions(&workspace, &shared, sites[1].range.start).is_empty());
+    assert_eq!(features::definitions(&workspace, &a, own), sites[..1]);
+    assert_eq!(features::references(&workspace, &a, own, true).len(), 2);
+    workspace.open(b, source.into(), 11);
+    assert_eq!(
+        features::definitions(&workspace, &shared, sites[1].range.start),
+        sites[..1]
+    );
+    assert_eq!(features::references(&workspace, &a, own, true).len(), 4);
+}
+
+#[test]
+fn document_slot_completion_is_local_and_excludes_rules_and_default_settings() {
+    for command in [
+        r"\AddToHook{one}",
+        r"\RemoveFromHook{one}",
+        r"\AtBeginDocument",
+    ] {
+        for field in ["[toFAKE]", "[toFAKE", "[]", "[", "[ % boundary\ntoFAKE ]"] {
+            let source = format!(
+                r"\AddToHook{{one}}[top-level]{{A}}\AddToHook{{two}}[top-other]{{B}}\AtBeginDocument[top-level]{{C}}\label{{top-ordinary}}{command}{field}"
+            );
+            let (workspace, uri) = setup(&source);
+            let text = &workspace.documents[&uri].text;
+            let (start, length, prefix) = source
+                .find("toFAKE")
+                .map_or((source.rfind('[').unwrap() + 1, 0, 0), |at| (at, 6, 2));
+            let items = features::completion(&workspace, &uri, text.position(start + prefix));
+            assert_eq!(
+                items
+                    .iter()
+                    .map(|item| item.label.as_str())
+                    .collect::<Vec<_>>(),
+                ["top-level"],
+                "{source}"
+            );
+            assert_eq!(
+                items[0].text_edit,
+                Some(CompletionTextEdit::Edit(TextEdit {
+                    range: text.range(start, start + length),
+                    new_text: "top-level".into(),
+                }))
+            );
+            assert!(items[0]
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("Document-level code slot"));
+        }
+    }
+    for tail in [
+        r"\DeclareHookRule{one}{toFAKE}{before}{alpha}",
+        r"\DeclareHookRule{one}{alpha}{before}{toFAKE}",
+        r"\ClearHookRule{one}{toFAKE}{alpha}",
+        r"\DeclareDefaultHookRule{toFAKE}{after}{alpha}",
+        r"\DeclareHookRule{??}{toFAKE}{after}{alpha}",
+        r"\PushDefaultHookLabel{toFAKE}",
+        r"\SetDefaultHookLabel{toFAKE}",
+    ] {
+        let source =
+            format!(r"\AddToHook{{one}}[top-level]{{A}}\AddToHook{{one}}[topic]{{B}}{tail}");
+        let (workspace, uri) = setup(&source);
+        let at = source.find("toFAKE").unwrap();
+        let items = features::completion(
+            &workspace,
+            &uri,
+            workspace.documents[&uri].text.position(at + 2),
+        );
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            ["topic"],
+            "{source}"
+        );
+        let invalid = source.replace("toFAKE", "top-level");
+        let (workspace, uri) = setup(&invalid);
+        let at = workspace.documents[&uri]
+            .text
+            .position(invalid.rfind("top-level").unwrap());
+        assert!(
+            features::definitions(&workspace, &uri, at).is_empty(),
+            "{invalid}"
+        );
+        assert!(
+            features::references(&workspace, &uri, at, true).is_empty(),
+            "{invalid}"
+        );
+        assert!(features::hover(&workspace, &uri, at).is_none(), "{invalid}");
+        let own = workspace.documents[&uri]
+            .text
+            .position(invalid.find("top-level").unwrap());
+        assert_eq!(
+            features::references(&workspace, &uri, own, true).len(),
+            1,
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
+fn document_slots_follow_confirmed_interfaces_and_normalized_fields() {
+    for (preamble, add, hook) in [
+        ("", r"\AddToHook{one}", "one"),
+        ("", r"\AddToHookWithArguments{one}", "one"),
+        ("", r"\csname AddToHook\endcsname{one}", "one"),
+        ("", r"\csuse{AddToHook}{one}", "one"),
+        (r"\def\append{\AddToHook}", r"\append{one}", "one"),
+        (
+            r"\NewDocumentCommand\append{}{\AddToHook}",
+            r"\append{one}",
+            "one",
+        ),
+        (
+            r"\newenvironment{append}{\AddToHook}{}",
+            r"\append{one}",
+            "one",
+        ),
+        ("", r"\AtBeginDocument", "begindocument"),
+        ("", r"\csname AtEndDocument\endcsname", "enddocument"),
+        (r"\def\append{\AtEndDocument}", r"\append", "enddocument"),
+    ] {
+        let source = format!("{preamble}{add}[ % before\r\n top-level% after\n]{{A}}\\RemoveFromHook{{{hook}}}[top-level]");
+        let (workspace, uri) = setup(&source);
+        let sites = locations(&uri, &source, "top-level");
+        assert_eq!(
+            features::definitions(&workspace, &uri, sites[1].range.start),
+            sites[..1],
+            "{source}"
+        );
+        assert_eq!(
+            features::references(&workspace, &uri, sites[0].range.start, true),
+            sites,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn document_slots_reject_data_dynamic_and_replaced_interfaces() {
+    for tail in [
+        r"\detokenize{\RemoveFromHook{one}[top-level]}",
+        r"\string\RemoveFromHook{one}[top-level]",
+        r"\NewHookWithArguments{capture}{1}\UseHook{capture}{\RemoveFromHook{one}[top-level]}",
+        r"\def\RemoveFromHook#1[#2]{}\RemoveFromHook{one}[top-level]",
+        r"\RemoveFromHook{\which}[top-level]",
+        r"\RemoveFromHook{./one}[top-level]",
+        r"\RemoveFromHook{one}[top-level\which]",
+        "\\RemoveFromHook{one}[top-% split\nlevel]",
+        r"\def\AddToHook#1[#2]#3{}\AtBeginDocument[top-level]{B}",
+        r"\def\append#1{\RemoveFromHook}\append{ignored}{one}[top-level]",
+    ] {
+        let source = format!(r"\AddToHook{{one}}[top-level]{{A}}{tail}");
+        let (workspace, uri) = setup(&source);
+        let at = workspace.documents[&uri]
+            .text
+            .position(source.rfind("top-").unwrap());
+        assert!(
+            features::definitions(&workspace, &uri, at).is_empty(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn document_slot_providers_refresh_without_parent_edits() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let provider = main.join("hooks.tex").unwrap();
+    let other = main.join("other.tex").unwrap();
+    let source = "\\documentclass{article}\\input{hooks}\r\n\\begin{document}😀 \\remove{one}[top-level]\\end{document}";
+    let definitions = r"\AddToHook{one}[top-level]{Code}\def\remove{\RemoveFromHook}";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(provider.to_file_path().unwrap(), definitions).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.config.distribution.enabled = false;
+    workspace.open(main.clone(), source.into(), 5);
+    let at = locations(&main, source, "top-level")[0].range.start;
+    let expected = locations(&provider, definitions, "top-level");
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    workspace.open(
+        provider.clone(),
+        r"\AddToHook{one}[top-level]{Code}\def\remove#1[#2]{}".into(),
+        12,
+    );
+    assert!(features::definitions(&workspace, &main, at).is_empty());
+    assert_eq!(workspace.documents[&main].version, Some(5));
+    workspace.open(provider.clone(), definitions.into(), 13);
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    let two = format!(r"{definitions}\AddToHook{{one}}[top-level]{{More}}");
+    workspace.open(provider.clone(), two.clone(), 14);
+    assert_eq!(
+        features::definitions(&workspace, &main, at),
+        locations(&provider, &two, "top-level")
+    );
+    workspace.documents.remove(&provider);
+    workspace.reload(&provider);
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    workspace.open(
+        other,
+        r"\documentclass{article}\AddToHook{one}[top-level]{Other}".into(),
+        9,
+    );
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+}
+
+#[test]
+fn shared_document_slots_require_consensus_and_recover() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Url::from_file_path(directory.path().join("a.tex")).unwrap();
+    let b = a.join("b.tex").unwrap();
+    let shared = a.join("shared.tex").unwrap();
+    let declarations = r"\AddToHook{one}[top-level]{Code}\RemoveFromHook{one}[top-level]";
+    let source = r"\documentclass{article}\input{shared}\begin{document}\RemoveFromHook{one}[top-level]\end{document}";
+    for (uri, text) in [(&a, source), (&b, source), (&shared, declarations)] {
+        std::fs::write(uri.to_file_path().unwrap(), text).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.config.distribution.enabled = false;
+    workspace.open(a.clone(), source.into(), 5);
+    workspace.open(b.clone(), source.into(), 7);
+    let sites = locations(&shared, declarations, "top-level");
+    let own = locations(&a, source, "top-level")[0].range.start;
     assert_eq!(
         features::definitions(&workspace, &shared, sites[1].range.start),
         sites[..1]
@@ -1658,5 +1945,85 @@ fn native_lifecycle_interface_changes_move_or_discard_callbacks_with_equal_aux()
         } else {
             original_aux = Some(aux);
         }
+    }
+}
+
+#[test]
+#[ignore = "requires native pdflatex"]
+fn native_document_slots_keep_order_removal_and_ordinary_label_edits() {
+    for reversed in [false, true] {
+        let declaration = if reversed {
+            r"\NewReversedHook{one}"
+        } else {
+            r"\NewHook{one}"
+        };
+        let source = format!(
+            r"\documentclass{{article}}{declaration}\NewHook{{two}}\AddToHook{{one}}[top-level]{{\typeout{{EVENT:T1}}}}\AddToHook{{one}}[top-level]{{\typeout{{EVENT:T2}}}}\AddToHook{{one}}[alpha]{{\typeout{{EVENT:A}}}}\AddToHook{{one}}[beta]{{\typeout{{EVENT:B}}}}\AddToHook{{two}}[top-level]{{\typeout{{EVENT:Other}}}}\LogHook{{one}}\begin{{document}}\UseHook{{one}}\UseHook{{two}}Text\label{{top-level}}\ref{{top-level}}\end{{document}}"
+        );
+        let (workspace, uri) = setup(&source);
+        let sites = locations(&uri, &source, "top-level");
+        assert_eq!(
+            features::definitions(&workspace, &uri, sites[0].range.start),
+            sites[..2]
+        );
+        assert_eq!(
+            features::definitions(&workspace, &uri, sites[2].range.start),
+            sites[2..3]
+        );
+        let (events, aux) = compile(&source);
+        let expected = if reversed {
+            vec!["EVENT:T1", "EVENT:T2", "EVENT:B", "EVENT:A", "EVENT:Other"]
+        } else {
+            vec!["EVENT:A", "EVENT:B", "EVENT:T1", "EVENT:T2", "EVENT:Other"]
+        };
+        assert_eq!(events, expected);
+        let (removed, removed_aux) =
+            compile(&source.replace(r"\LogHook{one}", r"\RemoveFromHook{one}[top-level]"));
+        assert_eq!(
+            removed,
+            expected
+                .iter()
+                .filter(|event| !event.starts_with("EVENT:T"))
+                .copied()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(removed_aux, aux);
+        let (ruled, ruled_aux) = compile(&source.replace(
+            r"\LogHook{one}",
+            r"\DeclareHookRule{one}{top-level}{before}{alpha}",
+        ));
+        assert_eq!(ruled, events);
+        assert_eq!(ruled_aux, aux);
+        let mut edits = features::rename(&workspace, &uri, sites[4].range.start, "fresh")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap()[&uri]
+            .clone();
+        assert_eq!(edits.len(), 2);
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+        let changed = workspace.documents[&uri]
+            .text
+            .clone()
+            .changed(
+                edits
+                    .into_iter()
+                    .map(|edit| TextDocumentContentChangeEvent {
+                        range: Some(edit.range),
+                        range_length: None,
+                        text: edit.new_text,
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        assert_eq!(
+            changed.source,
+            source
+                .replace(r"\label{top-level}", r"\label{fresh}")
+                .replace(r"\ref{top-level}", r"\ref{fresh}")
+        );
+        let (after, after_aux) = compile(&changed.source);
+        assert_eq!(after, events);
+        assert_eq!(aux, after_aux.replace("{fresh}", "{top-level}"));
     }
 }

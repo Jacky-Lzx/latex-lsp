@@ -83,6 +83,9 @@ fn optional(source: &str, after: usize) -> Option<(Span<usize>, usize, bool)> {
 struct Entry {
     hook: Option<String>,
     default_setting: bool,
+    // Only registration/removal fields address the kernel's separate
+    // document-level slot; rules and default settings use ordinary labels.
+    allows_document_slot: bool,
     name: String,
     span: Span<usize>,
     declaration: bool,
@@ -91,8 +94,12 @@ struct Entry {
 }
 
 impl Entry {
+    fn valid_label(&self) -> bool {
+        label_name(&self.name) || self.allows_document_slot && self.name == "top-level"
+    }
+
     fn contains(&self, at: usize, complete: bool) -> bool {
-        (!complete || self.complete && label_name(&self.name))
+        (!complete || self.complete && self.valid_label())
             && self.span.start <= at
             && at <= self.span.end
     }
@@ -184,7 +191,7 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
             after = end;
             let span = normalized(source, span);
             let name = &source[span.clone()];
-            if label_name(name) || name.is_empty() {
+            if label_name(name) || optional_label && name == "top-level" || name.is_empty() {
                 result.insert(
                     span.start,
                     Candidate {
@@ -194,6 +201,7 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
                             // does not itself register code or certify the
                             // execution context of any omitted label.
                             default_setting,
+                            allows_document_slot: optional_label,
                             name: name.into(),
                             span,
                             declaration,
@@ -247,7 +255,8 @@ impl Index {
             .flat_map(|(uri, entries)| entries.values().map(move |entry| (uri, entry)))
             .filter(move |(_, entry)| {
                 entry.complete
-                    && label_name(&entry.name)
+                    && entry.valid_label()
+                    && (entry.name != "top-level" || target.allows_document_slot)
                     && (target.hook.is_none() || entry.hook.is_none() || entry.hook == target.hook)
             })
     }
@@ -320,7 +329,11 @@ pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Hover> {
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::PlainText,
-            value: format!("{} (LaTeX hook code label)\n\n{}", target.name, scope),
+            value: if target.name == "top-level" {
+                format!("top-level (Document-level code slot)\n\n{scope}")
+            } else {
+                format!("{} (LaTeX hook code label)\n\n{}", target.name, scope)
+            },
         }),
         range: Some(Index::location(ws, uri, target).range),
     })
@@ -349,10 +362,17 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
             .map(|name| CompletionItem {
                 label: name.clone(),
                 kind: Some(CompletionItemKind::REFERENCE),
-                detail: Some(target.hook.as_ref().map_or_else(
-                    || "Code label across hooks".into(),
-                    |hook| format!("Code label in hook {hook}"),
-                )),
+                detail: Some(if name == "top-level" {
+                    target.hook.as_ref().map_or_else(
+                        || "Document-level code slot".into(),
+                        |hook| format!("Document-level code slot in hook {hook}"),
+                    )
+                } else {
+                    target.hook.as_ref().map_or_else(
+                        || "Code label across hooks".into(),
+                        |hook| format!("Code label in hook {hook}"),
+                    )
+                }),
                 filter_text: Some(name.clone()),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range: doc.text.range(target.span.start, target.span.end),

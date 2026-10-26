@@ -1272,6 +1272,143 @@ fn global_hook_rules_refresh_exact_namespaces_and_shared_providers_over_stdio() 
 }
 
 #[test]
+fn document_level_hook_slots_refresh_exact_ranges_and_shared_consumers_over_stdio() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let provider = main.join("hooks.tex").unwrap();
+        let other = main.join("unsaved.tex").unwrap();
+        let source = "% labels\r\n\\documentclass{article}\\input{hooks}\\begin{document}😀 \\remove{one}[top-level]\\label{safe}\\ref{safe}\\end{document}";
+        let definitions = "% provider\r\n\\NewHook{one}\\def\\remove{\\RemoveFromHook}\\AddToHook{one}[top-level]{First}\\AddToHook{one}[top-level]{Second}\\AddToHook{two}[top-other]{Other}";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(provider.to_file_path().unwrap(), definitions).unwrap();
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+        );
+        let text = Text::new(source.into());
+        let supplied = Text::new(definitions.into());
+        let at = source.find("top-level").unwrap();
+        let position = text.position(at + 2);
+        let expected: Vec<_> = definitions
+            .match_indices("[top-level]")
+            .map(|(at, _)| json!({"uri":provider,"range":supplied.range(at+1,at+10)}))
+            .collect();
+        assert_eq!(expected.len(), 2);
+        let query = |server: &mut Server| {
+            server.request(
+                2,
+                "textDocument/definition",
+                json!({"textDocument":{"uri":main},"position":position}),
+            )
+        };
+        assert_eq!(query(&mut server), json!(expected));
+        let mut all = expected.clone();
+        all.push(json!({"uri":main,"range":text.range(at,at+9)}));
+        assert_eq!(server.request(3,"textDocument/references",json!({"textDocument":{"uri":main},"position":position,"context":{"includeDeclaration":true}})),json!(all));
+        assert_eq!(server.request(4,"textDocument/references",json!({"textDocument":{"uri":main},"position":position,"context":{"includeDeclaration":false}})),json!([{"uri":main,"range":text.range(at,at+9)}]));
+        let hover = server.request(
+            5,
+            "textDocument/hover",
+            json!({"textDocument":{"uri":main},"position":position}),
+        );
+        assert_eq!(hover["range"], json!(text.range(at, at + 9)));
+        assert!(hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Document-level code slot"));
+        assert_eq!(
+            server.request(
+                6,
+                "textDocument/documentHighlight",
+                json!({"textDocument":{"uri":main},"position":position})
+            ),
+            json!([{"range":text.range(at,at+9),"kind":2}])
+        );
+        assert_eq!(
+            server.request(
+                20,
+                "textDocument/prepareRename",
+                json!({"textDocument":{"uri":main},"position":position})
+            ),
+            Value::Null
+        );
+        assert_eq!(
+            server.request(
+                21,
+                "textDocument/rename",
+                json!({"textDocument":{"uri":main},"position":position,"newName":"fresh"})
+            ),
+            Value::Null
+        );
+        let discarded =
+            definitions.replace(r"\def\remove{\RemoveFromHook}", r"\def\remove#1[#2]{}");
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":discarded}}));
+        assert_eq!(query(&mut server), json!([]));
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":13},"contentChanges":[{"text":definitions}]}));
+        assert_eq!(query(&mut server), json!(expected));
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":14},"contentChanges":[{"text":discarded}]}));
+        assert_eq!(query(&mut server), json!([]));
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        assert_eq!(query(&mut server), json!(expected));
+        let conflict = format!(r"\def\AddToHook#1[#2]#3{{}}{source}");
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":other,"languageId":"latex","version":8,"text":conflict}}),
+        );
+        assert_eq!(query(&mut server), json!([]));
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":other,"version":9},"contentChanges":[{"text":source}]}),
+        );
+        assert_eq!(query(&mut server), json!(expected));
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        assert_eq!(query(&mut server), json!(expected));
+        let changed = source.replace("[top-level]", "[toFAKE]");
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":changed}]}),
+        );
+        let items = server.request(
+            7,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":main},"position":position}),
+        );
+        let items = items.as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["label"], "top-level");
+        assert_eq!(
+            items[0]["textEdit"],
+            json!({"range":text.range(at,at+6),"newText":"top-level"})
+        );
+        let changed_text = Text::new(changed.clone());
+        let edits: Vec<_> = changed
+            .match_indices("safe")
+            .map(|(at, _)| json!({"range":changed_text.range(at,at+4),"newText":"fresh"}))
+            .collect();
+        let edit = if versioned {
+            json!({"documentChanges":[{"textDocument":{"uri":main,"version":7},"edits":edits}]})
+        } else {
+            json!({"changes":{main.as_str():edits}})
+        };
+        assert_eq!(server.request(8,"textDocument/rename",json!({"textDocument":{"uri":main},"position":changed_text.position(changed.rfind("safe").unwrap()),"newName":"fresh"})),edit);
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn hook_code_labels_refresh_exact_ranges_and_shared_consumers_over_stdio() {
     use latex_lsp::text::Text;
     for versioned in [false, true] {

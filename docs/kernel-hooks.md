@@ -94,7 +94,9 @@ cargo test --locked --test protocol hook_name_renames_keep_exact_namespaces
 
 `PushDefaultHookLabel{label}`／`SetDefaultHookLabel{label}` 的显式字面字段也支持定义、引用、悬停、高亮和补全。设置默认标签可影响不同 hook，因此从设置字段跳转会返回项目内各 hook 的同名显式注册，补全取各 hook 注册标签的并集；局部代码标签的引用也包含相应设置位置。设置本身作为引用，不是代码注册。支持可确认的静态命名和纯转发入口、边界注释、裸单 token、空与未闭合字段及完整后缀替换；接口被替换或成为数据时不生成该交互。
 
-这仍是结构导航，不模拟注册时间、移除或排序后的执行状态。省略标签、`.`／`./suffix` 的上下文身份、`*` 和 `top-level` 尚未认证，不生成相应注册导航。设置字段的支持不代表已经推断后续省略标签：内核的默认标签栈是全局的，设置跨 TeX 分组保留，包／类加载自动修改并恢复它，延迟代码中的设置在执行时才生效。代码标签改名尚未实现：全局默认规则可能连接多个 hook，局部字符串替换会改变排序，不能直接复用只读定义位置作为完整编辑集。原生回归覆盖代码块顺序、移除、实际事件、独立引用编辑前后的完整 AUX，以及四种全局规则编辑对照。把普通自定义 hook 改成 `??` 会与内核规则存储冲突，因此名称改名明确拒绝这个目标。
+显式注册与移除字段中的 `top-level` 支持独立的文档级代码槽导航、引用、悬停、高亮及补全。同一 hook 的多次注册共同返回，其他 hook 保持独立；排序规则和默认设置字段不关联或推荐该槽。内核在普通 hook 中将它放在排序代码之后，在反向 hook 中放在之前，普通排序规则不改变该槽，显式移除会清空它。保留槽不提供改名。
+
+这仍是结构导航，不模拟注册时间、移除或排序后的执行状态。省略标签、`.`／`./suffix` 的上下文身份和 `*` 尚未认证，不生成相应注册导航。设置字段的支持不代表已经推断后续省略标签：内核的默认标签栈是全局的，设置跨 TeX 分组保留，包／类加载自动修改并恢复它，延迟代码中的设置在执行时才生效。代码标签改名尚未实现：全局默认规则可能连接多个 hook，局部字符串替换会改变排序，不能直接复用只读定义位置作为完整编辑集。原生回归覆盖代码块顺序、移除、实际事件、独立引用编辑前后的完整 AUX，以及四种全局规则编辑对照。把普通自定义 hook 改成 `??` 会与内核规则存储冲突，因此名称改名明确拒绝这个目标。
 
 生命周期专项还用原生事件区分开始和结束阶段，检查接口被替换或调用成为 hook 数据时不注册代码。同名普通引用键的实际两处编辑不会改变代码标签，编辑后保留全部代码块的执行顺序和完整 AUX。未保存提供文件的底层接口替换、转发目标切换、共享消费者分歧与恢复均有精确 UTF-16／CRLF stdio 回归，普通标签编辑保留当前文档版本。
 
@@ -106,6 +108,7 @@ cargo test --locked --test protocol hook_name_renames_keep_exact_namespaces
 cargo test --locked --test hook_code_labels
 cargo test --locked --test hook_code_labels -- --ignored
 cargo test --locked --test protocol global_hook_rules_refresh
+cargo test --locked --test protocol document_level_hook_slots_refresh
 cargo test --locked --test protocol default_hook_label_settings_refresh
 cargo test --locked --test protocol hook_name_renames_keep_exact
 ```
