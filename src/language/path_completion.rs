@@ -455,7 +455,7 @@ fn complete_with_argument(
         if let Some(extension) = syntax::package_class_extension(command)
             .or_else(|| (command == "bibliographystyle").then_some("bst"))
         {
-            for (file, uri) in &workspace.distribution.files {
+            for (file, uri) in workspace.distribution.files.iter() {
                 let Some(stem) = file.strip_suffix(&format!(".{extension}")) else {
                     continue;
                 };

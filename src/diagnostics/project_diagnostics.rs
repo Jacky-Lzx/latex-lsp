@@ -95,7 +95,7 @@ pub(crate) fn duplicates(
                             || ![&definition.0, &other.0].iter().all(|uri| {
                                 workspace
                                     .documents
-                                    .get(*uri)
+                                    .get(uri)
                                     .is_some_and(|doc| doc.kind == DocumentKind::Bibtex)
                             })
                             || coexistence

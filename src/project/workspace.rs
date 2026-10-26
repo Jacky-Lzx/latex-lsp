@@ -260,7 +260,7 @@ pub struct Workspace {
     pub index_truncated: BTreeSet<String>,
     pub inlay_refresh: bool,
     pub lint_diagnostics: BTreeMap<Url, Vec<lsp_types::Diagnostic>>,
-    pub documents: BTreeMap<Url, Document>,
+    pub documents: super::documents::Documents,
     pub roots: BTreeSet<PathBuf>,
     pub snippets: bool,
     pub completion_resolve_documentation: bool,
@@ -691,7 +691,7 @@ impl Workspace {
         inputs
             .iter()
             .filter(|uri| {
-                self.documents.contains_key(*uri)
+                self.documents.contains_key(uri)
                     || binary.contains(*uri)
                     || uri.to_file_path().ok().is_some_and(|path| {
                         parent

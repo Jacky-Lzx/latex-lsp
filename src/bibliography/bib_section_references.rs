@@ -925,7 +925,7 @@ fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symb
             let mut choices = Vec::new();
             for source in project.scope.iter().filter(|source| {
                 ws.documents
-                    .get(*source)
+                    .get(source)
                     .is_some_and(|doc| doc.kind == DocumentKind::Latex)
             }) {
                 for span in lexical.references(source, true, &name) {
@@ -1712,7 +1712,7 @@ fn rename_edits(
         }
         for source in project.scope.iter().filter(|uri| {
             ws.documents
-                .get(*uri)
+                .get(uri)
                 .is_some_and(|doc| doc.kind == DocumentKind::Latex)
         }) {
             for span in symbol.lexical.references(source, true, name) {

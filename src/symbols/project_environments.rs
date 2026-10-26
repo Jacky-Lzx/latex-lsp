@@ -75,7 +75,7 @@ impl<'a> Walk<'a> {
                 .filter(|uri| {
                     workspace
                         .documents
-                        .get(*uri)
+                        .get(uri)
                         .is_some_and(|doc| doc.kind == DocumentKind::Latex)
                 })
                 .map(|uri| {

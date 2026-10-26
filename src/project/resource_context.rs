@@ -670,7 +670,7 @@ pub(crate) fn refresh(ws: &mut Workspace) -> BTreeSet<Url> {
     }
     let mut changed = BTreeSet::new();
     for (uri, mut readers) in analysis.readers {
-        let Some(doc) = ws.documents.get_mut(&uri) else {
+        let Some(doc) = ws.documents.get(&uri) else {
             continue;
         };
         if !crate::bibliography::bib_resources::changes_when_tokenized(&doc.text.source) {
@@ -701,6 +701,7 @@ pub(crate) fn refresh(ws: &mut Workspace) -> BTreeSet<Url> {
                 .control_operands
                 .extend(old.control_operands.iter().copied());
         }
+        let doc = ws.documents.get_mut(&uri).unwrap();
         doc.syntax = syntax;
         doc.semantic_full = Default::default();
         doc.extra_symbols = Default::default();

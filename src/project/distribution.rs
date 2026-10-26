@@ -6,12 +6,13 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 #[derive(Clone, Debug, Default)]
 pub struct Distribution {
-    pub(crate) files: BTreeMap<String, Url>,
+    pub(crate) files: Arc<BTreeMap<String, Url>>,
 }
 
 impl Distribution {
@@ -94,7 +95,9 @@ impl Distribution {
             }
             let path = root.join(&directory).join(line);
             if let Ok(uri) = Url::from_file_path(path) {
-                self.files.entry(line.into()).or_insert(uri);
+                Arc::make_mut(&mut self.files)
+                    .entry(line.into())
+                    .or_insert(uri);
             }
         }
     }

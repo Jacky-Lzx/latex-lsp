@@ -894,11 +894,13 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
             })
         && !native_operand()
     {
-        for doc in workspace
+        let changed: Vec<_> = workspace
             .documents
-            .values_mut()
-            .filter(|doc| doc.syntax.contextual_string_tests)
-        {
+            .iter()
+            .filter_map(|(uri, doc)| doc.syntax.contextual_string_tests.then_some(uri.clone()))
+            .collect();
+        for uri in changed {
+            let doc = workspace.documents.get_mut(&uri).unwrap();
             doc.syntax =
                 Syntax::latex_with_readers(&doc.text, &doc.syntax.contextual_resource_readers);
             doc.semantic_full = Default::default();
@@ -998,7 +1000,7 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
         }
         analysis.incomplete |= !analysis.missing.is_empty();
         for (uri, source) in sources {
-            let doc = workspace.documents.get_mut(&uri).unwrap();
+            let doc = workspace.documents.get(&uri).unwrap();
             let applied = Applied {
                 meanings: analysis.meanings.get(&uri).cloned(),
                 shapes: analysis.shapes.get(&uri).cloned(),
@@ -1085,6 +1087,7 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
                 }
             }
             syntax.contextual_string_tests = true;
+            let doc = workspace.documents.get_mut(&uri).unwrap();
             doc.syntax = syntax;
             doc.semantic_full = Default::default();
             doc.extra_symbols = Default::default();

@@ -146,7 +146,7 @@ impl Index {
             .filter(|uri| {
                 workspace
                     .documents
-                    .get(*uri)
+                    .get(uri)
                     .is_some_and(|doc| doc.kind == DocumentKind::Latex)
                     && workspace.settings(uri).diagnostics.math_delimiters
             })
