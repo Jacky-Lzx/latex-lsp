@@ -29,6 +29,14 @@ python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after tar
   --query hook-definition --output target/benchmarks/hook-label-pairs.json
 ```
 
+`--lifecycle-labels` 隐含 `--hook-labels`，把每节的注册改为 `AtBeginDocument[contribution]`，在主文档混合一个 `AddToHook{begindocument}[contribution]`，并加入结束阶段的 `AtEndDocument[contrast]` 干扰。定义／引用按 `begindocument` 组合身份独立计算，悬停也核对 hook 名称；补全必须排除结束阶段和其他 hook 的同前缀标签。仍逐项核验三档全部 17／129／513 个代码块及 18／133／521 项引用。两种脚本均记录 `lifecycle_labels`，比较要求选项一致。
+
+```sh
+python3 benchmarks/editing.py --lifecycle-labels --output target/benchmarks/lifecycle-labels.json
+python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after target/benchmarks/after \
+  --query hook-definition --lifecycle-labels --output target/benchmarks/lifecycle-pairs.json
+```
+
 ## 指标含义
 
 - `initialize`：初始化请求到响应，单独报告，不混入预热后的功能样本；`open` 包含打开两个缓冲区到有序屏障响应。
@@ -409,3 +417,48 @@ python3 benchmarks/rename_pairs.py \
 交互报告的 JS VM 校验通过，包含三档切换、p50／p95、全部指标及配对表。`html_preview` 仍返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`；未将该预览记为视觉验证通过。
 
 优化版最终冻结验证通过：322 个目标、3385 项通过、0 失败、499 项默认跳过，其中完整串行 stdio 为 409 项通过、29 项默认跳过。73 项含原生 hook 专项、严格全目标 Clippy、文档、格式及差异检查通过；481 份 Rust 源码集合和校验值均一致。普通／hook 会话 smoke 及四种配对查询模式通过；六份正式 JSON 与两版 release SHA 再次校验一致。
+
+## 2026-10-26 第十轮：生命周期标签与撤回的命令预筛选
+
+本轮增加 `--lifecycle-labels`，将逐节注册改成 `AtBeginDocument`，混合直接 `AddToHook{begindocument}`、结束阶段和其他 hook 的干扰。每次查询均核验完整定义／引用与精确补全范围。三档负载分别为 3／6／10 文件、16400／80871／290107 bytes；代码标签定义为 17／129／513 处，引用为 18／133／521 处。
+
+功能基线来自 `b244dcd`，保存为 `target/benchmarks/latex-lsp-round10-lifecycle`，SHA-256 为 `a4daa8704e0585d1cdc543b5c7df1afb274788d02d4b6cb5a43408704114bf0a`。完整会话每档启动 3 个进程，各预热 3 个周期、测量 20 个周期：
+
+| 操作 p50 · ms | small | medium | large |
+| --- | ---: | ---: | ---: |
+| 普通定义 | 3.943 | 17.414 | 68.709 |
+| 生命周期代码标签定义 | 2.429 | 10.562 | 41.865 |
+| 生命周期代码标签引用 | 2.516 | 10.771 | 41.736 |
+| 生命周期代码标签悬停 | 2.346 | 9.791 | 37.820 |
+| 生命周期代码标签补全 | 2.694 | 10.794 | 40.196 |
+| 自定义 hook 名称改名 | 2.766 | 11.860 | 46.330 |
+| 连续 8 次编辑到补全 | 9.618 | 27.542 | 72.698 |
+
+待优化点是 hook 字段读取器反复检查不相关命令的字面区域和转发身份。测试了三种候选：从当前签名预收集已确认的接口别名；在此基础上先排除不可能的内置名称；以及去掉别名集合，仅把已有的转发判断前移。全部保留后续命名调用、当前内核叶接口、数据角色和共享消费者检查。首版通过 80 项含原生 hook 专项和严格全目标 Clippy，但性能探测未显示收益。
+
+大型项目的探测均在同核的两个常驻进程中交替请求，2 轮、每轮预热 4 次、测量 15 次。每版每项查询有 30 个样本；以下是探测结果，不是完整双顺序性能认证：
+
+| 候选 | 查询 | 基线 p50 → 候选 p50 · ms | 配对比值中位数 |
+| --- | --- | ---: | ---: |
+| 预收集别名集合 | 普通定义 | 65.797 → 67.136 | 0.98× |
+| 别名集合加名称预筛选 | 普通定义 | 66.934 → 68.001 | 0.98× |
+| 别名集合加名称预筛选 | 代码标签定义 | 40.201 → 40.639 | 0.99× |
+| 直接前移转发判断 | 普通定义 | 66.673 → 67.782 | 0.99× |
+| 直接前移转发判断 | 代码标签定义 | 40.681 → 42.288 | 0.97× |
+
+这些小规模探测不足以证明普遍退化，但没有达到保留优化的标准；三种候选均已撤回，Rust 源码与已完成整仓验证的功能提交完全一致。没有新增缓存，也不宣称本轮查询加速。下一轮继续按实际功能负载测量，优先关注重复签名构造，而非增加未证实有效的筛选层。CPU 时钟精度为 10 ms，不据单个样本判断微小变化。
+
+六份原始报告合计 141993 bytes，5178 个墙钟样本的统计量、fixture、CPU 均值及脚本／二进制 SHA 已复算：
+
+- [完整生命周期会话](../benchmarks/results/2026-10-26/round10-lifecycle-before.json)
+- [别名集合：普通定义](../benchmarks/results/2026-10-26/round10-filter-definition-rejected.json)
+- [名称预筛选：普通定义](../benchmarks/results/2026-10-26/round10-uppercase-definition-rejected.json)、[代码标签定义](../benchmarks/results/2026-10-26/round10-uppercase-label-rejected.json)
+- [前移判断：普通定义](../benchmarks/results/2026-10-26/round10-early-meaning-definition-rejected.json)、[代码标签定义](../benchmarks/results/2026-10-26/round10-early-meaning-label-rejected.json)
+
+```sh
+python3 benchmarks/editing.py --server target/benchmarks/latex-lsp-round10-lifecycle \
+  --lifecycle-labels --hook-wrappers --hook-environments --hook-interfaces --hook-renames \
+  --runs 3 --iterations 20 --warmup 3 --output target/benchmarks/round10-lifecycle.json
+```
+
+功能版冻结回归为 322 个目标、3391 项通过、0 失败、501 项默认跳过，其中完整串行 stdio 为 410 项通过、29 项默认跳过。80 项含原生 hook 专项、九组实际 release 原生／精确导航审核、严格全目标 Clippy、文档、格式及差异检查通过。测量结束后已恢复功能版 release；不保留失败候选的源码。

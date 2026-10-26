@@ -31,7 +31,7 @@ def replay(before, after, scale, args, cpu):
         with tempfile.TemporaryDirectory(prefix="latex-lsp-rename-pairs-") as directory, ExitStack() as stack:
             root = Path(directory)
             launchers = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="latex-lsp-rename-launch-")))
-            metadata = editing.fixture(root, scale, args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces, args.hook_labels)
+            metadata = editing.fixture(root, scale, args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces, args.hook_labels, args.lifecycle_labels)
             main, chapter = root / "main.tex", root / "chapter0.tex"
             source = chapter.read_text()
             params = {"textDocument": {"uri": chapter.as_uri()},
@@ -54,7 +54,7 @@ def replay(before, after, scale, args, cpu):
             if args.query == "hook-definition":
                 expected_definition = editing.hook_label_locations({
                     path.as_uri(): path.read_text() for path in root.glob("*.tex")
-                })
+                }, lifecycle=args.lifecycle_labels)
             chapters, sections = editing.SCALES[scale]
             expected_files = {(root / f"chapter{i}.tex").as_uri() for i in range(chapters)}
             expected_edits = chapters * (sections + 1) + 1
@@ -147,8 +147,9 @@ def main():
     parser.add_argument("--hook-interfaces", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--hook-labels", action="store_true")
+    parser.add_argument("--lifecycle-labels", action="store_true")
     args = parser.parse_args()
-    args.hook_labels = args.hook_labels or args.query == "hook-definition"
+    args.hook_labels = args.hook_labels or args.query == "hook-definition" or args.lifecycle_labels
     if args.iterations < 1 or args.runs < 1 or args.warmup < 0 or args.timeout <= 0:
         parser.error("iterations/runs/timeout must be positive; warmup must be nonnegative")
     affinity = os.sched_getaffinity(0) if hasattr(os, "sched_getaffinity") else set()
@@ -170,6 +171,7 @@ def main():
                        "hooks": args.hooks, "hook_wrappers": args.hook_wrappers,
                        "hook_environments": args.hook_environments,
                        "hook_interfaces": args.hook_interfaces, "hook_labels": args.hook_labels,
+                       "lifecycle_labels": args.lifecycle_labels,
                        "query": args.query},
         "scenarios": {},
     }

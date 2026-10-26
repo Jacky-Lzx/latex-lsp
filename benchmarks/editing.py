@@ -105,8 +105,9 @@ def position(source, offset):
             "character": len(prefix.rsplit("\n", 1)[-1].encode("utf-16-le")) // 2}
 
 
-def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_labels=False):
+def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_labels=False, lifecycle_labels=False):
     chapters, sections = SCALES[scale]
+    label_hook = "begindocument" if lifecycle_labels else "benchmark"
     main = ("\\documentclass{article}\n\\usepackage{amsmath,biblatex}\n"
             "\\addbibresource{references.bib}\n\\newcommand{\\projectterm}[1]{\\textbf{#1}}\n"
             "\\begin{document}\n")
@@ -134,10 +135,14 @@ def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=Fal
         ))
     if hook_labels:
         main = main.replace("\\begin{document}\n", (
-            "\\AddToHook{benchmark}[contribution]{\\typeout{Contribution}}\n"
+            f"\\AddToHook{{{label_hook}}}[contribution]{{\\typeout{{Contribution}}}}\n"
             "\\NewHook{benchmark.other}\n"
             "\\AddToHook{benchmark.other}[contrast]{\\typeout{Other}}\n"
             "\\begin{document}\n"
+        ))
+    if lifecycle_labels:
+        main = main.replace("\\begin{document}\n", (
+            "\\AtEndDocument[contrast]{\\typeout{End}}\n\\begin{document}\n"
         ))
     for chapter in range(chapters):
         source = "% !TeX root = main.tex\n"
@@ -153,7 +158,9 @@ def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=Fal
                 "Each observation includes an independent reference measurement.\n"
             )
             if hook_labels:
-                source += "\\AddToHook{benchmark}[contribution]{\\typeout{Contribution}}\n"
+                source += ("\\AtBeginDocument[contribution]{\\typeout{Contribution}}\n"
+                           if lifecycle_labels else
+                           "\\AddToHook{benchmark}[contribution]{\\typeout{Contribution}}\n")
             if hook_wrappers:
                 source += "\\benchforward{Literal data}\n"
             if hook_environments:
@@ -164,8 +171,8 @@ def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=Fal
         source += ("\\ref{sec:0:0}\n\\cite{paper0}\n\\projectterm{value}\n"
                    "\\textbf{probe}\n中文 😀 EDIT-HERE\nREFERENCE-HERE\n")
         if hook_labels:
-            source += ("\\RemoveFromHook{benchmark}[contribution]\n"
-                       "\\RemoveFromHook{benchmark}[conTRIB]\n")
+            source += (f"\\RemoveFromHook{{{label_hook}}}[contribution]\n"
+                       f"\\RemoveFromHook{{{label_hook}}}[conTRIB]\n")
         (root / f"chapter{chapter}.tex").write_text(source)
         main += f"\\input{{chapter{chapter}}}\n"
     main += "\\printbibliography\n\\end{document}\n"
@@ -194,19 +201,24 @@ def hook_name_edits(sources, new_name="benchmark.renamed"):
     }
 
 
-def hook_label_locations(sources, declarations_only=True):
+def hook_label_locations(sources, declarations_only=True, lifecycle=False):
     """Exact literal code-label ranges, independently of the server index."""
     commands = "AddToHook" if declarations_only else "(?:AddToHook|RemoveFromHook)"
-    pattern = re.compile(r"\\" + commands + r"\{benchmark\}\[(contribution)\]")
+    hook = "begindocument" if lifecycle else "benchmark"
+    patterns = [re.compile(r"\\" + commands + r"\{" + hook + r"\}\[(contribution)\]")]
+    if lifecycle:
+        patterns.append(re.compile(r"\\AtBeginDocument\[(contribution)\]"))
     return [{"uri": uri, "range": {"start": position(source, match.start(1)),
                                   "end": position(source, match.end(1))}}
-            for uri, source in sorted(sources.items()) for match in pattern.finditer(source)]
+            for uri, source in sorted(sources.items())
+            for match in sorted((match for pattern in patterns for match in pattern.finditer(source)),
+                                key=lambda match: match.start(1))]
 
 
-def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_renames=False, hook_labels=False):
+def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_renames=False, hook_labels=False, lifecycle_labels=False):
     with tempfile.TemporaryDirectory(prefix="latex-lsp-benchmark-") as directory:
         root = Path(directory)
-        metadata = fixture(root, scale, hooks, hook_wrappers, hook_environments, hook_interfaces, hook_labels)
+        metadata = fixture(root, scale, hooks, hook_wrappers, hook_environments, hook_interfaces, hook_labels, lifecycle_labels)
         server = Server(binary, root, timeout)
         sources = {p.as_uri(): p.read_text() for p in root.glob("*.tex")}
         versions = {uri: 1 for uri in sources}
@@ -329,13 +341,15 @@ def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hoo
                 if hook_labels:
                     params = at("[contribution]", 4)
                     definitions = query("definition.hook_label", "textDocument/definition", params)
-                    assert definitions == hook_label_locations(sources), definitions
+                    assert definitions == hook_label_locations(sources, lifecycle=lifecycle_labels), definitions
                     references = query("references.hook_label", "textDocument/references", {
                         **params, "context": {"includeDeclaration": True},
                     })
-                    assert references == hook_label_locations(sources, False), references
+                    assert references == hook_label_locations(sources, False, lifecycle_labels), references
                     hover = query("hover.hook_label", "textDocument/hover", params)
                     assert "contribution" in hover["contents"]["value"], hover
+                    label_hook = "begindocument" if lifecycle_labels else "benchmark"
+                    assert f"Hook: {label_hook}" in hover["contents"]["value"], hover
                     items = query("completion.hook_label", "textDocument/completion", at("[conTRIB]", 4))
                     assert len(items) == 1 and items[0]["label"] == "contribution", items
                     start = sources[uri].rindex("[conTRIB]") + 1
@@ -426,7 +440,9 @@ def main():
     parser.add_argument("--hook-interfaces", action="store_true", help="directly call an environment-generated control forwarding a hook once per section (implies --hooks)")
     parser.add_argument("--hook-renames", action="store_true", help="measure and verify every custom hook name edit (implies --hooks)")
     parser.add_argument("--hook-labels", action="store_true", help="verify explicit hook code-label definitions, references, hover, and suffix completion (implies --hooks)")
+    parser.add_argument("--lifecycle-labels", action="store_true", help="mix AtBeginDocument code labels with direct registration and AtEndDocument interference (implies --hook-labels)")
     args = parser.parse_args()
+    args.hook_labels = args.hook_labels or args.lifecycle_labels
     args.hooks = args.hooks or args.hook_wrappers or args.hook_environments or args.hook_interfaces or args.hook_renames or args.hook_labels
     if args.iterations < 1 or args.runs < 1 or args.warmup < 0 or args.timeout <= 0:
         parser.error("iterations/runs/timeout must be positive; warmup must be nonnegative")
@@ -441,7 +457,7 @@ def main():
                       "hooks": args.hooks, "hook_wrappers": args.hook_wrappers,
                       "hook_environments": args.hook_environments,
                       "hook_interfaces": args.hook_interfaces, "hook_renames": args.hook_renames,
-                      "hook_labels": args.hook_labels},
+                      "hook_labels": args.hook_labels, "lifecycle_labels": args.lifecycle_labels},
         "scenarios": {}}
     if baseline and (baseline["parameters"] != output["parameters"]
                      or baseline["workload_sha256"] != output["workload_sha256"]):
@@ -451,7 +467,7 @@ def main():
         for run in range(args.runs):
             print(f"{scale}: run {run + 1}/{args.runs}", file=sys.stderr, flush=True)
             metadata = session(binary, scale, args.iterations, args.warmup, args.timeout,
-                               lambda name, ms: samples.setdefault(name, []).append(ms), args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces, args.hook_renames, args.hook_labels)
+                               lambda name, ms: samples.setdefault(name, []).append(ms), args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces, args.hook_renames, args.hook_labels, args.lifecycle_labels)
         metrics = {name: summary(values) for name, values in samples.items()}
         output["scenarios"][scale] = {"fixture": metadata, "metrics": metrics, "samples_ms": samples}
         if baseline and baseline["scenarios"][scale]["fixture"] != metadata:
