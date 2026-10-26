@@ -6027,6 +6027,8 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 server.until(|item| {
                     item["method"] == "textDocument/publishDiagnostics"
                         && item["params"]["uri"] == refs.as_str()
+                        // Earlier edits can leave queued warnings with the same count.
+                        && item["params"]["version"] == 7 + stage
                         && item["params"]["diagnostics"]
                             .as_array()
                             .is_some_and(|items| matches(items))
