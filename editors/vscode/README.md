@@ -10,7 +10,7 @@ The extension is currently packaged from source. Install the language server sep
 cargo install --path . --locked
 ```
 
-Then build the extension with Node.js 22 or later:
+Then build the extension with Node.js 22.13 or later:
 
 ```sh
 cd editors/vscode
@@ -60,13 +60,21 @@ The command palette provides:
 | TeXquill: Rebuild | Force a rebuild. |
 | TeXquill: Cancel Build | Cancel the current document's build, or all builds when no editor is active. |
 | TeXquill: Show Build Status | Write the current project's status to the output panel. |
-| TeXquill: Open PDF | Open a successfully built PDF using VS Code's registered PDF handler. |
+| TeXquill: Open PDF | Open a successfully built PDF beside the source in the built-in viewer, keeping focus in the source editor. |
 | TeXquill: Restart Server | Stop the old server, reconnect, and resynchronize open documents. |
 | TeXquill: Show Output | Show server logs and build results. |
 
 Document code lenses also trigger builds. Build progress uses VS Code's native progress UI; start and completion details appear in the "TeXquill" output panel, and failed builds produce a notification. The extension does not save files automatically; the server rejects builds with unsaved dependencies.
 
-The extension provides an Open PDF action, but no embedded PDF viewer or SyncTeX navigation yet. Running it alongside other LaTeX extensions can produce duplicate completion, diagnostics, or builds. Use one language service and automatic build workflow per workspace.
+## PDF preview
+
+After a successful build, run **TeXquill: Open PDF** from the source editor. The built-in, offline PDF.js viewer opens beside the source without taking keyboard focus. Repeating the command reuses that PDF's preview. No separate PDF viewer extension is required.
+
+The toolbar supports page navigation, zoom, fit width, fit page, and manual reload. Text can be selected and copied. Successful TeXquill builds refresh open previews while retaining their page, zoom, and relative scroll position; enable `texquill.settings.build.onSave` for save-triggered builds and refreshes. Failed or stale builds leave the displayed PDF unchanged. Refreshing never activates the preview, including when you switch editors during a build. Clicking the preview still focuses it normally.
+
+Preview tabs and their reading state can be restored when VS Code reloads. The viewer does not yet provide document search, a table of contents, printing, annotation editing, or SyncTeX navigation. PDF scripting and external links are disabled. PDF.js and its worker, character maps, fonts, and decoder resources ship in the VSIX with their license; opening a preview does not require a CDN or a local HTTP server.
+
+Running TeXquill alongside other LaTeX language services can produce duplicate completion, diagnostics, or builds. Use one language service and automatic build workflow per workspace.
 
 ## Development and validation
 
@@ -76,7 +84,7 @@ Run `cargo build --release --locked` in the repository root, then open this dire
 code editors/vscode
 ```
 
-Run `npm ci`, press F5 to launch an Extension Development Host, set `serverPath` in the new window, and open a test project. `.vscode/launch.json` compiles TypeScript before launch.
+Run `npm ci`, press F5 to launch an Extension Development Host, set `serverPath` in the new window, and open a test project. `.vscode/launch.json` compiles TypeScript and copies the PDF viewer assets before launch.
 
 ```sh
 npm run check
@@ -84,13 +92,15 @@ npm test
 npm run package
 ```
 
-By default, `npm test` downloads stable VS Code and runs real host tests with isolated temporary user data, extension directories, and LaTeX projects. It requires pdfLaTeX and a graphical environment. Tests cover cross-file navigation and rename, untitled completion, BibTeX, code lens builds, opening PDFs, rebuilds, live settings, build on save, cancellation and child process cleanup, diagnostics, unsaved content synchronization after restart, and reconnection after correcting an invalid executable path. On headless Linux, use `xvfb-run -a npm test`.
+By default, `npm test` downloads stable VS Code and runs real host tests with isolated temporary user data, extension directories, and LaTeX projects. It requires pdfLaTeX and a graphical environment. Tests cover cross-file navigation and rename, untitled completion, BibTeX, code lens builds, actual built-in PDF rendering, preview focus, rebuild/save refreshes, rapid reloads, hidden tabs, invalid PDF recovery, live settings, build on save, cancellation and child process cleanup, diagnostics, unsaved content synchronization after restart, and reconnection after correcting an invalid executable path. On headless Linux, use `xvfb-run -a npm test`.
 
 Use `VSCODE_EXECUTABLE_PATH` to select an installed VS Code executable and `TEXQUILL_TEST_SERVER` to select the server. On macOS:
 
 ```sh
 VSCODE_EXECUTABLE_PATH='/Applications/Visual Studio Code.app/Contents/MacOS/Code' npm test
 ```
+
+`npm run compile` also copies the viewer assets and required PDF.js distribution files into `dist/preview/assets`; the Rust build is independent.
 
 The extension and server can have separate release versions. When changing custom commands or the configuration protocol, update both sides in the same commit and run the host tests.
 

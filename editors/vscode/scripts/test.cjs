@@ -1,7 +1,19 @@
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { runTests } = require('@vscode/test-electron');
+const { downloadAndUnzipVSCode, runTests } = require('@vscode/test-electron');
+
+async function executablePath() {
+  if (process.env.VSCODE_EXECUTABLE_PATH) return process.env.VSCODE_EXECUTABLE_PATH;
+  const downloaded = await downloadAndUnzipVSCode();
+  // Newer macOS releases renamed Electron to Code. Older test-electron
+  // versions still return the former name after downloading the application.
+  if (process.platform === 'darwin') {
+    const renamed = path.join(path.dirname(downloaded), 'Code');
+    try { await fs.access(renamed); return renamed; } catch { /* Older release. */ }
+  }
+  return downloaded;
+}
 
 async function main() {
   const extensionDevelopmentPath = path.resolve(__dirname, '..');
@@ -20,6 +32,8 @@ async function main() {
       '\\begin{document}',
       '\\input{chapter}',
       'See \\ref{sec:intro}.',
+      '\\newpage',
+      'Second page.',
       '\\end{document}',
       '',
     ].join('\n'));
@@ -38,14 +52,19 @@ async function main() {
     // Codex/T3 may itself run under Electron's Node mode. A child VS Code must
     // launch as a GUI application, not inherit that mode.
     delete process.env.ELECTRON_RUN_AS_NODE;
-    await runTests({
+    const options = {
       extensionDevelopmentPath,
       extensionTestsPath: path.join(extensionDevelopmentPath, 'dist/test/integration.js'),
-      vscodeExecutablePath: process.env.VSCODE_EXECUTABLE_PATH,
-      extensionTestsEnv: { TEXQUILL_TEST_WORKSPACE: workspace, TEXQUILL_TEST_NODE: process.execPath },
+      vscodeExecutablePath: await executablePath(),
+      extensionTestsEnv: {
+        TEXQUILL_TEST_WORKSPACE: workspace,
+        TEXQUILL_TEST_NODE: process.execPath,
+      },
       launchArgs: [workspace, '--user-data-dir', userData, '--extensions-dir', path.join(temporaryRoot, 'extensions'),
-        '--disable-extensions', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust', '--no-sandbox'],
-    });
+        '--disable-extensions',
+        '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust', '--no-sandbox'],
+    };
+    await runTests(options);
   } finally {
     await fs.rm(temporaryRoot, { recursive: true, force: true });
   }

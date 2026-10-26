@@ -2,6 +2,7 @@
 .gitignore
 .vscode-test/**
 src/**
+media/**
 scripts/**
 tsconfig.json
 package-lock.json

@@ -2,6 +2,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { pdfViewType, type PdfPreviewProvider } from '../preview/provider';
 
 async function eventually<T>(description: string, operation: () => Thenable<T> | T, accepts: (value: T) => boolean): Promise<T> {
   const deadline = Date.now() + 30_000;
@@ -14,7 +15,7 @@ async function eventually<T>(description: string, operation: () => Thenable<T> |
     } catch (error) { last = error; }
     await new Promise(resolve => setTimeout(resolve, 150));
   }
-  throw new Error(`Timed out: ${description}; last result: ${String(last)}`);
+  throw new Error(`Timed out: ${description}; last result: ${JSON.stringify(last)}`);
 }
 
 type Status = { status: string; buildId?: number; pdfUri?: string; stale?: boolean };
@@ -25,9 +26,9 @@ export async function run(): Promise<void> {
   const chapterUri = vscode.Uri.file(path.join(root, 'chapter.tex'));
   const document = await vscode.workspace.openTextDocument(mainUri);
   await vscode.window.showTextDocument(document);
-  const extension = vscode.extensions.getExtension('Jacky-Lzx.texquill');
+  const extension = vscode.extensions.getExtension<{ previews: PdfPreviewProvider }>('Jacky-Lzx.texquill');
   assert.ok(extension, 'development extension is installed');
-  await extension.activate();
+  const { previews } = await extension.activate();
   const status = () => vscode.commands.executeCommand<Status>('texquill.buildStatus', mainUri);
   assert.equal((await status())?.status, 'idle');
   console.log('PASS activation and command registration');
@@ -79,7 +80,16 @@ export async function run(): Promise<void> {
   assert.ok(symbols!.some(symbol => symbol.name.includes('example')));
   console.log('PASS BibTeX language activation');
 
-  await vscode.window.showTextDocument(document);
+  const sourceEditor = await vscode.window.showTextDocument(document);
+  const sourceGroup = vscode.window.tabGroups.activeTabGroup;
+  const sourceSelection = new vscode.Selection(reference, reference);
+  sourceEditor.selection = sourceSelection;
+  const assertSourceFocus = (selection: vscode.Selection) => {
+    assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), mainUri.toString(),
+      'focus remains in the TeX editor');
+    assert.equal(vscode.window.tabGroups.activeTabGroup, sourceGroup);
+    assert.deepEqual(vscode.window.activeTextEditor?.selection, selection, 'TeX cursor is preserved');
+  };
   const lenses = await eventually('build CodeLens',
     () => vscode.commands.executeCommand<vscode.CodeLens[]>('vscode.executeCodeLensProvider', mainUri),
     result => !!result?.some(lens => lens.command?.command === 'latex.build'));
@@ -88,19 +98,35 @@ export async function run(): Promise<void> {
   const first = await eventually('CodeLens build completes', status, result => result?.status === 'success');
   assert.ok(first!.pdfUri);
   assert.ok((await fs.stat(vscode.Uri.parse(first!.pdfUri!).fsPath)).size > 0);
+  assertSourceFocus(sourceSelection);
   console.log('PASS CodeLens executes server command and real pdfLaTeX build');
+  const pdfUri = vscode.Uri.parse(first!.pdfUri!);
   await vscode.commands.executeCommand('texquill.openPdf', mainUri);
-  assert.ok(vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => {
-    const input = tab.input;
-    return (input instanceof vscode.TabInputText || input instanceof vscode.TabInputCustom)
-      && input.uri.toString() === first!.pdfUri;
-  }), 'Open PDF opens the compiled artifact in VS Code');
-  console.log('PASS Open PDF command');
+  const preview = () => previews.getStatus(pdfUri);
+  const loaded = await eventually('built-in PDF viewer renders actual pages', preview,
+    result => result?.status === 'ready' && result.pages === 2 && result.renderedPages.includes(1));
+  const isPdf = (tab: vscode.Tab) => tab.input instanceof vscode.TabInputWebview
+    && tab.input.viewType.endsWith(pdfViewType);
+  const pdfGroup = vscode.window.tabGroups.all.find(group => group.tabs.some(isPdf));
+  assert.ok(pdfGroup, `Open PDF uses the built-in webview: ${JSON.stringify(vscode.window.tabGroups.all.flatMap(group => group.tabs).map(tab => ({ label: tab.label, input: tab.input })))}`);
+  assert.ok(pdfGroup.viewColumn > sourceGroup.viewColumn, 'PDF opens beside the TeX editor');
+  assert.equal(pdfGroup.tabs.find(isPdf)!.isPreview, false, 'PDF stays open as a pinned tab');
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assertSourceFocus(sourceSelection);
+  const groupCount = vscode.window.tabGroups.all.length;
+  await vscode.commands.executeCommand('texquill.openPdf');
+  assert.equal(vscode.window.tabGroups.all.length, groupCount, 'reopening PDF reuses the side group');
+  assert.equal(vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(isPdf).length, 1);
+  assertSourceFocus(sourceSelection);
+  console.log('PASS built-in PDF rendering beside TeX without moving focus or duplicating tabs');
 
   await vscode.commands.executeCommand('texquill.rebuild', mainUri);
   const second = await eventually('rebuild completes', status,
     result => result?.status === 'success' && result.buildId !== first!.buildId);
   assert.ok(second);
+  const rebuilt = await eventually('PDF refreshes after rebuild', preview,
+    result => result?.status === 'ready' && result.revision > loaded!.revision && result.renderedPages.length > 0);
+  assertSourceFocus(sourceSelection);
   console.log('PASS rebuild command');
 
   const config = vscode.workspace.getConfiguration('texquill');
@@ -113,10 +139,73 @@ export async function run(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 500));
   const editor = await vscode.window.showTextDocument(document);
   await editor.edit(edit => edit.insert(new vscode.Position(3, 0), 'Updated. '));
+  const savedSelection = editor.selection;
   await document.save();
   await eventually('save triggers build after live configuration', status,
     result => result?.status === 'success' && result.buildId !== second!.buildId);
-  console.log('PASS live configuration and save-triggered compilation');
+  await eventually('PDF refreshes after save-triggered compilation', preview,
+    result => result?.status === 'ready' && result.revision > rebuilt!.revision && result.renderedPages.length > 0);
+  assertSourceFocus(savedSelection);
+  assert.ok(pdfGroup.tabs.some(isPdf), 'PDF remains open after build on save');
+  console.log('PASS live configuration and save-triggered compilation without moving TeX focus');
+
+  const previous = await status();
+  await previews.open(pdfUri, false);
+  await vscode.commands.executeCommand('texquill.rebuild', mainUri);
+  const previousRevision = preview()!.revision;
+  await eventually('rebuild while reading the PDF', status,
+    result => result?.status === 'success' && result.buildId !== previous!.buildId);
+  await eventually('PDF refresh while its editor is focused', preview,
+    result => result?.status === 'ready' && result.revision > previousRevision);
+  assert.equal(vscode.window.tabGroups.activeTabGroup, pdfGroup,
+    'a PDF that was already focused stays focused through a rebuild');
+  await vscode.window.showTextDocument(document, { viewColumn: sourceGroup.viewColumn });
+  console.log('PASS an intentionally focused PDF stays focused on rebuild');
+
+  const revision = preview()!.revision;
+  for (let index = 0; index < 3; index++) previews.refresh(pdfUri);
+  await eventually('only the newest rapid PDF reload is displayed', preview,
+    result => result?.status === 'ready' && result.revision === revision + 3 && result.pages === 2);
+  assertSourceFocus(savedSelection);
+  console.log('PASS consecutive PDF reloads settle on the newest document');
+
+  await vscode.window.showTextDocument(bib, { viewColumn: pdfGroup.viewColumn, preserveFocus: true, preview: false });
+  await eventually('PDF is hidden behind another tab', () => pdfGroup.activeTab, tab => !!tab && !isPdf(tab));
+  const hiddenRevision = preview()!.revision;
+  previews.refresh(pdfUri);
+  assert.equal(preview()!.revision, hiddenRevision + 1);
+  assert.equal(pdfGroup.activeTab!.label, path.basename(bib.uri.path), 'refresh does not reveal a hidden PDF');
+  assertSourceFocus(savedSelection);
+  await previews.open(pdfUri);
+  await eventually('hidden refresh is delivered when the PDF is shown', preview,
+    result => result?.status === 'ready' && result.revision === hiddenRevision + 1);
+  assertSourceFocus(savedSelection);
+  console.log('PASS hidden PDF refresh is deferred without changing tabs or focus');
+
+  const validPdf = await fs.readFile(pdfUri.fsPath);
+  try {
+    await fs.writeFile(pdfUri.fsPath, 'This is not a PDF.');
+    previews.refresh(pdfUri);
+    await eventually('invalid PDF reports a recoverable error', preview,
+      result => result?.status === 'error' && !!result.error);
+    assertSourceFocus(savedSelection);
+  } finally {
+    await fs.writeFile(pdfUri.fsPath, validPdf);
+  }
+  previews.refresh(pdfUri);
+  await eventually('valid PDF recovers after a load error', preview,
+    result => result?.status === 'ready' && result.pages === 2 && !result.error);
+  assertSourceFocus(savedSelection);
+  console.log('PASS invalid PDF error and recovery without moving source focus');
+
+  await vscode.window.tabGroups.close(pdfGroup.tabs.find(isPdf)!);
+  assert.equal(preview(), undefined, 'closing the preview releases its session');
+  await Promise.all([previews.open(pdfUri), previews.open(pdfUri)]);
+  await eventually('closed PDF can be reopened', preview, result => result?.status === 'ready');
+  assert.equal(vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(isPdf).length, 1,
+    'concurrent open requests reuse one preview');
+  assertSourceFocus(savedSelection);
+  console.log('PASS closing and concurrently reopening a PDF');
 
   await config.update('settings', {
     distribution: { enabled: false },
@@ -132,7 +221,8 @@ export async function run(): Promise<void> {
     try { process.kill(compilerPid, 0); return false; }
     catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
   }, exited => exited);
-  console.log('PASS cancellation terminates the compiler subprocess');
+  assert.equal(preview()!.revision, 1, 'cancelled builds do not refresh the PDF');
+  console.log('PASS cancellation terminates the compiler subprocess without refreshing the PDF');
 
   await editor.edit(edit => edit.insert(new vscode.Position(3, 0), '\\ref{missing-label} '));
   await eventually('pull diagnostics update after editing',

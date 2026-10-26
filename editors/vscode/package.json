@@ -22,7 +22,7 @@
     },
     "virtualWorkspaces": { "supported": false }
   },
-  "activationEvents": ["onLanguage:latex", "onLanguage:tex", "onLanguage:plaintex", "onLanguage:bibtex", "onLanguage:bib", "onLanguage:bst", "onLanguage:bibtex-style"],
+  "activationEvents": ["onLanguage:latex", "onLanguage:tex", "onLanguage:plaintex", "onLanguage:bibtex", "onLanguage:bib", "onLanguage:bst", "onLanguage:bibtex-style", "onWebviewPanel:texquill.pdfPreview"],
   "contributes": {
     "languages": [
       { "id": "bst", "aliases": ["BibTeX Style", "bst"], "extensions": [".bst"] }
@@ -78,8 +78,8 @@
     ]
   },
   "scripts": {
-    "compile": "tsc -p .",
-    "check": "tsc -p . --noEmit",
+    "compile": "tsc -p . && node scripts/build-preview.cjs",
+    "check": "tsc -p . --noEmit && node --check media/preview/main.mjs && node --check scripts/build-preview.cjs",
     "watch": "tsc -p . --watch",
     "vscode:prepublish": "npm run compile",
     "package": "vsce package --out texquill.vsix",
@@ -94,6 +94,7 @@
     "@types/vscode": "1.85.0",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.6.0",
+    "pdfjs-dist": "6.4.299",
     "typescript": "^5.9.3"
   }
 }

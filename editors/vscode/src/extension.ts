@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { LanguageClient, TransportKind } from 'vscode-languageclient/node';
+import { PdfPreviewProvider } from './preview/provider';
 
 const languages = ['latex', 'tex', 'plaintex', 'bibtex', 'bib', 'bst', 'bibtex-style'];
 type BuildStatus = {
@@ -14,7 +15,7 @@ class LatexExtension implements vscode.Disposable {
   private pending: Promise<void> = Promise.resolve();
   private disposed = false;
 
-  constructor(private readonly output: vscode.OutputChannel) {}
+  constructor(private readonly output: vscode.OutputChannel, private readonly previews: PdfPreviewProvider) {}
 
   // Serialize restarts, settings updates, and shutdown so clients never overlap.
   private enqueue(operation: () => Promise<void>): Promise<void> {
@@ -49,6 +50,9 @@ class LatexExtension implements vscode.Disposable {
       });
       client.onNotification('latex/buildFinished', (result: BuildStatus) => {
         this.output.appendLine(`Build finished: ${JSON.stringify(result, null, 2)}`);
+        if (result.status === 'success' && !result.stale && result.pdfUri) {
+          this.previews.refresh(vscode.Uri.parse(result.pdfUri, true));
+        }
         if (!result.stale && (result.status === 'error' || result.status === 'timeout')) {
           void vscode.window.showErrorMessage(`TeXquill: ${result.message ?? result.status}`);
         }
@@ -116,11 +120,12 @@ function documentUri(argument?: vscode.Uri): string {
   return uri.toString();
 }
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+export async function activate(context: vscode.ExtensionContext): Promise<{ previews: PdfPreviewProvider }> {
   const output = vscode.window.createOutputChannel('TeXquill');
-  const controller = new LatexExtension(output);
+  const previews = new PdfPreviewProvider(context, output);
+  const controller = new LatexExtension(output, previews);
   extension = controller;
-  context.subscriptions.push(output, controller);
+  context.subscriptions.push(output, controller, previews);
 
   function register(name: string, action: (uri?: vscode.Uri) => unknown) {
     context.subscriptions.push(vscode.commands.registerCommand(`texquill.${name}`, async (uri?: vscode.Uri) => {
@@ -152,7 +157,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     const pdf = vscode.Uri.parse(result.pdfUri, true);
     if (pdf.scheme !== 'file') throw new Error('The build did not return a local PDF.');
-    await vscode.commands.executeCommand('vscode.open', pdf);
+    await previews.open(pdf);
   });
   register('restart', () => controller.restart());
   register('showOutput', () => output.show(true));
@@ -175,6 +180,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     output.appendLine(String(error));
     void vscode.window.showErrorMessage(`TeXquill: ${String(error)}`);
   }
+  return { previews };
 }
 
 export async function deactivate(): Promise<void> {

@@ -1,0 +1,24 @@
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body { font: var(--vscode-font-size, 13px) var(--vscode-font-family, sans-serif); color: var(--vscode-foreground, #ddd); background: var(--vscode-editor-background, #202124); }
+#toolbar { height: 42px; display: flex; align-items: center; gap: 12px; padding: 6px 10px; background: var(--vscode-editorWidget-background, #292b30); border-bottom: 1px solid var(--vscode-widget-border, #444); }
+.controls { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.zoom-controls { margin-left: auto; }
+button, input, select { color: inherit; font: inherit; border: 1px solid transparent; border-radius: 3px; height: 28px; }
+button { background: transparent; min-width: 28px; padding: 0 5px; cursor: pointer; font-size: 20px; line-height: 24px; }
+button:hover:not(:disabled) { background: var(--vscode-toolbar-hoverBackground, #ffffff18); }
+button:disabled { opacity: .35; cursor: default; }
+input, select { background: var(--vscode-input-background, #34363c); color: var(--vscode-input-foreground, #eee); padding: 2px 5px; border-color: var(--vscode-input-border, transparent); }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 1px solid var(--vscode-focusBorder, #58a6ff); outline-offset: -1px; }
+#page { width: 52px; appearance: textfield; text-align: center; }
+#page::-webkit-inner-spin-button { appearance: none; }
+#page-count { min-width: 25px; font-variant-numeric: tabular-nums; color: var(--vscode-descriptionForeground, #bbb); }
+#zoom { width: 100px; }
+#viewer-container { position: absolute; inset: 42px 0 0; overflow: auto; overscroll-behavior: contain; outline: none; }
+#viewer-container .pdfViewer { --page-margin: 12px auto; }
+#viewer-container .pdfViewer .page { box-sizing: content-box; }
+#status { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 32px); padding: 8px 12px; border-radius: 4px; background: var(--vscode-editorWidget-background, #292b30); border: 1px solid var(--vscode-widget-border, #444); box-shadow: 0 2px 8px #0003; }
+#status[hidden] { display: none; }
+#status.error { color: var(--vscode-errorForeground, #f48771); }
+@media (max-width: 420px) { #toolbar { gap: 4px; padding-inline: 5px; } .page-label { display: none; } .controls { gap: 2px; } #zoom { width: 90px; } }
