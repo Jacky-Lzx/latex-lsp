@@ -5,6 +5,7 @@ pub mod client;
 pub mod dispatch;
 pub(crate) mod output;
 pub mod protocol;
+pub(crate) mod queries;
 pub(crate) mod tasks;
 
 pub use backend::Backend;

@@ -1,9 +1,17 @@
 //! Preserve wire order until a handler has captured its input snapshot.
 use std::{cell::RefCell, future::Future};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, OwnedSemaphorePermit};
 
 tokio::task_local! {
     static TURN: RefCell<Option<oneshot::Sender<()>>>;
+    static CAPACITY: RefCell<Option<OwnedSemaphorePermit>>;
+}
+
+pub(crate) async fn with_capacity<F: Future>(
+    permit: Option<OwnedSemaphorePermit>,
+    future: F,
+) -> F::Output {
+    CAPACITY.scope(RefCell::new(permit), future).await
 }
 
 #[derive(Default)]
@@ -46,6 +54,7 @@ impl RequestQueue {
 /// Long-running handlers call this only after capturing and validating inputs.
 /// Their eventual result must be checked against the current workspace again.
 pub fn release() {
+    let _ = CAPACITY.try_with(|permit| permit.borrow_mut().take());
     let _ = TURN.try_with(|turn| {
         if let Some(done) = turn.borrow_mut().take() {
             let _ = done.send(());
@@ -57,6 +66,19 @@ pub fn release() {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn captured_queries_release_dispatch_capacity_before_finishing() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = slots.clone().acquire_owned().await.unwrap();
+        let available = slots.clone();
+        with_capacity(Some(permit), async move {
+            assert_eq!(available.available_permits(), 0);
+            release();
+            assert_eq!(available.available_permits(), 1);
+        })
+        .await;
+    }
 
     #[tokio::test]
     async fn snapshots_release_the_next_request_while_external_work_remains_pending() {

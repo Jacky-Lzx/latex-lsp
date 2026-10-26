@@ -440,7 +440,7 @@ where
                     // Pull reports already serialize expensive work through
                     // their analysis cache. Waiting reports must not occupy
                     // every interactive slot and starve completion or saves.
-                    let _permit = if matches!(
+                    let permit = if matches!(
                         method.as_str(),
                         "textDocument/diagnostic" | "workspace/diagnostic"
                     ) {
@@ -448,7 +448,11 @@ where
                     } else {
                         Some(slots.acquire_owned().await.unwrap())
                     };
-                    request(&backend, &phase, &method, params).await
+                    super::dispatch::with_capacity(
+                        permit,
+                        request(&backend, &phase, &method, params),
+                    )
+                    .await
                 };
                 let result = turn
                     .run(async {
@@ -472,8 +476,12 @@ where
                     let _ = exit.send(i32::from(!backend.is_shutdown())).await;
                     return;
                 }
-                let _permit = slots.acquire_owned().await.unwrap();
-                notification(&backend, &phase, &initialized, &method, params).await;
+                let permit = slots.acquire_owned().await.unwrap();
+                super::dispatch::with_capacity(
+                    Some(permit),
+                    notification(&backend, &phase, &initialized, &method, params),
+                )
+                .await;
             }));
         }
     };

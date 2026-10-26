@@ -11,7 +11,7 @@ use crate::{
     },
     parser::syntax,
     project::distribution,
-    server::{dispatch, tasks},
+    server::{dispatch, queries, tasks},
 };
 
 use crate::project::workspace::{self, document_uri, Workspace};
@@ -53,6 +53,7 @@ pub struct Backend {
     builds: build::BuildManager,
     sync_queries: synctex::Queries,
     external_tasks: tasks::Tasks,
+    queries: queries::Queries,
     shutdown_requested: AtomicBool,
     semantic_cache: Mutex<semantic_cache::Cache>,
     diagnostic_cache: Arc<Mutex<diagnostic::Cache>>,
@@ -65,6 +66,7 @@ impl Backend {
             builds: build::BuildManager::new(client.clone(), workspace.clone()),
             sync_queries: synctex::Queries::default(),
             external_tasks: tasks::Tasks::default(),
+            queries: queries::Queries::default(),
             client,
             workspace,
             shutdown_requested: AtomicBool::new(false),
@@ -79,8 +81,13 @@ impl Backend {
         let queries = self.sync_queries.clone();
         let external_tasks = self.external_tasks.clone();
         let workspace = self.workspace.clone();
+        let analysis = self.queries.clone();
         async move {
-            tokio::join!(queries.shutdown(), external_tasks.shutdown());
+            tokio::join!(
+                queries.shutdown(),
+                external_tasks.shutdown(),
+                analysis.shutdown()
+            );
             builds.shutdown().await;
             workspace.read().await.diagnostic_delivery.close();
         }
@@ -112,11 +119,27 @@ impl Backend {
     ) -> Result<T> {
         let workspace = self.workspace.read().await.clone();
         dispatch::release();
-        tokio::task::spawn_blocking(move || query(&workspace))
-            .await
-            .map_err(|error| {
-                crate::rpc::Error::invalid_params(format!("Analysis task failed: {error}"))
-            })
+        self.queries.run(move |_| Ok(query(&workspace))).await
+    }
+
+    async fn read_edit_query<T: Send + 'static>(
+        &self,
+        query: impl FnOnce(&Workspace) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let (workspace, revision) = {
+            let workspace = self.workspace.read().await;
+            (workspace.clone(), workspace.diagnostic_delivery.revision())
+        };
+        dispatch::release();
+        let result = self.queries.run(move |_| query(&workspace)).await?;
+        if self.workspace.read().await.diagnostic_delivery.revision() != revision {
+            return Err(crate::rpc::Error {
+                code: crate::rpc::ErrorCode::ServerError(-32801),
+                message: "Analysis inputs changed; request edits again".into(),
+                data: None,
+            });
+        }
+        Ok(result)
     }
 
     async fn reload_distribution(&self) {
@@ -939,12 +962,15 @@ impl Backend {
                 )
                 .map_err(|_| crate::rpc::Error::invalid_params("Invalid code action request"))?;
                 request.uri = document_uri(request.uri);
-                let edit =
-                    refactor::resolve(&*self.workspace.read().await, request).ok_or_else(|| {
-                        crate::rpc::Error::invalid_params(
-                            "Code action is outdated; request code actions again",
-                        )
-                    })?;
+                let edit = self
+                    .read_edit_query(move |workspace| {
+                        refactor::resolve(workspace, request).ok_or_else(|| {
+                            crate::rpc::Error::invalid_params(
+                                "Code action is outdated; request code actions again",
+                            )
+                        })
+                    })
+                    .await?;
                 let response = self.client.apply_edit(edit).await?;
                 Ok(Some(serde_json::to_value(response).unwrap()))
             }
@@ -954,12 +980,15 @@ impl Backend {
                 )
                 .map_err(|_| crate::rpc::Error::invalid_params("Invalid quick fix request"))?;
                 request.uri = document_uri(request.uri);
-                let edit = editing::resolve_fix(&*self.workspace.read().await, request)
-                    .ok_or_else(|| {
-                        crate::rpc::Error::invalid_params(
-                            "Quick fix is outdated; request code actions again",
-                        )
-                    })?;
+                let edit = self
+                    .read_edit_query(move |workspace| {
+                        editing::resolve_fix(workspace, request).ok_or_else(|| {
+                            crate::rpc::Error::invalid_params(
+                                "Quick fix is outdated; request code actions again",
+                            )
+                        })
+                    })
+                    .await?;
                 let response = self.client.apply_edit(edit).await?;
                 Ok(Some(serde_json::to_value(response).unwrap()))
             }
@@ -1041,7 +1070,10 @@ impl Backend {
         &self,
         params: RenameFilesParams,
     ) -> Result<Option<WorkspaceEdit>> {
-        file_operations::will_rename(&*self.workspace.read().await, &params.files)
+        self.read_edit_query(move |workspace| {
+            file_operations::will_rename(workspace, &params.files)
+        })
+        .await
     }
 
     pub(crate) async fn did_create_files(&self, params: CreateFilesParams) {
@@ -1223,24 +1255,26 @@ impl Backend {
         params: DocumentOnTypeFormattingParams,
     ) -> Result<Option<Vec<TextEdit>>> {
         let uri = document_uri(params.text_document_position.text_document.uri);
-        let workspace = self.workspace.read().await;
-        let Some(doc) = workspace.documents.get(&uri) else {
-            return Ok(None);
-        };
-        if doc.kind != workspace::DocumentKind::Latex {
-            return Ok(None);
-        }
-        if !workspace.settings(&uri).formatting.on_type {
-            return Ok(Some(vec![]));
-        }
-        on_type_formatting::edits(
-            &workspace,
-            &uri,
-            params.text_document_position.position,
-            &params.ch,
-            &params.options,
-        )
-        .map(Some)
+        self.read_edit_query(move |workspace| {
+            let Some(doc) = workspace.documents.get(&uri) else {
+                return Ok(None);
+            };
+            if doc.kind != workspace::DocumentKind::Latex {
+                return Ok(None);
+            }
+            if !workspace.settings(&uri).formatting.on_type {
+                return Ok(Some(vec![]));
+            }
+            on_type_formatting::edits(
+                workspace,
+                &uri,
+                params.text_document_position.position,
+                &params.ch,
+                &params.options,
+            )
+            .map(Some)
+        })
+        .await
     }
 
     pub(crate) async fn prepare_call_hierarchy(
@@ -1248,25 +1282,34 @@ impl Backend {
         params: CallHierarchyPrepareParams,
     ) -> Result<Option<Vec<CallHierarchyItem>>> {
         let params = params.text_document_position_params;
-        call_hierarchy::prepare(
-            &*self.workspace.read().await,
-            &document_uri(params.text_document.uri),
-            params.position,
-        )
+        self.read_query(move |workspace| {
+            call_hierarchy::prepare(
+                workspace,
+                &document_uri(params.text_document.uri),
+                params.position,
+            )
+        })
+        .await?
     }
 
     pub(crate) async fn incoming_calls(
         &self,
         params: CallHierarchyIncomingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
-        call_hierarchy::incoming(&*self.workspace.read().await, &params.item).map(Some)
+        self.read_query(move |workspace| {
+            call_hierarchy::incoming(workspace, &params.item).map(Some)
+        })
+        .await?
     }
 
     pub(crate) async fn outgoing_calls(
         &self,
         params: CallHierarchyOutgoingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>> {
-        call_hierarchy::outgoing(&*self.workspace.read().await, &params.item).map(Some)
+        self.read_query(move |workspace| {
+            call_hierarchy::outgoing(workspace, &params.item).map(Some)
+        })
+        .await?
     }
 
     pub(crate) async fn inlay_hint(
@@ -1278,11 +1321,14 @@ impl Backend {
                 "Invalid inlay hint range",
             ));
         }
-        Ok(Some(auxiliary::hints(
-            &*self.workspace.read().await,
-            &document_uri(params.text_document.uri),
-            params.range,
-        )))
+        self.read_query(move |workspace| {
+            Some(auxiliary::hints(
+                workspace,
+                &document_uri(params.text_document.uri),
+                params.range,
+            ))
+        })
+        .await
     }
 
     pub(crate) async fn completion(
@@ -1312,16 +1358,20 @@ impl Backend {
     }
 
     pub(crate) async fn completion_resolve(&self, item: CompletionItem) -> Result<CompletionItem> {
-        completion_resolve::resolve(&*self.workspace.read().await, item)
+        self.read_query(move |workspace| completion_resolve::resolve(workspace, item))
+            .await?
     }
 
     pub(crate) async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let position = params.text_document_position_params;
-        Ok(features::hover(
-            &*self.workspace.read().await,
-            &document_uri(position.text_document.uri),
-            position.position,
-        ))
+        self.read_query(move |workspace| {
+            features::hover(
+                workspace,
+                &document_uri(position.text_document.uri),
+                position.position,
+            )
+        })
+        .await
     }
 
     pub(crate) async fn signature_help(
@@ -1329,11 +1379,14 @@ impl Backend {
         params: SignatureHelpParams,
     ) -> Result<Option<SignatureHelp>> {
         let params = params.text_document_position_params;
-        Ok(signature::help(
-            &*self.workspace.read().await,
-            &document_uri(params.text_document.uri),
-            params.position,
-        ))
+        self.read_query(move |workspace| {
+            signature::help(
+                workspace,
+                &document_uri(params.text_document.uri),
+                params.position,
+            )
+        })
+        .await
     }
 
     pub(crate) async fn goto_definition(
@@ -1341,12 +1394,15 @@ impl Backend {
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
         let position = params.text_document_position_params;
-        let locations = features::definitions(
-            &*self.workspace.read().await,
-            &document_uri(position.text_document.uri),
-            position.position,
-        );
-        Ok(Some(GotoDefinitionResponse::Array(locations)))
+        self.read_query(move |workspace| {
+            let locations = features::definitions(
+                workspace,
+                &document_uri(position.text_document.uri),
+                position.position,
+            );
+            Some(GotoDefinitionResponse::Array(locations))
+        })
+        .await
     }
 
     pub(crate) async fn references(
@@ -1354,33 +1410,42 @@ impl Backend {
         params: ReferenceParams,
     ) -> Result<Option<Vec<Location>>> {
         let position = params.text_document_position;
-        Ok(Some(features::references(
-            &*self.workspace.read().await,
-            &document_uri(position.text_document.uri),
-            position.position,
-            params.context.include_declaration,
-        )))
+        self.read_query(move |workspace| {
+            Some(features::references(
+                workspace,
+                &document_uri(position.text_document.uri),
+                position.position,
+                params.context.include_declaration,
+            ))
+        })
+        .await
     }
 
     pub(crate) async fn prepare_rename(
         &self,
         params: TextDocumentPositionParams,
     ) -> Result<Option<PrepareRenameResponse>> {
-        features::prepare_rename(
-            &*self.workspace.read().await,
-            &document_uri(params.text_document.uri),
-            params.position,
-        )
+        self.read_query(move |workspace| {
+            features::prepare_rename(
+                workspace,
+                &document_uri(params.text_document.uri),
+                params.position,
+            )
+        })
+        .await?
     }
 
     pub(crate) async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
         let position = params.text_document_position;
-        features::rename(
-            &*self.workspace.read().await,
-            &document_uri(position.text_document.uri),
-            position.position,
-            &params.new_name,
-        )
+        self.read_edit_query(move |workspace| {
+            features::rename(
+                workspace,
+                &document_uri(position.text_document.uri),
+                position.position,
+                &params.new_name,
+            )
+        })
+        .await
     }
 
     pub(crate) async fn document_highlight(
@@ -1427,79 +1492,91 @@ impl Backend {
         &self,
         params: SelectionRangeParams,
     ) -> Result<Option<Vec<SelectionRange>>> {
-        let workspace = self.workspace.read().await;
-        let Some(doc) = workspace
-            .documents
-            .get(&document_uri(params.text_document.uri))
-        else {
-            return Ok(None);
-        };
-        editing::selection_ranges(doc, &params.positions)
-            .map(Some)
-            .ok_or_else(|| crate::rpc::Error::invalid_params("Invalid selection position"))
+        self.read_query(move |workspace| {
+            let Some(doc) = workspace
+                .documents
+                .get(&document_uri(params.text_document.uri))
+            else {
+                return Ok(None);
+            };
+            editing::selection_ranges(doc, &params.positions)
+                .map(Some)
+                .ok_or_else(|| crate::rpc::Error::invalid_params("Invalid selection position"))
+        })
+        .await?
     }
 
     pub(crate) async fn code_action(
         &self,
         params: CodeActionParams,
     ) -> Result<Option<CodeActionResponse>> {
-        self.read_query(move |workspace| {
-            code_action_resolve::actions(
+        self.read_edit_query(move |workspace| {
+            Ok(code_action_resolve::actions(
                 workspace,
                 &document_uri(params.text_document.uri),
                 params.range,
                 &params.context,
-            )
+            ))
         })
         .await
         .map(Some)
     }
 
     pub(crate) async fn code_action_resolve(&self, action: CodeAction) -> Result<CodeAction> {
-        code_action_resolve::resolve(&*self.workspace.read().await, action)
+        self.read_edit_query(move |workspace| code_action_resolve::resolve(workspace, action))
+            .await
     }
 
     pub(crate) async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
-        Ok(Some(code_lens::lenses(
-            &*self.workspace.read().await,
-            &document_uri(params.text_document.uri),
-        )))
+        self.read_query(move |workspace| {
+            Some(code_lens::lenses(
+                workspace,
+                &document_uri(params.text_document.uri),
+            ))
+        })
+        .await
     }
 
     pub(crate) async fn document_symbol(
         &self,
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
-        let workspace = self.workspace.read().await;
-        let uri = document_uri(params.text_document.uri);
-        Ok(workspace.documents.get(&uri).map(|doc| {
-            if workspace.hierarchical_symbols {
-                DocumentSymbolResponse::Nested(features::symbols(doc))
-            } else {
-                DocumentSymbolResponse::Flat(features::flat_symbols(doc, &uri))
-            }
-        }))
+        self.read_query(move |workspace| {
+            let uri = document_uri(params.text_document.uri);
+            workspace.documents.get(&uri).map(|doc| {
+                if workspace.hierarchical_symbols {
+                    DocumentSymbolResponse::Nested(features::symbols(doc))
+                } else {
+                    DocumentSymbolResponse::Flat(features::flat_symbols(doc, &uri))
+                }
+            })
+        })
+        .await
     }
 
     pub(crate) async fn symbol(
         &self,
         params: WorkspaceSymbolParams,
     ) -> Result<Option<Vec<SymbolInformation>>> {
-        Ok(Some(navigation::workspace_symbols(
-            &*self.workspace.read().await,
-            &params.query,
-        )))
+        self.read_query(move |workspace| {
+            Some(navigation::workspace_symbols(workspace, &params.query))
+        })
+        .await
     }
 
     pub(crate) async fn folding_range(
         &self,
         params: FoldingRangeParams,
     ) -> Result<Option<Vec<FoldingRange>>> {
-        let workspace = self.workspace.read().await;
-        Ok(workspace
-            .documents
-            .get(&document_uri(params.text_document.uri))
-            .map(|doc| navigation::folding_ranges_for_client(doc, &workspace.folding_capabilities)))
+        self.read_query(move |workspace| {
+            workspace
+                .documents
+                .get(&document_uri(params.text_document.uri))
+                .map(|doc| {
+                    navigation::folding_ranges_for_client(doc, &workspace.folding_capabilities)
+                })
+        })
+        .await
     }
 
     pub(crate) async fn document_color(
@@ -1520,34 +1597,44 @@ impl Backend {
         &self,
         params: ColorPresentationParams,
     ) -> Result<Vec<ColorPresentation>> {
-        let workspace = self.workspace.read().await;
-        let Some(doc) = workspace
-            .documents
-            .get(&document_uri(params.text_document.uri))
-        else {
-            return Ok(vec![]);
-        };
-        if params.range.start > params.range.end
-            || doc.text.offset(params.range.start).is_none()
-            || doc.text.offset(params.range.end).is_none()
-        {
-            return Err(crate::rpc::Error::invalid_params(
-                "Invalid color presentation range",
-            ));
-        }
-        Ok(colors::presentations(doc, params.range, params.color))
+        self.read_query(move |workspace| {
+            let Some(doc) = workspace
+                .documents
+                .get(&document_uri(params.text_document.uri))
+            else {
+                return Ok(vec![]);
+            };
+            if params.range.start > params.range.end
+                || doc.text.offset(params.range.start).is_none()
+                || doc.text.offset(params.range.end).is_none()
+            {
+                return Err(crate::rpc::Error::invalid_params(
+                    "Invalid color presentation range",
+                ));
+            }
+            Ok(colors::presentations(doc, params.range, params.color))
+        })
+        .await?
     }
 
     pub(crate) async fn semantic_tokens_full(
         &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
-        let workspace = self.workspace.read().await;
         let uri = document_uri(params.text_document.uri);
-        let Some(doc) = workspace.documents.get(&uri) else {
+        let query_uri = uri.clone();
+        let tokens = self
+            .read_query(move |workspace| {
+                workspace
+                    .documents
+                    .get(&query_uri)
+                    .map(|doc| semantic::tokens(doc, None))
+                    .transpose()
+            })
+            .await??;
+        let Some(tokens) = tokens else {
             return Ok(None);
         };
-        let tokens = semantic::tokens(doc, None)?;
         Ok(Some(SemanticTokensResult::Tokens(
             self.semantic_cache.lock().await.full(uri, tokens),
         )))
@@ -1557,12 +1644,20 @@ impl Backend {
         &self,
         params: SemanticTokensDeltaParams,
     ) -> Result<Option<SemanticTokensFullDeltaResult>> {
-        let workspace = self.workspace.read().await;
         let uri = document_uri(params.text_document.uri);
-        let Some(doc) = workspace.documents.get(&uri) else {
+        let query_uri = uri.clone();
+        let tokens = self
+            .read_query(move |workspace| {
+                workspace
+                    .documents
+                    .get(&query_uri)
+                    .map(|doc| semantic::tokens(doc, None))
+                    .transpose()
+            })
+            .await??;
+        let Some(tokens) = tokens else {
             return Ok(None);
         };
-        let tokens = semantic::tokens(doc, None)?;
         Ok(Some(self.semantic_cache.lock().await.delta(
             uri,
             &params.previous_result_id,
@@ -1574,24 +1669,29 @@ impl Backend {
         &self,
         params: SemanticTokensRangeParams,
     ) -> Result<Option<SemanticTokensRangeResult>> {
-        let workspace = self.workspace.read().await;
-        workspace
-            .documents
-            .get(&document_uri(params.text_document.uri))
-            .map(|doc| {
-                semantic::tokens(doc, Some(params.range)).map(SemanticTokensRangeResult::Tokens)
-            })
-            .transpose()
+        self.read_query(move |workspace| {
+            workspace
+                .documents
+                .get(&document_uri(params.text_document.uri))
+                .map(|doc| {
+                    semantic::tokens(doc, Some(params.range)).map(SemanticTokensRangeResult::Tokens)
+                })
+                .transpose()
+        })
+        .await?
     }
 
     pub(crate) async fn document_link(
         &self,
         params: DocumentLinkParams,
     ) -> Result<Option<Vec<DocumentLink>>> {
-        Ok(Some(navigation::document_links(
-            &*self.workspace.read().await,
-            &document_uri(params.text_document.uri),
-        )))
+        self.read_query(move |workspace| {
+            Some(navigation::document_links(
+                workspace,
+                &document_uri(params.text_document.uri),
+            ))
+        })
+        .await
     }
 }
 
@@ -1600,6 +1700,35 @@ mod read_query_tests {
     use super::*;
     use std::time::Duration;
     use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn edit_queries_release_updates_and_reject_results_from_replaced_inputs() {
+        let (client, _outgoing) = Client::new();
+        let backend = Arc::new(Backend::new(client));
+        let mut queue = dispatch::RequestQueue::default();
+        let (started, start) = oneshot::channel();
+        let (finish, finished) = oneshot::channel();
+        let first_backend = backend.clone();
+        let first = tokio::spawn(queue.ordered(async move {
+            first_backend
+                .read_edit_query(move |_| {
+                    let _ = started.send(());
+                    let _ = finished.blocking_recv();
+                    Ok(())
+                })
+                .await
+        }));
+        start.await.unwrap();
+        let writer = queue.ordered(async move {
+            let mut workspace = backend.workspace.write().await;
+            workspace.diagnostic_delivery.invalidate();
+            workspace.snippets = true;
+        });
+        let updated = tokio::time::timeout(Duration::from_secs(1), writer).await;
+        let _ = finish.send(());
+        updated.expect("An edit query blocked newer document inputs");
+        assert_eq!(i64::from(first.await.unwrap().unwrap_err().code), -32801);
+    }
 
     #[tokio::test]
     async fn slow_analysis_keeps_its_snapshot_without_blocking_writes_or_later_reads() {
