@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace, text::Text};
 
 fn setup(body: &str) -> (Workspace, Url) {
     let uri = Url::parse("untitled:label-declaration-guards.tex").unwrap();

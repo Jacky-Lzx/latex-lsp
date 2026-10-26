@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::{DiagnosticSeverity, Url};
+use std::sync::atomic::AtomicBool;
+use texquill::{
     compilation::{build, build_log},
     config::BuildConfig,
 };
-use lsp_types::{DiagnosticSeverity, Url};
-use std::sync::atomic::AtomicBool;
 
 #[test]
 fn source_and_generated_files_keep_numbered_and_traditional_error_locations_and_file_stack_boundaries(
@@ -208,5 +208,5 @@ fn real_generated_bibliography_warnings_keep_their_path_without_indexing_artifac
         outcome.diagnostics
     );
     assert!(!outcome.inputs.unwrap().contains(&uri));
-    assert!(!latex_lsp::project::workspace::is_source(&path));
+    assert!(!texquill::project::workspace::is_source(&path));
 }

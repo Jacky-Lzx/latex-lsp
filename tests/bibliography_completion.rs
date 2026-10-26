@@ -1,14 +1,14 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn workspace(source: &str, snippets: bool) -> (Workspace, Url) {
     let uri = Url::parse("file:///bib-completion/refs.bib").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets,
             ..Default::default()
         },

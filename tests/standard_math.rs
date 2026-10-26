@@ -1,4 +1,5 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build,
     config::BuildConfig,
     editing,
@@ -6,12 +7,11 @@ use latex_lsp::{
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///standard-math/main.tex").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },
@@ -137,7 +137,7 @@ fn real_standard_math_typos_offer_a_fix_that_compiles_with_existing_accents_and_
             ..text.offset(diagnostic.range.end).unwrap();
         assert_eq!(&source[span], format!("\\{typo}"));
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },

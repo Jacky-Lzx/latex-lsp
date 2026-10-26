@@ -1,21 +1,21 @@
-# 编辑器配置
+# Editor configuration
 
-[返回 README](../README.md)
+[Back to README](../README.md)
 
-先按[安装与启动](install.md)安装服务器，再配置编辑器。启动命令为 `latex-lsp --stdio`，通常由编辑器执行。
+Install the server as described in [installation and startup](install.md), then configure your editor. The editor normally launches `texquill --stdio`.
 
-- [Neovim 0.11+ 完整配置](#neovim-011-完整配置)
+- [Neovim 0.11+ full configuration](#neovim-011-full-configuration)
 - [VS Code](#vs-code)
-- [其他编辑器](#其他编辑器)
-- [示例项目](#示例项目)
+- [Other Editors](#other-editors)
+- [Sample Project](#sample-project)
 
-## Neovim 0.11+ 完整配置
+## Neovim 0.11+ full configuration
 
-确保 `latex-lsp` 在 `PATH` 中，在配置里添加：
+Ensure `texquill` is on your `PATH`, then add:
 
 ```lua
-vim.lsp.config('latex_lsp', {
-  cmd = { 'latex-lsp', '--stdio' },
+vim.lsp.config('texquill', {
+  cmd = { 'texquill', '--stdio' },
   filetypes = { 'tex', 'plaintex', 'bib', 'bst' },
   root_markers = { '.latexmkrc', 'latexmkrc', '.git' },
   capabilities = { workspace = { diagnostic = { refreshSupport = true } } },
@@ -35,60 +35,61 @@ vim.lsp.config('latex_lsp', {
     end,
   },
 })
-vim.lsp.enable('latex_lsp')
+vim.lsp.enable('texquill')
 ```
 
-上面的能力声明启用服务器主动刷新诊断，处理器同时更新工作区和已打开的文档。Neovim 0.12.6 默认未声明 `refreshSupport`，其默认处理器在启用工作区拉取后还会跳过已按文档拉取的缓冲区；这段配置保证编译完成和跨文件修改后，当前文件也显示最新诊断。
+The capability above enables server-initiated diagnostic refreshes; the handler updates both workspace diagnostics and open documents. Neovim 0.12.6 does not advertise `refreshSupport` by default, and its default handler skips buffers already using document pull diagnostics once workspace pulls are enabled. This configuration keeps the current file up to date after builds and cross-file edits.
 
-打开 `.tex` 后，可用 `vim.lsp.buf.hover()` 查看提示，`vim.lsp.buf.definition()` 跳转，`vim.lsp.buf.references()` 查找引用，`vim.lsp.buf.rename()` 跨文件重命名。补全可通过 `<C-x><C-o>` 或支持 Neovim LSP 的补全插件触发；snippet 需要客户端声明支持。
+After opening a `.tex` file, use `vim.lsp.buf.hover()` for hover information, `vim.lsp.buf.definition()` for definitions, `vim.lsp.buf.references()` for references, and `vim.lsp.buf.rename()` for cross-file rename. Trigger completion with `<C-x><C-o>` or an LSP completion plugin. Snippets require client support.
 
-新建未命名文档或打开非标准扩展名时，可先设置 `:setfiletype tex` 或 `:setfiletype bib`。客户端连接并发送相应语言类型后，服务器即可提供编辑功能，无需先保存为 `.tex` / `.bib`；编译仍需可用的已保存主文档。
+For untitled documents or nonstandard extensions, set `:setfiletype tex` or `:setfiletype bib`. Once the client connects with that language ID, editing features work without saving as `.tex` or `.bib`. Builds still require a usable, saved root document.
 
-调用 `vim.lsp.buf.format()` 可使用默认 tex-fmt 全文格式化；切换 latexindent 及自定义参数见[格式化](formatting.md)。请将所选工具安装到服务器的 `PATH`。
+Use `vim.lsp.buf.format()` for document formatting with tex-fmt by default. See [formatting](formatting.md) to select latexindent or customize arguments. Install the selected tool on the server's `PATH`.
 
-输入命令参数时，可通过 `vim.lsp.buf.signature_help()` 查看签名；支持自动参数提示的插件也可使用标准 `textDocument/signatureHelp`。
+Use `vim.lsp.buf.signature_help()` while entering command arguments. Plugins with automatic signature help can use standard `textDocument/signatureHelp` requests.
 
-自动提示的触发字符包括 `{`、`[`、`<`、`(`、`|`、`*`、`+` 和逗号，并在常见结束分隔符处更新当前参数。其他自定义分隔符可手动请求提示。
+Automatic signature help triggers on `{`, `[`, `<`, `(`, `|`, `*`, `+`, and commas, and updates the active argument at common closing delimiters. Request help manually for other custom delimiters.
 
-在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
+Use `vim.lsp.buf.code_action()` at syntax errors for quick fixes, and `vim.lsp.buf.document_highlight()` to highlight the current symbol's definitions and references. Neovim 0.12 also provides `vim.lsp.buf.selection_range(1)` to expand the syntax selection.
 
 ## VS Code
 
-仓库内的 [`editors/vscode`](../editors/vscode/README.md) 提供 VS Code 客户端扩展。服务器需单独安装；在仓库根目录执行：
+The [`editors/vscode`](../editors/vscode/README.md) directory contains the VS Code client extension. Install the server separately, then run from the repository root:
 
 ```sh
 cargo install --path . --locked
 cd editors/vscode
 npm ci
 npm run package
-code --install-extension latex-lsp.vsix
+code --install-extension texquill.vsix
 ```
 
-扩展默认从 PATH 启动 `latex-lsp --stdio`；也可以在用户设置中配置 `latex-lsp.serverPath` 为可执行文件绝对路径。打开 LaTeX 项目文件夹和 `.tex` / `.bib` 后自动连接。
+By default, the extension launches `texquill --stdio` from PATH. Alternatively, set `texquill.serverPath` to the executable's absolute path in user settings. It connects automatically when you open a LaTeX project folder and a `.tex` or `.bib` file.
 
 ```json
 {
-  "latex-lsp.serverPath": "/absolute/path/to/latex-lsp",
-  "latex-lsp.settings": {
+  "texquill.serverPath": "/absolute/path/to/texquill",
+  "texquill.settings": {
     "build": { "engine": "xelatex", "onSave": true }
   }
 }
 ```
 
-`latex-lsp.settings` 使用服务端原有配置字段，修改后实时传递；默认值不变。项目差异可放入 `.latex-lsp.json`。命令面板提供编译、重编译、取消编译、状态、打开 PDF、重启服务器及输出面板入口；文档 CodeLens 也可编译。编译前需保存项目文件。
 
-扩展暂未提供 PDF 内嵌预览和 SyncTeX 双向跳转。完整安装、远端环境、工具 PATH、兼容性及开发说明见[扩展 README](../editors/vscode/README.md)。
+`texquill.settings` uses the server's existing configuration fields and sends updates live, preserving server defaults. Use `.texquill.json` for project overrides. The command palette provides build, rebuild, cancellation, status, Open PDF, restart, and output actions; document code lenses also trigger builds. Save project files before building.
 
-## 其他编辑器
+The extension does not yet provide an embedded PDF viewer or SyncTeX navigation. See the [extension README](../editors/vscode/README.md) for installation, remote environments, tool PATH configuration, compatibility, and development.
 
-其他编辑器可将 `latex-lsp --stdio` 配置为 `tex` / `latex` / `bib` / `bst` 文件的语言服务器。建议将根目录设为当前 LaTeX 项目，避免把多个无关项目混在同一个工作区。
+## Other editors
 
-## 示例项目
+Other editors can configure `texquill --stdio` as the language server for `tex` / `latex` / `bib` / `bst` documents. Use the current LaTeX project as the root to avoid combining unrelated projects.
 
-打开 [examples/demo/main.tex](../examples/demo/main.tex)，尝试：
+## Sample project
 
-1. 在 `\ref{sec:intro}` 上跳转到另一个文件里的标签。
-2. 在 `\cite{knuth1984}` 上跳转到 BibTeX 条目。
-3. 输入 `\sec`、`\ref{` 或 `\cite{` 触发补全。
-4. 删除 `\end{equation}` 或一个 `}`，查看诊断。
-5. 在标签或文献键上调用重命名，预览跨文件修改。
+Open [examples/demo/main.tex](../examples/demo/main.tex) and try:
+
+1. Follow `\ref{sec:intro}` to a label in another file.
+2. Follow `\cite{knuth1984}` to its BibTeX entry.
+3. Type `\sec`, `\ref{`, or `\cite{` to trigger completion.
+4. Delete `\end{equation}` or a `}` to inspect diagnostics.
+5. Rename a label or citation key and preview the cross-file edits.

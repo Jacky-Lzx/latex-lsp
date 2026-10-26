@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     editing::file_operations,
     language::{features, navigation},
     project::workspace::{Document, DocumentKind, Workspace},
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -16,7 +16,7 @@ fn project(root: &Path, files: &[(&str, &str)]) -> Workspace {
         std::fs::write(path, source).unwrap();
     }
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },

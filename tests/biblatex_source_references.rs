@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace};
 fn setup(preamble: &str, body: &str) -> (tempfile::TempDir, Workspace, Url) {
     let dir = tempfile::tempdir().unwrap();
     let source = format!(
@@ -201,7 +201,7 @@ fn static_named_source_queries_have_exact_unicode_ranges_and_local_highlights() 
         for query in &expected {
             check(&ws, query, &source, &expected);
         }
-        let highlights = latex_lsp::editing::highlights(&ws, &main, source.range.start);
+        let highlights = texquill::editing::highlights(&ws, &main, source.range.start);
         assert_eq!(highlights.len(), 3, "{highlights:?}");
         assert!(
             highlights

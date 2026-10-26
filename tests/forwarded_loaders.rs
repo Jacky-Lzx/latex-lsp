@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::build,
     editing::file_operations,
     language::{features, navigation},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -149,7 +149,7 @@ fn forwarding_loaders_keep_options_and_compiler_inputs_after_file_renames() {
         let mut workspace = Workspace::default();
         workspace.add_root(root.into());
         let main = uri(root, "main.tex");
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: engine.into(),
             ..Default::default()
         };

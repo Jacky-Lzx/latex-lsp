@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///bibentry/{name}")).unwrap();
@@ -182,7 +182,7 @@ fn inline_bibliography_warnings_use_the_static_single_key_and_offer_a_precise_fi
         Range::new(Position::new(2, 0), Position::new(2, 6))
     );
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },

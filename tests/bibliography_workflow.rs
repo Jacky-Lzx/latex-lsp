@@ -1,13 +1,13 @@
 #![cfg(unix)]
-use latex_lsp::{
-    compilation::build,
-    config::{BibliographyBackend, BibliographyToolConfig, BuildConfig, Config, IndexToolConfig},
-};
 use lsp_types::{DiagnosticSeverity, Url};
 use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
+};
+use texquill::{
+    compilation::build,
+    config::{BibliographyBackend, BibliographyToolConfig, BuildConfig, Config, IndexToolConfig},
 };
 
 const COMPILER: &str = r#"set -eu
@@ -29,7 +29,7 @@ printf 'PWD %s\nINPUT %s\n' "$PWD" "$source" > "$output/$job.fls"
 const TOOL: &str = r#"set -eu
 job=${1#./}; job=${job%.aux}
 test -f "$job.aux"
-test -f latex-lsp-aux/1.aux
+test -f texquill-aux/1.aux
 printf 'bibliography entries\n' > "$job.bbl"
 printf 'This is BibTeX, Version 0.99d\nThe top-level auxiliary file: %s\nThe style file: custom.bst\nDatabase file #1: refs.bib\n' "$1" > "$job.blg"
 "#;
@@ -104,7 +104,7 @@ impl Fixture {
             .unwrap()
             .file_name()
             .to_string_lossy()
-            .starts_with("latex-lsp-bibliography-")));
+            .starts_with("texquill-bibliography-")));
     }
 }
 
@@ -152,7 +152,7 @@ fn biber_receives_controlled_input_output_directories_and_root_search_paths() {
 test "$1" = --input-directory
 test "$3" = --output-directory
 test "$2" = "$4"
-test "$5" = latex-lsp-bibliography
+test "$5" = texquill-bibliography
 test -f "$2/$5.bcf"
 test "$PWD" = "${BIBINPUTS%%:*}"
 test -f "$PWD/refs.bib"
@@ -231,7 +231,7 @@ fn auxiliary_and_explicit_dependency_changes_do_not_install_generated_output() {
         // The backend's fixed input operand follows these literal prefix arguments.
         let body = fixture.config.bibliography_tool.as_mut().unwrap();
         let script = body.arguments[0].clone();
-        body.arguments = vec![script, "./latex-lsp-bibliography.aux".into()];
+        body.arguments = vec![script, "./texquill-bibliography.aux".into()];
         body.arguments.extend(values);
         // TOOL consumes the supplied first operand; the server still appends its own.
         fixture.old_output();

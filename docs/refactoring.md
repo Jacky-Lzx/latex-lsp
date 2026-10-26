@@ -1,30 +1,30 @@
-# 结构重构与批量修复
+# Structural refactoring and fix all
 
-`textDocument/codeAction` 提供以下操作：
+`textDocument/codeAction` provides the following operations:
 
-- `refactor.rewrite`：将选区包裹为 `\emph{...}`、`\textbf{...}` 或 `quote` 环境。
-- `refactor.extract`：将主文档中的正文选区提取为无参数 `\newcommand`，在 `\begin{document}` 前插入声明，并替换原文。自动选择项目内未使用的命令名，之后可用符号重命名改为所需名称。
-- `source.fixAll`：合并当前文件中没有歧义且编辑范围不冲突的静态语法修复。仅在客户端显式请求该类操作时返回，可用于保存时修复；不自动选择拼写建议或编译器错误的候选修复。
+- `refactor.rewrite`: Wrap the selection into `\emph{...}`, `\textbf{...}` or `quote` environments.
+- `refactor.extract`: Extract the text selection in the main document as no-parameter `\newcommand`, insert a statement before `\begin{document}`, and replace the original text. Unused command names within the project are automatically selected and can later be changed to the desired name using symbolic renaming.
+- `source.fixAll`: Merge static syntax fixes that have no ambiguity in the current file and no conflicting edit scopes. Only returned when the client explicitly requests this type of operation, can be used for save-time fixes; no spelling suggestions or candidate fixes for compiler errors are automatically selected.
 
-重构只处理顶层的普通正文及完整的常用文本样式命令。部分控制序列、命令参数内部、公式、特殊环境、注释、逐字代码、原始宏参数和不平衡分组不提供重构，避免改变参数边界。命令提取要求当前文件有 `document` 环境；不模拟 TeX 宏展开和任意 catcode 设置。
+The refactoring only handles the top-level normal text and the complete set of common text style commands. Some control sequences, command parameter internals, formulas, special environments, comments, verbatim codes, raw macro parameters, and unbalanced grouping do not provide reconstruction to avoid changing parameter boundaries. Command extraction requires the current file to have the `document` environment; TeX macro expansion and arbitrary catcode settings are not emulated.
 
-参数边界复用当前项目的静态签名，包含无花括号的单 token 参数、可选参数、TeX / xparse 分隔参数、标志和静态 `csuse` / `csname` 调用。纯转发别名、未保存的跨文件定义、歧义和未知调用使用相同的保守检查。例如，`\take Hello` 会读取首个 `H` 时，不将 `Hello` 包成新命令或分组；选择已消费的 `H` 之后的正文仍可重构。`noexpand` 等单 token 操作数也保留原边界，完整选择顶层样式调用继续可用。
+Parameter boundaries reuse the current project's static signature, including single-token parameters without curly braces, optional parameters, TeX/xparse-delimited parameters, flags, and static `csuse` / `csname` calls. Pure forward aliases, unsaved cross-file definitions, ambiguities, and unknown calls use the same conservative checks. For example, when `\take Hello` reads the first `H`, `Hello` will not be packaged into a new command or group; the text after selecting the consumed `H` can still be reconstructed. Single-token operands such as `noexpand` also retain the original boundaries, and the complete selection of top-level style calls continues to be available.
 
-提取命令时，一次收集当前项目的直接控制词、用户声明、环境及其他派生控制词、命名接口的静态名称和字面 `csname` 使用，环境调用也保留其开始／结束命令名。跨文件和未保存声明参与检查，独立项目的名称互不影响。沿用最多 26 个候选名称的预算；没有可用名称时，仅保留正文包裹操作。此检查不执行动态名称展开。
+When extracting commands, the direct control words, user declarations, environment and other derived control words of the current project, the static name of the named interface and the literal `csname` are collected at once. The environment call also retains its start/end command name. Cross-file and unsaved statements participate in the check, and the names of independent projects do not affect each other. Inherit a budget of up to 26 candidate names; when no names are available, only the body wrapping operation is retained. This check does not perform dynamic name expansion.
 
-上下文检查区分单美元与双美元公式、行内／显示数学控制符及其静态纯转发别名（含别名链、命名调用（包括 `csuse{(}` / `csname (\endcsname`）与跨文件未保存定义）、显式 `begingroup` / `endgroup` 和 `bgroup` / `egroup` 分组，并识别静态命名调用及纯转发别名的分组与环境边界。公式、分组和环境完整关闭后的正文仍可重构；参数数据、声明正文和 token 操作数不会制造执行边界。不能确认配对或数学分析超过工作预算时跳过结构重构。
+Context checks differentiate between single-dollar and double-dollar formulas, inline/display math controls and their static forward-only aliases (including alias chains, named calls (including `csuse{(}` / `csname (\endcsname`) and cross-file unsaved definitions), explicit `begingroup` / `endgroup` and `bgroup` / `egroup` grouping, and identifies grouping and environment boundaries for static named calls and pure forwarding aliases. The body of formulas, groups, and environments can still be reconstructed after they are completely closed; parameter data, declaration bodies, and token operands do not create execution boundaries. Structural reconstruction is skipped when pairing cannot be confirmed or mathematical analysis exceeds the job budget.
 
-项目中重新定义的样式命令不能按内置单参数调用提取。包裹操作分别检查 `emph`、`textbf`、`quote` / `endquote` 的原有意义，提取操作要求 `newcommand` 未被改写；只隐藏依赖被改写命令的操作。正文入口通过静态环境调用确认，`begin` / `end` 或数学控制符被改写时保守跳过。
+Redefined style commands in the project cannot be extracted by built-in single-argument calls. The wrapping operation checks the original meaning of `emph`, `textbf`, `quote` / `endquote` respectively, and the extraction operation requires that `newcommand` has not been rewritten; only operations that rely on the rewritten command are hidden. The text entry is confirmed through static environment calls, and is conservatively skipped when `begin` / `end` or mathematical control characters are rewritten.
 
-项目索引不完整，或分析范围超过 16 MiB 源码、100000 个命令或 4096 个定义时，不提供结构重构。此限制不改变已有快速修复与显式 `source.fixAll` 的入口。
+Restructuring is not provided when the project index is incomplete, or when the analysis scope exceeds 16 MiB of source code, 100,000 commands, or 4096 definitions. This restriction does not change existing quick fix entries with explicit `source.fixAll`.
 
-编辑使用客户端协商的文档版本。旧客户端通过 `latex.applyCodeAction` 应用操作时，服务器会重新计算并核对文档版本与操作类型；过期或伪造操作不会执行。
+Editing uses client-negotiated document versions. When an old client applies an operation via `latex.applyCodeAction`, the server recalculates and checks the document version and operation type; expired or forged operations will not be performed.
 
-服务器支持标准 `codeAction/resolve`。客户端同时声明 `codeActionLiteralSupport`、`dataSupport: true`，且 `resolveSupport.properties` 包含 `edit` 时，重构、快速修复和 `source.fixAll` 返回带 `data` 的操作，编辑在解析请求中返回。标题、类型、诊断、首选标记及其他原有字段保持不变；其余客户端继续收到内联编辑或既有应用命令。重编译操作保留原来的命令和警告校验流程。
+The server supports standard `codeAction/resolve`. When the client declares `codeActionLiteralSupport`, `dataSupport: true` at the same time, and `resolveSupport.properties` contains `edit`, refactoring, quick fix, and `source.fixAll` return operations with `data`, and the edit is returned in the parse request. Title, type, diagnostics, preferred tags, and other legacy fields remain unchanged; remaining clients continue to receive inline editing or existing application commands. The recompilation operation retains the original command and warning verification process.
 
-解析会核对项目文件的内容与版本、作用域、设置和操作身份，再按原始范围及诊断上下文重新计算编辑。文档更新、相关项目定义变化、诊断修复消失或操作被改写时返回 `-32801`，编辑器应重新请求操作；结构不合法的 `data` 返回 `InvalidParams`。其他独立项目的缓冲区更新不会使当前项目的操作失效。无解析数据的操作原样返回。
+The parsing will check the content of the project file against the version, scope, settings and operating identity, and then recalculate the edits according to the original scope and diagnostic context. `-32801` is returned when the document is updated, related project definition changes, diagnostic repair disappears, or the operation is rewritten, and the editor should re-request the operation; `data` with an illegal structure returns `InvalidParams`. Buffer updates from other independent projects will not invalidate the current project's operations. Operations without parsed data are returned unchanged.
 
-验证：
+verify:
 
 ```sh
 cargo test --locked --lib code_action_resolve

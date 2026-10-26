@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, navigation},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
 #[test]
 fn nested_imports_use_scoped_directories_for_dependencies_navigation_and_completion() {
     let dir = tempfile::tempdir().unwrap();

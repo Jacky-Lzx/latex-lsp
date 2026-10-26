@@ -1,15 +1,15 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     editing,
     language::features,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn setup(source: &str, versioned: bool) -> (Workspace, Url) {
     let uri = Url::parse("file:///editing/main.tex").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: versioned,
             code_action_literals: true,
             ..Default::default()
@@ -74,7 +74,7 @@ fn include_fix_requests_never_exceed_the_total_suggestion_limit() {
         .unwrap();
     }
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -119,7 +119,7 @@ fn missing_include_fixes_preserve_comments_utf16_prefixes_and_explicit_extension
                 format!("😀 \\include % keep\r\n{{ sections/chapetr{extension} }} % keep\r\n");
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: versioned,
                     code_action_literals: true,
                     ..Default::default()
@@ -160,7 +160,7 @@ fn include_fix_commands_recheck_candidate_existence_original_existence_and_versi
     std::fs::write(root.join("main.tex"), source).unwrap();
     std::fs::write(root.join("chapter.tex"), "Chapter.\n").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             apply_edits: true,
             ..Default::default()
         },
@@ -225,7 +225,7 @@ fn include_candidates_use_the_diagnostic_build_root_instead_of_another_project_o
     }
     let uri = Url::from_file_path(root.join("shared/source.tex")).unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -264,7 +264,7 @@ fn include_fixes_suppress_self_inclusion_known_cycles_nonfiles_and_mismatched_wa
         std::fs::write(root.join("bridge.tex"), "\\input{main}").unwrap();
         let uri = Url::from_file_path(root.join(main_name)).unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -291,7 +291,7 @@ fn include_fixes_suppress_self_inclusion_known_cycles_nonfiles_and_mismatched_wa
         std::fs::write(root.join("chapter.TEX"), "Wrong extension.").unwrap();
     }
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -360,7 +360,7 @@ fn include_fixes_bound_suggestions_support_unicode_and_respect_static_includeonl
         std::fs::write(root.join("main.tex"), source).unwrap();
         std::fs::write(root.join(format!("{candidate}.tex")), "Chapter.").unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -384,7 +384,7 @@ fn include_fixes_bound_suggestions_support_unicode_and_respect_static_includeonl
         std::fs::write(root.join(format!("chapter{index}.tex")), "Chapter.").unwrap();
     }
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },

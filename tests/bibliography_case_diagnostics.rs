@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "bibliography-key-case-mismatch";
 
@@ -295,7 +295,7 @@ fn incomplete_biber_histories_keep_current_key_ranges_without_guessing_other_dat
     for prefix in [
         "INFO - Found BibTeX data source 'missing.data'\n",
         "ERROR - Prior syntax error\n",
-        "[latex-lsp: middle of compiler output omitted]\n",
+        "[texquill: middle of compiler output omitted]\n",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -472,7 +472,7 @@ fn related_locations_are_bounded_and_case_warnings_do_not_offer_unverified_merge
     assert_eq!(related[0].location.range.start.line, 1);
     assert_eq!(related[15].location.range.start.line, 16);
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },

@@ -1,5 +1,5 @@
-use latex_lsp::{editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{editing, project::workspace::Workspace, text::Text};
 
 fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url) {
     let dir = tempfile::tempdir().unwrap();
@@ -229,7 +229,7 @@ fn real_compiler_citation_repairs_use_each_sections_resources_and_clear_the_warn
     let (dir, mut ws, main) =
         setup(r"\cite{defautonly}\newrefsection[chosen]\cite{sectononly}\printbibliography");
     assert_eq!(names(&ws, &main), ["defautonly", "sectononly"]);
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         output_directory: Some(".".into()),
         arguments: Some(
@@ -247,7 +247,7 @@ fn real_compiler_citation_repairs_use_each_sections_resources_and_clear_the_warn
         ),
         ..Default::default()
     };
-    let first = latex_lsp::compilation::build::run(
+    let first = texquill::compilation::build::run(
         &dir.path().join("main.tex"),
         &config,
         &Default::default(),
@@ -309,7 +309,7 @@ fn real_compiler_citation_repairs_use_each_sections_resources_and_clear_the_warn
     ws.open(main.clone(), updated.source, 6);
     ws.project.build_diagnostics.clear();
     assert!(citations(&ws, &main).is_empty());
-    let result = latex_lsp::compilation::build::run(
+    let result = texquill::compilation::build::run(
         &dir.path().join("main.tex"),
         &config,
         &Default::default(),
@@ -329,7 +329,7 @@ fn real_compiler_citation_repairs_use_each_sections_resources_and_clear_the_warn
     let biber = std::fs::read_to_string(dir.path().join("main.blg")).unwrap();
     assert!(!biber.contains("WARN"), "{biber}");
     for pass in 0..2 {
-        let result = latex_lsp::compilation::build::run(
+        let result = texquill::compilation::build::run(
             &dir.path().join("main.tex"),
             &config,
             &Default::default(),

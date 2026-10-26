@@ -1,8 +1,8 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     config::{Engine, Formatter},
     project::workspace::Workspace,
 };
-use lsp_types::*;
 
 #[test]
 fn folder_settings_inherit_and_root_overrides_do_not_leak() {
@@ -16,9 +16,9 @@ fn folder_settings_inherit_and_root_overrides_do_not_leak() {
     .unwrap();
     std::fs::write(a.path().join("slides.tex"), "\\documentclass{beamer}").unwrap();
     std::fs::write(a.path().join("chapters/one.tex"), "\\ref{missing}").unwrap();
-    std::fs::write(a.path().join(".latex-lsp.json"), r#"{"formatting":{"formatter":"latexindent"},"projects":{"book.tex":{"formatting":{"formatter":"tex-fmt"}},"slides.tex":{"build":{"engine":"xelatex"}}}}"#).unwrap();
+    std::fs::write(a.path().join(".texquill.json"), r#"{"formatting":{"formatter":"latexindent"},"projects":{"book.tex":{"formatting":{"formatter":"tex-fmt"}},"slides.tex":{"build":{"engine":"xelatex"}}}}"#).unwrap();
     std::fs::write(
-        a.path().join("chapters/.latex-lsp.json"),
+        a.path().join("chapters/.texquill.json"),
         r#"{"formatting":{"timeoutSeconds":3},"diagnostics":{"undefinedReferences":false}}"#,
     )
     .unwrap();
@@ -49,7 +49,7 @@ fn project_root_file_is_relative_to_configuration_and_invalid_settings_are_visib
     std::fs::write(dir.path().join("main.tex"), "\\documentclass{article}").unwrap();
     std::fs::write(dir.path().join("nested/chapter.tex"), "text").unwrap();
     std::fs::write(
-        dir.path().join("nested/.latex-lsp.json"),
+        dir.path().join("nested/.texquill.json"),
         r#"{"build":{"rootFile":"../main.tex"}}"#,
     )
     .unwrap();
@@ -61,7 +61,7 @@ fn project_root_file_is_relative_to_configuration_and_invalid_settings_are_visib
         Url::from_file_path(dir.path().join("main.tex")).unwrap()
     );
     std::fs::write(
-        dir.path().join("nested/.latex-lsp.json"),
+        dir.path().join("nested/.texquill.json"),
         r#"{"formatting":{"unknown":true}}"#,
     )
     .unwrap();

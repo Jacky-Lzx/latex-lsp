@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::sync::atomic::AtomicBool;
+use texquill::{
     compilation::{build, build_log},
     config::BuildConfig,
     editing,
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::sync::atomic::AtomicBool;
 
 fn parse(source: &str, context: &str, numbered: bool) -> Diagnostic {
     let directory = tempfile::tempdir().unwrap();
@@ -180,7 +180,7 @@ fn real_shortened_counter_contexts_reject_wrong_repairs_and_keep_unique_repairs(
                 let mut expected = source.clone();
                 expected.replace_range(start..start + name.len(), &correct);
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         code_action_literals: true,
                         ..Default::default()
@@ -214,7 +214,7 @@ fn real_shortened_counter_contexts_reject_wrong_repairs_and_keep_unique_repairs(
                     "{engine}/{size}/{ambiguous}: {}",
                     after.output
                 );
-                assert!(directory.path().join("build/latex-lsp/main.pdf").is_file());
+                assert!(directory.path().join("build/texquill/main.pdf").is_file());
             }
         }
     }

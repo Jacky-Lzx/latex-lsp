@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, file: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///biblatex-categories/{file}")).unwrap();
@@ -47,10 +47,10 @@ fn category_memberships_reference_keys_without_renaming_category_names() {
     assert!(features::hover(&workspace, &main, at).is_some());
     assert_eq!(features::references(&workspace, &main, at, true).len(), 3);
     assert_eq!(
-        latex_lsp::editing::highlights(&workspace, &main, at).len(),
+        texquill::editing::highlights(&workspace, &main, at).len(),
         2
     );
-    let tokens = latex_lsp::language::semantic::tokens(&workspace.documents[&main], None).unwrap();
+    let tokens = texquill::language::semantic::tokens(&workspace.documents[&main], None).unwrap();
     let (mut line, mut character) = (0, 0);
     let mut keys = Vec::new();
     for token in tokens.data {
@@ -110,7 +110,7 @@ fn category_membership_completion_and_signatures_distinguish_category_from_keys(
         let at = workspace.documents[&main]
             .text
             .position(marked.find('¦').unwrap());
-        let signature = latex_lsp::language::signature::help(&workspace, &main, at).unwrap();
+        let signature = texquill::language::signature::help(&workspace, &main, at).unwrap();
         assert_eq!(
             signature.signatures[0].label,
             "\\addtocategory{category}{keys}"
@@ -151,7 +151,7 @@ fn category_key_completion_preserves_other_keys_comments_and_unclosed_lists() {
             marked.replace("al¦pha", "alpha").replace("al¦", "alpha")
         );
         assert_eq!(
-            latex_lsp::language::signature::help(&workspace, &main, at)
+            texquill::language::signature::help(&workspace, &main, at)
                 .unwrap()
                 .active_parameter,
             Some(1)
@@ -214,7 +214,7 @@ fn category_commands_offer_snippets_and_respect_custom_signatures() {
         for following in ["", "{alpha}{beta}"] {
             let source = format!("\\{name}{following}");
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     snippets: true,
                     ..Default::default()
                 },
@@ -249,7 +249,7 @@ fn category_commands_offer_snippets_and_respect_custom_signatures() {
             .text
             .position(source.rfind("alpha").unwrap() + 1);
         assert_eq!(
-            latex_lsp::language::signature::help(&workspace, &main, at)
+            texquill::language::signature::help(&workspace, &main, at)
                 .unwrap()
                 .signatures[0]
                 .label,
@@ -272,7 +272,7 @@ fn category_assignments_do_not_claim_citation_warnings_or_spelling_fixes() {
             "@book{alpha,title={Alpha}}",
         )
         .unwrap();
-        let diagnostics = latex_lsp::compilation::build_log::parse(
+        let diagnostics = texquill::compilation::build_log::parse(
             &main,
             "Package biblatex Warning: Citation 'alphaa' on page 1 undefined on input line 2.\n",
         );
@@ -286,7 +286,7 @@ fn category_assignments_do_not_claim_citation_warnings_or_spelling_fixes() {
             assert_eq!(items[0].range.start, Position::new(1, 0));
         }
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -297,7 +297,7 @@ fn category_assignments_do_not_claim_citation_warnings_or_spelling_fixes() {
             .project
             .build_diagnostics
             .insert(uri.clone(), diagnostics.clone());
-        let actions = latex_lsp::editing::code_actions(
+        let actions = texquill::editing::code_actions(
             &workspace,
             &uri,
             items[0].range,

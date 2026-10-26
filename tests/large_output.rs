@@ -1,8 +1,8 @@
 #![cfg(unix)]
 
-use latex_lsp::{compilation::build, config::BuildConfig};
 use lsp_types::{DiagnosticSeverity, Url};
 use std::{io::Write, os::unix::fs::PermissionsExt, sync::atomic::AtomicBool};
+use texquill::{compilation::build, config::BuildConfig};
 
 fn run(channel: &str, failure: bool) -> (tempfile::TempDir, build::Outcome) {
     let directory = tempfile::tempdir().unwrap();

@@ -364,7 +364,7 @@ mod tests {
             });
         }
         controls.push(Diagnostic {
-            source: Some("latex-lsp".into()),
+            source: Some("texquill".into()),
             ..warning("shared")
         });
         controls.push(Diagnostic {

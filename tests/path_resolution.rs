@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeMap, path::Path};
+use texquill::{
     compilation::build,
     editing::file_operations,
     language::{features, navigation},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::{collections::BTreeMap, path::Path};
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -344,7 +344,7 @@ fn source_extension_rename_rejects_wrong_compiler_inputs_and_allows_a_batch_remo
     let root = directory.path();
     let mut workspace = project(root);
     std::fs::write(root.join("renamed.ltx.tex"), r"\typeout{WRONG INPUT}Other.").unwrap();
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };

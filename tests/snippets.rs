@@ -1,15 +1,15 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
 };
-use lsp_types::*;
 
 #[test]
 #[ignore = "requires Neovim 0.10+ with vim.snippet"]
 fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
     let uri = Url::parse("file:///snippets/main.tex").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },

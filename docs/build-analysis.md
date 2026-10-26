@@ -1,42 +1,42 @@
-# 编译结果分析
+# Build result analysis
 
-[返回文档目录](README.md) · [编译指南](build.md)
+[Back to documentation](README.md) · [Build guide](build.md)
 
-结果的 `analysis` 汇总本次最终 TeX 日志中的已确认重复编译请求（`rerunRequired`）、未解析交叉引用键（`unresolvedReferences`）、文献引用键（`unresolvedCitations`）、缺失 PDF 目标（`unresolvedDestinations`）、重复 PDF 目标（`duplicateDestinations`）和重复标签键（`duplicateLabels`）。
+`analysis` of the results summarizes confirmed duplicate compilation requests (`rerunRequired`), unresolved cross-reference keys (`unresolvedReferences`), literature citation keys (`unresolvedCitations`), missing PDF targets (`unresolvedDestinations`), and duplicate PDFs in this final TeX log target (`duplicateDestinations`) and duplicate tag key (`duplicateLabels`).
 
-仅从标准 LaTeX、包或类告警正文开头识别未解析引用；普通告警示例或文件名中的同类文字仍保留为告警，不计入引用键。键去重并排序；PDF 目标名解码引擎输出的 PDF 字符串转义，引用、文献和重复标签键保留原文。日志折行不会在引用键的括号前添加空格或把括号误读为文件边界。
+Unresolved references are only identified from the beginning of the standard LaTeX, package or class alert text; similar text in normal alert examples or file names remains as alerts and is not counted in the reference key. Keys are deduplicated and sorted; PDF strings output by the PDF target name decoding engine are escaped, and citation, document, and duplicate tag keys remain original. Log wrapping does not add spaces before parentheses that reference keys or misread the parentheses as file boundaries.
 
-缺少定义本身不视为重复编译请求。表格列宽需要更新时，识别 `longtable` 的明确重编译提示；列宽收敛后的最终日志不再保留该请求。也识别 hyperref 关于 PDF 页标签（`/PageLabels`）的明确重编译提示；例如 XeLaTeX 首次构建后需要补全页标签，后续日志不再请求时清除该标记。
+Missing definitions are not themselves considered duplicate compilation requests. When the table column width needs to be updated, identify the explicit recompilation prompt of `longtable`; the final log after column width convergence no longer retains this request. Also recognizes hyperref's explicit recompilation hint about PDF page tags (`/PageLabels`); for example, XeLaTeX needs to complete page tags after the first build, and clears this mark when subsequent logs are no longer requested.
 
-使用末页钩子后，总页数变化可能造成临时额外页或钩子执行在旧页。两类内核的明确请求也设置重编译标记并提供操作；具体警告、实际 PDF 页数及收敛行为见[末页变更与重编译](last-page.md)。
+After using the last page hook, changes in the total number of pages may cause temporary extra pages or hook execution on old pages. Explicit requests for both types of kernels also set recompile flags and provide actions; see [Last Page Changes and Recompilation](last-page.md) for specific warnings, actual PDF page count, and convergence behavior.
 
-每类最多 128 个键，每个键最多 128 个 Unicode 字符；超出预算的键不截短身份，而是省略并设置 `truncated`。诊断输入被省略时该标记也为 `true`。
+There is a maximum of 128 keys per class, with a maximum of 128 Unicode characters per key; keys that exceed the budget do not truncate the identity, but omit it and set `truncated`. This flag is also `true` when diagnostic input is omitted.
 
-取消、超时、无法观测最终日志或因输入变化而丢弃的结果返回 `analysis: null`；早期编译轮次已解决的警告不会进入分析。
+Results that are canceled, timed out, unable to observe the final log, or discarded due to input changes return `analysis: null`; warnings that have been resolved in earlier compilation rounds will not enter the analysis.
 
-## 折行的重编译警告
+## Recompilation warning for line breaks
 
-LaTeX 交叉引用与末页、natbib 文献、longtable 列宽和 hyperref 页标签的已知请求兼容逐字节折行。恢复时保留单词中的连接符和原有空格，例如 60 列日志中的 `cross` 换行 `-references` 仍为 `cross-references`；行尾已有的空格也不会被裁掉而拼接两个单词。
+LaTeX cross-references are compatible with known requests for last pages, natbib documents, longtable column widths, and hyperref page tags. When restoring, the connectors and original spaces in the words are retained. For example, `cross` in the 60-column log is still `cross-references` when the new line is `-references`; the existing spaces at the end of the line will not be trimmed and the two words will be spliced.
 
-第一句以句号结束后，显式换行的请求仍属于同一条警告。识别同一宏包的续行前缀和 LaTeX 的缩进续行；独立的 natbib 简短提示继续有效，但若存在续行，使用完整正文判断。示例、额外说明和不完整请求不会借用前面的有效短句触发重编译。文件切换、相邻错误或已省略的日志片段不用于补全未完成的请求。
+After the first sentence ends with a period, the request for an explicit line break still belongs to the same warning. Recognize line continuation prefixes of the same package and indented continuation lines of LaTeX; independent natbib short hints continue to be valid, but if there are continuation lines, the full text is used to judge. Examples, additional clarifications, and incomplete requests will not trigger recompilation by borrowing from previous valid phrases. File switches, adjacent errors, or omitted log fragments are not used to complete outstanding requests.
 
-结果摘要与重编译操作使用相同规则。natbib 的最终检查可能在回读生成的 `.aux` 时发出；在该诊断处发起的操作仍编译原主文档。标签或文献键跨文件改名后，后续构建会重新分析引用；日志稳定后，标记和操作随之清除。
+Result summarization uses the same rules as recompile operations. A final check by natbib may be issued when reading back the generated `.aux`; operations initiated at this diagnostic still compile the original root document. After a tag or citation key is renamed across files, subsequent builds will reanalyze references; once the log stabilizes, the tags and operations will be cleared.
 
-## 文件变更与重编译
+## File changes and recompilation
 
-rerunfilecheck 支持文件变更后的标准 `Rerun.` 请求，以及 hyperref 的完整书签和反向文献引用重编译提示，兼容日志折行与宏包续行前缀；结果分析与[重新编译操作](build.md#从诊断重新编译)使用相同规则。含额外说明的相似文字及要求运行 makeindex 的索引、术语表提示不提供此操作。后续编译中文件不再变化时，重编译标记与操作随对应警告清除。
+rerunfilecheck supports standard `Rerun.` requests after file changes, as well as hyperref's complete bookmarks and reverse literature reference recompilation prompts, and is compatible with log line breaks and package continuation line prefixes; result analysis uses the same rules as [recompile operation](build.md#recompile-from-diagnostics). Similar text with additional explanations and index and glossary prompts that require running makeindex do not provide this operation. When the files no longer change during subsequent compilations, the recompilation flags and operations are cleared along with the corresponding warnings.
 
-启用 hyperref 的 `backref=page` 等反向引用功能后，`.brf` 文件变化会产生 `Rerun to get bibliographical references right.` 请求。该请求设置 `rerunRequired: true`，并可通过直接 TeX 引擎或已有的重编译配置处理。这类请求只要求再运行 LaTeX；没有其他文献处理请求时，`requiredBibliographyTools` 为 `[]`。引用页码再次变化时会重新出现请求，后续稳定日志会清除标记和操作；编译管道较早轮次的控制台提示不会覆盖最终日志。
+After enabling back reference functions such as hyperref's `backref=page`, `.brf` file changes will generate `Rerun to get bibliographical references right.` requests. This request sets `rerunRequired: true` and can be handled by the direct TeX engine or by an existing recompilation configuration. This type of request only requires running LaTeX again; `requiredBibliographyTools` becomes `[]` when there are no other documents processing the request. The request will reappear when the reference page number changes again, and subsequent stable logs will clear the tags and operations; console prompts from earlier rounds of the compilation pipeline will not overwrite the final log.
 
-告警头恰好占满 TeX 输出行时，显式换行可能留下额外空行。服务器保留其后同一宏包的完整说明，包括继续折行的请求正文；要求运行 makeindex 的索引和术语表说明不会因此丢失或被误判为普通 LaTeX 重编译请求。真正的文件切换及相邻诊断仍保持各自来源。
+Explicit line breaks may leave extra empty lines when the warning header happens to fill a TeX output line. The server retains the complete description of the same package thereafter, including the request body that continues to wrap; index and glossary descriptions that require running makeindex are not lost or misinterpreted as ordinary LaTeX recompilation requests. True file switching and adjacent diagnostics remain from their respective sources.
 
-文件名在日志折行处出现左右括号时，先尝试恢复完整的已知警告，确认后才消费对应行，避免把文件名当成源码的进入或退出事件。60 / 79 列输出中的文件名可以包含看似完整的 `has changed. Rerun.` 正文；识别使用实际的完整文件名，不提前结束警告。不完整警告仍保留真正的文件切换，后续主文件和子文件的诊断分别归属各自来源。
+When the left and right brackets appear in the file name at the log line break, try to restore the complete known warning first, and then consume the corresponding line after confirming it to avoid treating the file name as an entry or exit event of the source code. 60 / 79 Filenames in column output can contain seemingly complete `has changed. Rerun.` text; recognition uses actual complete filenames without premature end warning. Incomplete warnings still retain the true file switching, and subsequent diagnostics of the main file and sub-files are attributed to their respective sources.
 
-## 文献处理与重编译
+## Document processing and recompilation
 
-`analysis.requiredBibliographyTools` 汇总 biblatex 明确请求重新运行的文献工具，使用小写名称 `biber` / `bibtex`，去重并排序。完整的文献处理请求也会设置 `rerunRequired: true`，因为文献处理后还需要运行 LaTeX；仅出现未定义引用不会推断所需工具。
+`analysis.requiredBibliographyTools` Summary biblatex Explicitly request a rerun of the literature tool, using the lowercase names `biber` / `bibtex`, deduplicated and sorted. A complete document processing request will also set `rerunRequired: true`, since LaTeX needs to be run after document processing; the presence of an undefined reference alone does not infer the required tool.
 
-例如，BibTeX 后端的首次编译可能返回：
+For example, a first compile of the BibTeX backend might return:
 
 ```json
 {
@@ -45,36 +45,36 @@ rerunfilecheck 支持文件变更后的标准 `Rerun.` 请求，以及 hyperref 
 }
 ```
 
-运行 BibTeX 后，若 biblatex 只要求再运行 LaTeX，工具列表变为 `[]`，`rerunRequired` 仍为 `true`。最终日志不再请求时，两者分别为 `[]` 和 `false`。分页变化、语言加载的明确 LaTeX 重运行提示也参与分析；普通警告示例、不完整请求及其他宏包中的相似文字不会设置这些字段。
+After running BibTeX, if biblatex only requires running LaTeX again, the tool list becomes `[]`, and `rerunRequired` remains `true`. When the final log is no longer requested, the two are `[]` and `false` respectively. Pagination changes, explicit LaTeX rerun prompts for language loading are also analyzed; normal warning examples, incomplete requests, and similar text in other packages do not set these fields.
 
-摘要依据本次最终日志，不保留前一轮已满足的请求。`latex/buildFinished` 和 `latex.buildStatus` 返回相同字段；取消、超时和过期结果仍按原规则返回 `analysis: null`。重编译操作的工具适用范围见[从诊断重新编译](build.md#从诊断重新编译)。
+The summary is based on this final log, and requests that have been fulfilled in the previous round will not be retained. `latex/buildFinished` and `latex.buildStatus` return the same fields; cancellation, timeout and expiration results still return `analysis: null` according to the original rules. For the tool scope of recompile operation, see [Recompile from Diagnostics](build.md#recompile-from-diagnostics).
 
-## 索引与术语表工具
+## Indexing and Glossary Tools
 
-`analysis.requiredIndexTools` 汇总 rerunfilecheck 明确请求的 `makeindex`，去重并排序。完整的索引或术语表请求同时设置 `rerunRequired: true`；该列表与 `requiredBibliographyTools` 独立。处理命令、日志快照规则及重编译操作的适用边界见[索引与术语表处理](index-processing.md)。
+`analysis.requiredIndexTools` Summary rerunfilecheck Explicitly requested `makeindex`, deduplicated and sorted. A complete index or glossary request also sets `rerunRequired: true`; this list is independent of `requiredBibliographyTools`. For the applicable boundaries of processing commands, log snapshot rules and recompilation operations, see [Index and Glossary Processing](index-processing.md).
 
-## 排版警告摘要
+## Summary of formatting warnings
 
-`analysis.boxWarnings` 汇总水平、垂直方向的 Overfull / Underfull 诊断数量，以及最大溢出量或 badness。字段、计数和预算规则见[排版警告分析](typesetting.md)。
+`analysis.boxWarnings` summarizes the number of Overfull / Underfull diagnostics in horizontal and vertical directions, as well as the maximum overflow or badness. For fields, counting and budget rules, see [Typesetting Warning Analysis](typesetting.md).
 
-`analysis.oversizedFloats` 单独汇总浮动体过高警告的数量与最大超出量，见[浮动体高度警告](floats.md)。
+`analysis.oversizedFloats` separately summarizes the number and maximum excess of floating body over-height warnings, see [Floating Body Height Warning](floats.md).
 
-## 字体替换摘要
+## Font replacement summary
 
-`analysis.fontSubstitutions` 和 `analysis.fontSizeSubstitutions` 分别汇总最终日志中的字体与字号替换。字段、去重及预算规则见[字体诊断与结果分析](fonts.md#字体与字号替换)。
+`analysis.fontSubstitutions` and `analysis.fontSizeSubstitutions` respectively summarize the font and font size replacement in the final log. For fields, deduplication and budget rules, see [Font Diagnostics and Result Analysis](fonts.md#font-and-font-size-replacement).
 
-## 缺字摘要
+## Missing word summary
 
-`analysis.missingCharacters` 按字符与字体汇总缺字，并保留最高严重级别。字段示例、预算与定位规则见[缺字摘要](fonts.md#缺字摘要)。
+`analysis.missingCharacters` Summarizes missing characters by character and font, and retains the highest severity level. For field examples, budget and positioning rules, see [Abstract of missing words](fonts.md#missing-word-summary).
 
-## Unicode 输入错误摘要
+## Unicode input error summary
 
-`analysis.unsupportedUnicodeCharacters` 汇总最终日志中 LaTeX 未设置映射的 Unicode 字符，提供字符和码点。字段、预算与处理方式见[Unicode 输入错误](unicode-errors.md)。
+`analysis.unsupportedUnicodeCharacters` Summary of Unicode characters that LaTeX does not set a map for in the final log, providing characters and code points. See [Unicode input error](unicode-errors.md) for fields, budgets and processing methods.
 
-## PDF 页数
+## PDF pages
 
-完成通知和 `latex.buildStatus` 的 `pages` 字段来自最终 TeX 输出摘要，仅在本次编译返回有效 PDF 时提供。解析支持 PDF、DVI 和 XDV 摘要，兼容多遍编译、带引号的文件名和日志折行；DVI / XDV 用于先生成中间文件再转换 PDF 的编译流程。
+The `pages` field in completion notifications and `latex.buildStatus` comes from the final TeX output summary and is provided only when the current build returns a valid PDF. Parsing supports PDF, DVI, and XDV summaries, multiple passes, quoted filenames, and wrapped logs. DVI/XDV summaries support build workflows that produce an intermediate file before converting it to PDF.
 
-输出目录或文件名中的 `(9 pages).`、`main.pdf (9 pages).` 等字面文字不会作为页数。服务器读取完整摘要后确认输出文件名与页数，不把目录名处的折行当作摘要结尾；最后一份摘要不完整或跨越已省略的日志时返回 `null`，不会沿用前一轮的页数。
+Literal characters such as `(9 pages).` and `main.pdf (9 pages).` in the output directory or file name will not be used as page numbers. After reading the complete summary, the server confirms the output file name and page number, and does not treat the line break at the directory name as the end of the summary; when the last summary is incomplete or spans an omitted log, `null` is returned, and the page number from the previous round is not used.
 
-最后一条明确的输出报告为“没有页面输出”时，不保留早期轮次的页数，也不把目录中旧 PDF 作为本次成功产物；详见[输入与产物校验](build-inputs.md#输入与产物校验)。最终日志优先于编译管道中早期轮次的报告，普通警告示例不作为此类报告。
+When the last clear output report is "No page output", the number of pages in earlier rounds will not be retained, and the old PDF in the directory will not be regarded as this successful product; for details, see [Input and Product Verification](build-inputs.md#input-and-product-verification). Final logs take precedence over reports from earlier passes in the compilation pipeline, and normal warning examples are not reported as such.

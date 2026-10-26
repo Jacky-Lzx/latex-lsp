@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace, text::Text};
 
 fn setup(marked: &str) -> (tempfile::TempDir, Workspace, Url, String, Position) {
     let dir = tempfile::tempdir().unwrap();
@@ -580,7 +580,7 @@ fn extension_like_labels_are_symbols_during_file_moves_and_literal_choices_remai
         .replace("label=chosen", "label=chosen.bib.alias")
         .replace("[chosen]", "[chosen.bib.alias]");
     ws.open(main.clone(), source.clone(), 6);
-    let edit = latex_lsp::editing::file_operations::will_rename(
+    let edit = texquill::editing::file_operations::will_rename(
         &ws,
         &[FileRename {
             old_uri: main.join("section.bib").unwrap().to_string(),
@@ -604,7 +604,7 @@ fn extension_like_labels_are_symbols_during_file_moves_and_literal_choices_remai
     ws.open(main.clone(), source.clone(), 7);
     let at = Text::new(source.clone()).position(source.rfind("chosen.bib.alias]").unwrap() + 3);
     assert!(features::definitions(&ws, &main, at).is_empty());
-    let edit = latex_lsp::editing::file_operations::will_rename(
+    let edit = texquill::editing::file_operations::will_rename(
         &ws,
         &[FileRename {
             old_uri: main.join("chosen.bib").unwrap().to_string(),

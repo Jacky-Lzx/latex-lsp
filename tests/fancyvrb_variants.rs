@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::build_log,
     editing::{self, file_operations},
     language::{features, navigation, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 const INPUTS: [&str; 3] = ["VerbatimInput", "LVerbatimInput", "BVerbatimInput"];
 
@@ -72,7 +72,7 @@ fn variants_complete_navigate_and_rename_wrapped_root_paths_with_versions() {
     }
     let child = uri(root, "chapters/child.tex");
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },
@@ -304,7 +304,7 @@ fn variant_missing_diagnostics_and_fixes_keep_the_actual_command_and_wrappers() 
             let start = source.find(wrong).unwrap();
             assert_eq!(item.range, text.range(start, start + wrong.len()));
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     versioned_edits: true,
                     ..Default::default()
@@ -376,11 +376,11 @@ fn real_variant_missing_fixes_compile_wrapped_paths_with_both_engines() {
                 let source = format!("% 😀\r\n\\documentclass{{article}}\\usepackage{{fancyvrb}}\\begin{{document}}\r\n\\{command} *[frame=single] % keep\r\n{{{value}}}\r\n\\end{{document}}\r\n");
                 std::fs::write(root.join("main.tex"), &source).unwrap();
                 std::fs::write(root.join(right), "Original code.\n").unwrap();
-                let config = latex_lsp::config::BuildConfig {
+                let config = texquill::config::BuildConfig {
                     executable: engine.into(),
                     ..Default::default()
                 };
-                let first = latex_lsp::compilation::build::run(
+                let first = texquill::compilation::build::run(
                     &root.join("main.tex"),
                     &config,
                     &Default::default(),
@@ -401,7 +401,7 @@ fn real_variant_missing_fixes_compile_wrapped_paths_with_both_engines() {
                 let start = source.find(wrong).unwrap();
                 assert_eq!(item.range, text.range(start, start + wrong.len()));
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         code_action_literals: true,
                         versioned_edits: true,
                         ..Default::default()
@@ -429,7 +429,7 @@ fn real_variant_missing_fixes_compile_wrapped_paths_with_both_engines() {
                 };
                 let updated = apply(&source, edits(fix.edit.as_ref().unwrap(), &main));
                 std::fs::write(root.join("main.tex"), updated).unwrap();
-                let fixed = latex_lsp::compilation::build::run(
+                let fixed = texquill::compilation::build::run(
                     &root.join("main.tex"),
                     &config,
                     &Default::default(),
@@ -441,7 +441,7 @@ fn real_variant_missing_fixes_compile_wrapped_paths_with_both_engines() {
                 );
                 assert!(fixed.pdf.is_some());
                 let recorder =
-                    std::fs::read_to_string(root.join("build/latex-lsp/main.fls")).unwrap();
+                    std::fs::read_to_string(root.join("build/texquill/main.fls")).unwrap();
                 assert!(recorder
                     .lines()
                     .any(|line| line.strip_prefix("INPUT ").is_some_and(|path| root
@@ -477,9 +477,9 @@ fn real_mixed_execution_keeps_labels_and_excludes_other_displayed_sources() {
                     r"\documentclass{{article}}\usepackage{{fancyvrb,verbatim,listings}}\renewcommand{{\familydefault}}{{\ttdefault}}\begin{{document}}\{display}{{commands.tex}}\{display}{{display.tex}}\{execute}[commandchars={commandchars}]{{commands.tex}}\ref{{executedlabel}}\end{{document}}"
                 );
                 std::fs::write(root.join("main.tex"), &source).unwrap();
-                let outcome = latex_lsp::compilation::build::run(
+                let outcome = texquill::compilation::build::run(
                     &root.join("main.tex"),
-                    &latex_lsp::config::BuildConfig {
+                    &texquill::config::BuildConfig {
                         executable: engine.into(),
                         ..Default::default()
                     },
@@ -491,7 +491,7 @@ fn real_mixed_execution_keeps_labels_and_excludes_other_displayed_sources() {
                     outcome.output
                 );
                 assert!(
-                    std::fs::read_to_string(root.join("build/latex-lsp/main.aux"))
+                    std::fs::read_to_string(root.join("build/texquill/main.aux"))
                         .unwrap()
                         .contains("newlabel{executedlabel}")
                 );

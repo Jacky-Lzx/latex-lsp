@@ -1,5 +1,5 @@
-use latex_lsp::{editing, language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{editing, language::features, project::workspace::Workspace, text::Text};
 
 #[path = "support/completion.rs"]
 mod completion;

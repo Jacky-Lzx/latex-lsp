@@ -1,7 +1,7 @@
-use latex_lsp::{language::navigation, project::workspace::Document};
 use lsp_types::{
     FoldingRange, FoldingRangeCapability, FoldingRangeClientCapabilities, FoldingRangeKind, Url,
 };
+use texquill::{language::navigation, project::workspace::Document};
 
 fn document(extension: &str, source: &str) -> Document {
     Document::new(

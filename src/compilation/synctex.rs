@@ -535,7 +535,7 @@ mod tests {
         let mut workspace = Workspace::default();
         workspace.add_root(directory.path().into());
         assert!(prepare(&workspace, &uri).is_err());
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::create_dir_all(&output).unwrap();
         std::fs::write(output.join("main.pdf"), "%PDF").unwrap();
         std::fs::write(output.join("main.synctex.gz"), "SyncTeX data").unwrap();
@@ -587,7 +587,7 @@ mod tests {
                 workspace.refresh_project(&uri);
             }
             assert!(!workspace.documents.contains_key(&image_uri));
-            let output = root.join("build/latex-lsp");
+            let output = root.join("build/texquill");
             std::fs::create_dir_all(&output).unwrap();
             std::fs::write(output.join("main.pdf"), "%PDF").unwrap();
             std::fs::write(output.join("main.synctex.gz"), "SyncTeX data").unwrap();

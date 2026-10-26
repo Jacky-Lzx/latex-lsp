@@ -1,4 +1,4 @@
-use latex_lsp::compilation::build_log::page_count;
+use texquill::compilation::build_log::page_count;
 
 #[test]
 fn filenames_cannot_supply_page_counts_at_log_wrap_boundaries() {
@@ -74,7 +74,7 @@ fn complete_summaries_keep_all_engine_formats_and_stop_at_real_footers() {
 #[test]
 fn page_summaries_do_not_cross_missing_output_or_exceed_reading_budgets() {
     for summary in [
-        "Output written on dir/main.pdf (9 pages).\n[latex-lsp: middle of compiler output omitted]\n/actual.pdf (1 page).".into(),
+        "Output written on dir/main.pdf (9 pages).\n[texquill: middle of compiler output omitted]\n/actual.pdf (1 page).".into(),
         format!("Output written on {}/actual.pdf (1 page).", "x".repeat(8192)),
         format!("Output written on {}/actual.pdf (1 page).", "x\n".repeat(128)),
     ] {
@@ -89,7 +89,7 @@ fn an_incomplete_final_summary_never_reuses_an_earlier_pass_count() {
         ("Output written on final.pdf (2 pages, invalid bytes).", None),
         ("Output written on directory/main.pdf (9 pages).\n/unfinished.pdf", None),
         ("Output written on \"directory/final.pdf (9 pages).", None),
-        ("Output written on final.pdf (2 pages,\n[latex-lsp: middle of compiler output omitted]\n456 bytes).", None),
+        ("Output written on final.pdf (2 pages,\n[texquill: middle of compiler output omitted]\n456 bytes).", None),
     ] {
         let log = format!("Output written on earlier.pdf (5 pages, 123 bytes).\nTranscript written on earlier.log.\n{final_summary}\n");
         assert_eq!(page_count(&log), expected, "{log}");
@@ -100,8 +100,8 @@ fn an_incomplete_final_summary_never_reuses_an_earlier_pass_count() {
 #[test]
 #[ignore = "requires pdflatex, xelatex and lualatex"]
 fn real_engine_page_counts_ignore_wrapped_filename_examples() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

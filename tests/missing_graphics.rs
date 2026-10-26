@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{path::Path, sync::atomic::AtomicBool};
+use texquill::{
     compilation::{build, build_log},
     editing,
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::{path::Path, sync::atomic::AtomicBool};
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -163,7 +163,7 @@ fn image_fixes_use_declared_extension_settings_and_skip_unknown_searches() {
         std::fs::write(root.join("main.tex"), &source).unwrap();
         std::fs::write(root.join("result.png"), "image").unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -220,7 +220,7 @@ fn image_spelling_fixes_use_the_compilation_root_and_project_graphics_paths() {
     }
     let child = uri(root, "shared/child.tex");
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -285,7 +285,7 @@ fn missing_image_corrections_make_real_graphicx_builds_succeed() {
         "\\documentclass{article}\\pagestyle{empty}\\begin{document}A figure.\\end{document}\n",
     )
     .unwrap();
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -299,7 +299,7 @@ fn missing_image_corrections_make_real_graphicx_builds_succeed() {
         let compiler = root.join(engine);
         std::fs::write(&compiler, format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
         std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: compiler.to_string_lossy().into(),
             ..Default::default()
         };
@@ -328,7 +328,7 @@ fn missing_image_corrections_make_real_graphicx_builds_succeed() {
             let start = source.find(missing).unwrap();
             assert_eq!(diagnostic.range, text.range(start, start + missing.len()));
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     ..Default::default()
                 },
@@ -370,7 +370,7 @@ fn fix_fixture(marked: &str, name: &str) -> (tempfile::TempDir, Workspace, Url, 
         .find(|item| item.code == Some(NumberOrString::String("missing-image".into())))
         .unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -554,7 +554,7 @@ fn image_alias_errors_offer_precise_spelling_fixes_and_reject_stale_calls() {
             assert_eq!(diagnostic.range, text.range(start, start + 5));
             std::fs::write(directory.path().join("image.png"), "image").unwrap();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     ..Default::default()
                 },

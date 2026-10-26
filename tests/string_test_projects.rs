@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace, text::Text};
 
 fn setup(files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace, Url) {
     let directory = tempfile::tempdir().unwrap();
@@ -226,8 +226,8 @@ fn exposed_inputs_load_sources_outside_scanned_roots() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_imported_predicate_redefinitions_preserve_rename_behavior_in_three_engines() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let source = concat!(
         "\\documentclass{article}\\usepackage{etoolbox}\\newbool{draft}\n",
@@ -535,8 +535,8 @@ fn every_native_string_predicate_can_be_explicitly_restored_through_a_renamed_co
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_restored_predicates_preserve_literal_tokens_and_boolean_states_in_three_engines() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for predicate in ["ifblank", "notblank", "ifstrempty", "ifstrequal"] {
             for (save, restore) in [

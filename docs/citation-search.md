@@ -1,9 +1,9 @@
-# 文献检索补全
+# Citation search completion
 
-引用参数内除了文献键前缀，还可以输入作者、标题、年份或这些信息的组合。例如 `\cite{Knuth 1984}` 可搜索文献预览中的作者和年份，接受候选后替换为对应的真实文献键。
+In addition to the citation key prefix, you can also enter the author, title, year, or a combination of these information in the citation parameter. For example, `\cite{Knuth 1984}` can search for the author and year in the document preview, accept the candidate, and replace it with the corresponding real citation key.
 
-排序依次考虑精确前缀、不区分大小写的前缀、键内子串、元数据关键词、键的子序列和有界拼写距离。补全标签显示文献键，详情显示已有的作者、标题、年份预览及来源；客户端过滤文本会保留当前查询，避免编辑器将作者查询的候选隐藏。
+Sorting considers exact prefixes, case-insensitive prefixes, substrings within a key, metadata keywords, subsequences of keys, and bounded spelling distance in order. The completion tag displays the citation key, and the details display the existing author, title, year preview, and source; client-side text filtering will retain the current query, preventing the editor from hiding author query candidates.
 
-检索范围与项目文献作用域一致。普通引用、引用列表、单次引用及 biblatex 多组/卷号引用共享此行为，中文等 Unicode 元数据也可检索。BibTeX 数据库中的 crossref 等字段编辑继续使用文献键补全。动态宏或含注释的查询保留既有的字面键处理，不作任意文本替换。
+The search scope is consistent with the project literature scope. Normal citations, citation lists, single citations, and biblatex multi-group/volume number citations share this behavior, and Chinese and other Unicode metadata can also be retrieved. Field editing such as crossref in BibTeX databases continues to use citation key completion. Dynamic macros or annotated queries retain existing literal key processing without any text replacement.
 
-`bibentry`、`defcitealias`、`entrydata`、`ifentryexists`、`ifentryinbib` 和 `ifentrycategory` 要求严格的单个文献键，继续使用原有键补全与参数边界检查，不启用元数据检索。
+`bibentry`, `defcitealias`, `entrydata`, `ifentryexists`, `ifentryinbib` and `ifentrycategory` have strict single citation keys, continue to use the original key completion and parameter boundary checking, and do not enable metadata retrieval.

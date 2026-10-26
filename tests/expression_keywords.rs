@@ -1,8 +1,8 @@
-use latex_lsp::{
-    compilation::build_log, editing, language::features, project::workspace::Workspace, text::Text,
-};
 use lsp_types::*;
 use std::collections::BTreeMap;
+use texquill::{
+    compilation::build_log, editing, language::features, project::workspace::Workspace, text::Text,
+};
 
 fn setup(root: &std::path::Path, source: &str) -> (Workspace, Url, Url) {
     std::fs::write(root.join("main.tex"), source).unwrap();
@@ -274,8 +274,8 @@ fn comment_spelling_in_macro_tests_and_malformed_keywords_stays_unlocated() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_commented_keywords_preserve_cross_file_renames_and_compile_repairs_in_three_engines() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let original = concat!(
         "\\documentclass{article}\\usepackage{etoolbox}\\input{definitions}\n",
@@ -380,7 +380,7 @@ fn real_commented_keywords_preserve_cross_file_renames_and_compile_repairs_in_th
                 .collect::<Vec<_>>();
             assert_eq!(errors.len(), 2, "{}", failed.output);
             workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     ..Default::default()
                 },

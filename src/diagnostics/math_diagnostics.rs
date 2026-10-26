@@ -513,7 +513,7 @@ fn check(doc: &Document, uri: &Url, context: Context) -> Vec<Diagnostic> {
         result.push(Diagnostic {
             range: doc.text.range(span.start, span.end),
             severity: Some(DiagnosticSeverity::WARNING),
-            source: Some("latex-lsp".into()),
+            source: Some("texquill".into()),
             code: Some(NumberOrString::String(code.into())),
             message,
             related_information: open.map(|open| {

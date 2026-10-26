@@ -1,8 +1,8 @@
-use latex_lsp::{
+use lsp_types::{Position, Range, Url};
+use texquill::{
     language::code_lens,
     project::workspace::{Document, Workspace},
 };
-use lsp_types::{Position, Range, Url};
 
 fn uri(root: &std::path::Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()

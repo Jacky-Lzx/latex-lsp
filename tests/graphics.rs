@@ -1,4 +1,6 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeMap, path::Path};
+use texquill::{
     editing::file_operations,
     language::{features, navigation},
     project::{
@@ -7,8 +9,6 @@ use latex_lsp::{
     },
     text::Text,
 };
-use lsp_types::*;
-use std::{collections::BTreeMap, path::Path};
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -195,7 +195,7 @@ fn graphics_directory_and_root_moves_still_compile() {
         "\\documentclass{article}\\begin{document}Image\\end{document}",
     )
     .unwrap();
-    let image_build = latex_lsp::compilation::build::run(
+    let image_build = texquill::compilation::build::run(
         &image.path().join("image.tex"),
         &Default::default(),
         &Default::default(),
@@ -234,7 +234,7 @@ fn graphics_directory_and_root_moves_still_compile() {
         navigation::document_links(&workspace, &uri(root, "sections/child.tex"))[0].target,
         Some(uri(root, "new.images/plot.pdf"))
     );
-    let outcome = latex_lsp::compilation::build::run(
+    let outcome = texquill::compilation::build::run(
         &main.to_file_path().unwrap(),
         &Default::default(),
         &Default::default(),
@@ -341,7 +341,7 @@ fn shared_graphics_paths_still_compile_after_both_roots_and_image_directories_mo
         "\\documentclass{article}\\begin{document}Image\\end{document}",
     )
     .unwrap();
-    let image_build = latex_lsp::compilation::build::run(
+    let image_build = texquill::compilation::build::run(
         &image.path().join("image.tex"),
         &Default::default(),
         &Default::default(),
@@ -379,7 +379,7 @@ fn shared_graphics_paths_still_compile_after_both_roots_and_image_directories_mo
         assert!(navigation::document_links(&workspace, &main)
             .iter()
             .any(|link| link.target == Some(uri(root, &format!("{name}/pictures/plot.pdf")))));
-        let outcome = latex_lsp::compilation::build::run(
+        let outcome = texquill::compilation::build::run(
             &main.to_file_path().unwrap(),
             &Default::default(),
             &Default::default(),

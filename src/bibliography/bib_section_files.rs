@@ -10,9 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 // These internal readers let the common path machinery retain the native
 // distinction between registered exact names and inferred .bib filenames.
-pub(crate) const INFERRED: &str = "__latex_lsp_section_bib";
-pub(crate) const EXACT: &str = "__latex_lsp_section_resource";
-pub(crate) const DEPENDENCY: &str = "__latex_lsp_selected_registration";
+pub(crate) const INFERRED: &str = "__texquill_section_bib";
+pub(crate) const EXACT: &str = "__texquill_section_resource";
+pub(crate) const DEPENDENCY: &str = "__texquill_selected_registration";
 pub(crate) fn file_command(name: &str) -> bool {
     matches!(name, INFERRED | EXACT)
 }

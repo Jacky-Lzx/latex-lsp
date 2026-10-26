@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const HELP: &str = "\nSee the etoolbox package documentation for explanation.\nType  H <return>  for immediate help.\n ...\n\n";
 
@@ -30,7 +30,7 @@ fn fixture_name(
     let uri = Url::from_file_path(&main).unwrap();
     let diagnostic = diagnostics[&uri][0].clone();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -365,8 +365,8 @@ fn builtin_boolean_repairs_are_available_only_for_readonly_unshadowed_conditions
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex, ifthen and etoolbox"]
 fn real_boolean_repairs_preserve_scopes_branches_builtins_and_toggle_independence_in_all_engines() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let source = concat!(
         "{\\global\\setbool{darft}{true}}\n",
@@ -461,7 +461,7 @@ fn real_boolean_repairs_preserve_scopes_branches_builtins_and_toggle_independenc
                     before.output
                 );
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         code_action_literals: true,
                         ..Default::default()
                     },

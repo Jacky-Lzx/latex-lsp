@@ -1,14 +1,14 @@
-# expl3 编辑
+# expl3 editing
 
-在 `\ExplSyntaxOn` 与 `\ExplSyntaxOff` 之间，服务器将 `_` 和 `:` 作为控制序列名称的一部分。`ProvidesExplPackage`、`ProvidesExplClass`、`ProvidesExplFile` 的完整声明也开启此模式；普通 TeX 分组结束时恢复进入分组前的模式。注释、逐字代码以及宏正文中延迟执行的模式切换不会改变外围词法状态。
+Between `\ExplSyntaxOn` and `\ExplSyntaxOff`, the server uses `_` and `:` as part of the control sequence name. The complete declaration of `ProvidesExplPackage`, `ProvidesExplClass`, and `ProvidesExplFile` also turns on this mode; when the ordinary TeX grouping ends, the mode before entering the grouping is restored. Comments, verbatim code, and deferred mode switches in macro bodies do not change peripheral lexical state.
 
-支持直接静态目标的以下声明：
+The following declarations of direct static targets are supported:
 
-- `cs_new`、`cs_set`、`cs_gset` 及其 `protected` / `nopar` 形式的 `:Npn`、`:Npx`、`:Npe`、`:Nn`、`:Nx`、`:Ne`；`cs_new_eq:NN`、`cs_set_eq:NN`、`cs_gset_eq:NN` 别名。
-- `tl`、`str`、`int`、`seq`、`prop`、`bool`、`dim`、`skip`、`muskip`、`clist`、`fp`、`box`、`ior`、`iow`、`coffin` 的 `new:N` 与 `const:Nn` / `const:Nx` / `const:Ne`。
+- `cs_new`, `cs_set`, `cs_gset` and their `protected` / `nopar` forms `:Npn`, `:Npx`, `:Npe`, `:Nn`, `:Nx`, `:Ne`; `cs_new_eq:NN`, `cs_set_eq:NN`, `cs_gset_eq:NN` Alias.
+- `tl`, `str`, `int`, `seq`, `prop`, `bool`, `dim`, `skip`, `muskip`, `clist`, `fp`, `box`, `ior`, `iow`, `coffin` of `new:N` and `const:Nn`/`const:Nx`/`const:Ne`.
 
-项目函数和变量提供完整名称补全、定义、引用、悬停、跨文件重命名、文档符号及语义高亮。补全还包含常用 expl3 基础函数。重命名保留函数的 `:nn` 等参数签名，以及变量的 `l_` / `g_` / `c_` 范围和 `_tl` 等类型后缀；声明不唯一或与已有名称冲突时拒绝操作。
+Project functions and variables offer full name completion, definitions, references, hover, cross-file renaming, document notation, and semantic highlighting. Completion also includes common expl3 base functions. Renaming retains parameter signatures such as `:nn` for functions, as well as `l_` / `g_` / `c_` ranges and type suffixes such as `_tl` for variables; the operation is rejected when the declaration is not unique or conflicts with an existing name.
 
-参数提示由项目声明或已知基础函数的名称后缀推导，区分 `N` 单 token 和 `n` 等分组参数，以及 `T` / `F` 分支。显式 `:Npn` 参数文本必须是与名称签名一致的普通 `#1 ... #9`；分隔参数文本、`p` / `w` 参数不推测提示。
+Signature help are deduced from the project declaration or the name suffix of the known basic function, distinguishing group parameters such as `N` single token and `n`, as well as `T` / `F` branches. The explicit `:Npn` parameter text must be a plain `#1 ... #9` consistent with the name signature; delimited parameter text, `p` / `w` parameters are not speculative prompts.
 
-这是静态编辑支持：不执行展开、任意 catcode 改写或条件定义，不生成 `:c` 动态名称，也不展开 `cs_generate_variant:Nn` 产生的隐式声明。复杂局部遮蔽和运行时声明需要手动检查；普通 LaTeX 模式仍使用原来的控制词规则。
+This is static editing support: no expansion, arbitrary catcode rewriting, or conditional definitions are performed, no dynamic name `:c` is generated, and implicit declarations resulting from `cs_generate_variant:Nn` are not expanded. Complex partial masking and runtime declarations require manual checking; normal LaTeX mode still uses the original control word rules.

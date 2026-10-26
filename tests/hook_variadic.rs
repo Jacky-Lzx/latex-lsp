@@ -1,8 +1,8 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, signature},
     project::workspace::Workspace,
 };
-use lsp_types::*;
 
 fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("untitled:variadic-hook.tex").unwrap();

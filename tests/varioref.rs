@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///varioref/{name}")).unwrap();
@@ -227,7 +227,7 @@ fn varioref_signatures_track_the_optional_notes_and_required_label() {
     }
     for name in ["vref", "Vref", "vpageref", "fullref"] {
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 snippets: true,
                 ..Default::default()
             },
@@ -278,7 +278,7 @@ fn varioref_reference_warnings_have_precise_utf16_ranges_and_label_spelling_repa
             "{call}: {diagnostic:?}"
         );
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -331,7 +331,7 @@ fn spelling_repairs_match_the_selected_warning_before_deduplicating_the_same_edi
             diagnostics.get_mut(&uri).unwrap().reverse();
         }
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 apply_edits: true,
                 ..Default::default()

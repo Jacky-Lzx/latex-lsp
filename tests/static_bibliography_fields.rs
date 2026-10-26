@@ -1,12 +1,12 @@
-use latex_lsp::{config::Config, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{config::Config, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "repeated-bibliography-field";
 fn diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
     ws.diagnostics(uri)
         .into_iter()
         .filter(|item| {
-            item.source.as_deref() == Some("latex-lsp")
+            item.source.as_deref() == Some("texquill")
                 && item.code == Some(NumberOrString::String(CODE.into()))
         })
         .collect()
@@ -144,7 +144,7 @@ fn editor_language_and_project_input_roles_control_which_documents_are_checked()
 fn directory_configuration_disables_static_fields_without_affecting_compiler_warnings() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(
-        directory.path().join(".latex-lsp.json"),
+        directory.path().join(".texquill.json"),
         r#"{"diagnostics":{"duplicateBibliographyFields":false}}"#,
     )
     .unwrap();

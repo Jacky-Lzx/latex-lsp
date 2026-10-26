@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     language::{features, signature},
     project::workspace::{Document, Workspace},
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -50,7 +50,7 @@ fn recorded_local_and_shared_data_remains_outside_the_latex_symbol_index() {
     let mut workspace = Workspace::default();
     workspace.add_root(directory.path().into());
     let uri = Url::from_file_path(&main).unwrap();
-    let inputs = latex_lsp::compilation::recorder::inputs(
+    let inputs = texquill::compilation::recorder::inputs(
         &main,
         &format!(
             "INPUT {}\nINPUT {}\nINPUT {}\nINPUT {}\n",
@@ -170,7 +170,7 @@ fn completions_and_user_snippets_exclude_symbols_from_independent_papers() {
         (r"\", "aonlycommand", "bonlycommand"),
     ] {
         let source = format!("{prefix}{suffix}");
-        let position = latex_lsp::text::Text::new(source.clone()).position(source.len());
+        let position = texquill::text::Text::new(source.clone()).position(source.len());
         workspace
             .documents
             .insert(main.clone(), Document::new(&main, source, Some(2)));
@@ -185,7 +185,7 @@ fn completions_and_user_snippets_exclude_symbols_from_independent_papers() {
         );
     }
     let source = format!("{prefix}\\pa");
-    let position = latex_lsp::text::Text::new(source.clone()).position(source.len());
+    let position = texquill::text::Text::new(source.clone()).position(source.len());
     workspace
         .documents
         .insert(main.clone(), Document::new(&main, source, Some(3)));
@@ -270,7 +270,7 @@ fn directory_renames_preserve_recorded_binary_roles_for_new_source_looking_paths
         [(old.join("alias.csv"), old.join("data.payload"))].into(),
     );
     std::fs::rename(&old, &new).unwrap();
-    latex_lsp::editing::file_operations::did_rename(
+    texquill::editing::file_operations::did_rename(
         &mut workspace,
         &[FileRename {
             old_uri: Url::from_file_path(&old).unwrap().to_string(),
@@ -282,7 +282,7 @@ fn directory_renames_preserve_recorded_binary_roles_for_new_source_looking_paths
     let old_data_uri = Url::from_file_path(new.join("data.payload")).unwrap();
     let data_uri = Url::from_file_path(new.join("data.tex")).unwrap();
     std::fs::rename(new.join("data.payload"), new.join("data.tex")).unwrap();
-    latex_lsp::editing::file_operations::did_rename(
+    texquill::editing::file_operations::did_rename(
         &mut workspace,
         &[FileRename {
             old_uri: old_data_uri.to_string(),
@@ -318,7 +318,7 @@ fn directory_and_file_moves_update_bibliography_binding_names_and_targets() {
         [(old.join("refs.bib"), old.join("physical.bib"))].into(),
     );
     std::fs::rename(&old, &new).unwrap();
-    latex_lsp::editing::file_operations::did_rename(
+    texquill::editing::file_operations::did_rename(
         &mut workspace,
         &[FileRename {
             old_uri: Url::from_file_path(&old).unwrap().to_string(),
@@ -328,7 +328,7 @@ fn directory_and_file_moves_update_bibliography_binding_names_and_targets() {
     .unwrap();
     let target = new.join("renamed.bib");
     std::fs::rename(new.join("physical.bib"), &target).unwrap();
-    latex_lsp::editing::file_operations::did_rename(
+    texquill::editing::file_operations::did_rename(
         &mut workspace,
         &[FileRename {
             old_uri: Url::from_file_path(new.join("physical.bib"))
@@ -348,7 +348,7 @@ fn directory_and_file_moves_update_bibliography_binding_names_and_targets() {
 #[test]
 #[cfg(unix)]
 fn static_aliases_preserve_database_style_and_tex_roles_across_reload_open_and_moves() {
-    use latex_lsp::project::workspace::DocumentKind;
+    use texquill::project::workspace::DocumentKind;
     for extension in ["payload", "tex", "csv", "png", "bst"] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -444,7 +444,7 @@ fn static_aliases_preserve_database_style_and_tex_roles_across_reload_open_and_m
             .contains("Unsaved"));
         let moved = root.join("renamed.tex");
         std::fs::rename(&database, &moved).unwrap();
-        latex_lsp::editing::file_operations::did_rename(
+        texquill::editing::file_operations::did_rename(
             &mut workspace,
             &[FileRename {
                 old_uri: data_uri.to_string(),
@@ -478,7 +478,7 @@ fn ordinary_unreferenced_files_follow_the_new_extension_after_a_move() {
     let mut workspace = Workspace::default();
     workspace.add_root(directory.path().into());
     std::fs::rename(&old, &new).unwrap();
-    latex_lsp::editing::file_operations::did_rename(
+    texquill::editing::file_operations::did_rename(
         &mut workspace,
         &[FileRename {
             old_uri: Url::from_file_path(&old).unwrap().to_string(),
@@ -487,17 +487,14 @@ fn ordinary_unreferenced_files_follow_the_new_extension_after_a_move() {
     )
     .unwrap();
     let doc = &workspace.documents[&Url::from_file_path(&new).unwrap()];
-    assert_eq!(
-        doc.kind,
-        latex_lsp::project::workspace::DocumentKind::Bibtex
-    );
+    assert_eq!(doc.kind, texquill::project::workspace::DocumentKind::Bibtex);
     assert_eq!(doc.syntax.citations[0].name, "entry");
 }
 
 #[test]
 #[cfg(unix)]
 fn current_static_roles_replace_previous_recorder_roles_without_losing_unsaved_text() {
-    use latex_lsp::project::workspace::DocumentKind;
+    use texquill::project::workspace::DocumentKind;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let target = root.join("physical.payload");

@@ -1,14 +1,14 @@
-# 字符串命令的保存与恢复
+# Saving and restoring string commands
 
-[返回文档目录](README.md) · [跨文件上下文](string-test-projects.md) · [命令名操作数](declaration-operands.md)
+[Back to documentation](README.md) · [Cross-file context](string-test-projects.md) · [Command-name operands](declaration-operands.md)
 
-副本也可直接调用，保留复制时的数据参数数量。示例、参数提示、共享文件歧义及编译诊断见[副本的直接调用](string-test-copy-calls.md)。
+The copy can also be called directly, retaining the number of data parameters at the time of copying. For examples, signature help, shared file ambiguities and compilation diagnostics, see [Direct call of copies](string-test-copy-calls.md).
 
-## 显式恢复
+## Explicit recovery
 
-`ifstrequal`、`ifstrempty`、`ifblank` 和 `notblank` 支持通过静态命令复制保存原始含义，再显式恢复。复制捕获执行到该位置时的含义；之后重定义源命令不会改变已经保存的副本。
+`ifstrequal`, `ifstrempty`, `ifblank` and `notblank` support copying and saving the original meaning through static commands and then restoring it explicitly. Copying captures the meaning when execution reaches that position; redefining the source command later does not alter the already saved copy.
 
-例如主文件：
+For example main file:
 
 ```tex
 \documentclass{article}
@@ -35,23 +35,23 @@
 \let\ifblank\saved
 ```
 
-将 boolean `draft` 改名时，声明和自定义调用中的 `booltrue` 会更新，恢复后的 `boolfalse{draft}` 保留为字符串数据。保存副本的名称 `saved` 也可通过普通宏重命名更新，恢复效果随之保持。
+When boolean `draft` is renamed, `booltrue` in declarations and custom calls will be updated, and the restored `boolfalse{draft}` is retained as string data. The name of the saved copy, `saved`, can also be updated through ordinary macro renaming, and the recovery effect will be maintained.
 
-## 复制与参数边界
+## Copy and parameter boundaries
 
-支持未重定义的 `let`（含可选 `=`）、`cslet`、`letcs`、`csletcs`、`NewCommandCopy`、`RenewCommandCopy` 和 `DeclareCommandCopy`，源和目标名称须静态可解析。链式复制、嵌套文件加载以及保存自定义含义后再复制回来，均按实际分析顺序传播。被覆盖的副本不再被当作原始字符串命令；字符串数据和尚未调用的宏正文中的复制不会在声明处执行。
+Supports unredefined `let` (with optional `=`), `cslet`, `letcs`, `csletcs`, `NewCommandCopy`, `RenewCommandCopy` and `DeclareCommandCopy`, source and target names must be statically resolvable. Chain copying, nested file loading, and saving custom meanings and then copying them back are all propagated in the actual order of analysis. The overwritten copy is no longer treated as the original string command; copying of string data and macro bodies that have not yet been called is not performed at the declaration point.
 
-已确认的自定义参数形式也会传给调用文件，包括普通参数、可选参数、xparse 声明及静态 TeX 分隔参数。因此单参数的自定义 `ifblank` 不会误吞紧随其后的 `input`，恢复文件仍参与项目分析。参数边界用于确定读取顺序，不执行任意宏展开。
+Confirmed custom parameter forms are also passed to the calling file, including normal parameters, optional parameters, xparse declarations and static TeX delimited parameters. Therefore, the single-parameter customized `ifblank` will not accidentally swallow the following `input`, and the restored file will still participate in project analysis. Argument boundaries are used to determine reading order, no arbitrary macro expansion is performed.
 
-依赖缓冲区的打开、增量编辑、关闭恢复和磁盘通知会更新后续字符串语义，主文档版本号保持不变。重复加载或多个根文档使同一参数兼具字面和可执行含义时，拒绝会修改该参数的编辑，其他明确的符号仍可重命名。
+Buffer-dependent opens, incremental edits, close recovery, and disk notifications update subsequent string semantics, and the main document version number remains unchanged. When repeated loading or multiple root documents make the same parameter have both a literal and an executable meaning, edits that would modify that parameter are rejected, and other explicit symbols can still be renamed.
 
-通过 `undef` / `gundef` / `csundef` / `csgundef` 撤销含义时，较早的副本仍保留捕获内容，较晚制作的副本不再继承已删除的字符串语法，见[撤销定义](string-test-undefinitions.md)。
+When undoing a meaning via `undef` / `gundef` / `csundef` / `csgundef`, earlier copies still retain the captured content, and later copies no longer inherit the deleted string syntax, see [Undoing Definition](string-test-undefinitions.md).
 
-## 支持边界
+## Support boundaries
 
-识别静态副本的直接调用以及恢复到上述四个测试命令后的含义，不推断用户宏调用的副作用或分组结束时的自动恢复。复制目标或来源名称需要宏展开时，不推断其效果。来源含义无法确认或复制原语被重定义时保留不确定性；多上下文中的数据参数数量冲突按[共同字面前缀与歧义规则](string-test-copy-calls.md#跨文件更新与歧义)处理。
+Recognizes the implications of direct calls to static copies and recovery after the four test commands above, without inferring side effects of user macro calls or automatic recovery at the end of a group. When copying a target or source name that requires macro expansion, its effect is not inferred. Uncertainty remains when the source meaning cannot be confirmed or the copy primitive is redefined; conflicts in the number of data parameters in multiple contexts are handled according to [Common Literal Prefixes and Ambiguity Rules](string-test-copy-calls.md#cross-file-updates-and-ambiguities).
 
-## 验证
+## verify
 
 ```sh
 cargo test --locked --test string_test_projects
@@ -59,4 +59,4 @@ cargo test --locked --test protocol restored_string_predicates
 cargo test --locked --test string_test_projects -- --include-ignored
 ```
 
-真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox。三个引擎分别覆盖四种字符串测试的原生、自定义和恢复后调用，比较重命名前后的字符串原文、boolean 状态和 PDF 页数。
+True regression requires pdfLaTeX, XeLaTeX, LuaLaTeX and etoolbox. The three engines respectively cover the native, customized and restored calls of the four string tests, and compare the original string text, boolean status and PDF page number before and after renaming.

@@ -1,8 +1,8 @@
-# 编译配置
+# Build configuration
 
-[返回文档目录](README.md) · [编译指南](build.md)
+[Back to documentation](README.md) · [Build guide](build.md)
 
-使用 `initializationOptions`（Neovim 的 `init_options`）设置，运行中也可发送 `workspace/didChangeConfiguration`，其 `settings` 可直接使用下列对象或包在 `latex` 字段内。无效配置会被拒绝并保留原配置。
+Using the `initializationOptions` (Neovim's `init_options`) setting, `workspace/didChangeConfiguration` can also be sent live, whose `settings` can be used directly using the following objects or wrapped in the `latex` field. Invalid configurations are rejected and the original configuration is retained.
 
 ```json
 {
@@ -23,39 +23,39 @@
 }
 ```
 
-`rootFile` 相对于当前工作区根目录，`outputDirectory` 相对于主文档所在目录。`executable` 可改为 `pdflatex`、`xelatex`、`lualatex` 或 `tectonic`，省略 `arguments` 时自动选择对应的默认参数。自定义参数中的 `%f` 替换为根文件绝对路径，`%o` 替换为输出目录，`%j` 替换为产物名称（未配置时为主文件名去掉扩展名）；参数直接传给进程，不经过 shell。默认 TeX/latexmk 参数关闭 shell escape。超时范围为 1–3600 秒。
+`rootFile` is relative to the root directory of the current workspace, and `outputDirectory` is relative to the directory where the main document is located. `executable` can be changed to `pdflatex`, `xelatex`, `lualatex` or `tectonic`. When `arguments` is omitted, the corresponding default parameters are automatically selected. `%f` in the custom parameters is replaced with the absolute path of the root file, `%o` is replaced with the output directory, and `%j` is replaced with the artifact name (remove the extension from the main file name when not configured); the parameters are passed directly to the process without going through the shell. The default TeX/latexmk parameter turns off shell escape. Timeout range is 1–3600 seconds.
 
-使用默认 latexmk 参数且未设置 `outputDirectory`（或设为 `null`）时，服务器读取主文档目录中的 `.latexmkrc`，不存在时读取 `latexmkrc`，自动采用其中直接赋值的输出目录：
+When using the default latexmk parameters and not setting `outputDirectory` (or setting it to `null`), the server reads `.latexmkrc` in the main documentation, reads `latexmkrc` if it does not exist, and automatically uses the output directory directly assigned therein:
 
 ```perl
 $out_dir = 'build';
 ```
 
-这样，编译、PDF / 日志定位和 SyncTeX 都使用主文档旁的 `build/`。显式的 `outputDirectory` 优先于 rc 文件；未设置时回退到 `build/latex-lsp/`。支持单引号和不含插值的双引号字符串、注释及多次直接赋值（最后一次生效）；`$out_dir = '';` 表示主文档目录。每次编译重新读取磁盘配置，编译中配置改变会使结果过期。
+This way, compilation, PDF/log positioning, and SyncTeX all use `build/` next to the main document. Explicit `outputDirectory` takes precedence over rc files; falls back to `build/texquill/` when not set. Supports single-quoted and double-quoted strings without interpolation, comments and multiple direct assignments (the last one takes effect); `$out_dir = '';` represents the main documentation. The disk configuration is re-read for each compilation. Configuration changes during compilation will cause the results to expire.
 
-配置按系统、用户、项目顺序叠加；用户配置优先采用 `$XDG_CONFIG_HOME/latexmk/latexmkrc`，否则采用 `~/.latexmkrc`，系统配置遵守 `LATEXMKRCSYS`。每层采用 latexmk 的首个存在文件规则。主文件 program 指令和显式 LSP 设置优先于 rc。
+Configurations are superimposed in order of system, user, and project; user configuration takes priority with `$XDG_CONFIG_HOME/latexmk/latexmkrc`, otherwise `~/.latexmkrc` is used, and system configuration follows `LATEXMKRCSYS`. Each layer uses latexmk's first existing file rule. Main file program directives and explicit LSP settings take precedence over rc.
 
-普通查询只做有界的静态读取，不执行 Perl。遇到条件、函数、字符串拼接、环境变量插值、正则或包含其他 rc 的配置时，在编译入口调用实际 latexmk 的 `-dir-report-only` 与受控的 `-e` 报告代码，获取有效引擎和目录，不启动 TeX。原生解析返回空输出目录时，采用已知的静态目录，否则采用主文件目录；需要固定位置时可显式设置 `outputDirectory`。解析最多等待 5 秒（或更短的 `timeoutSeconds`），失败时保留旧日志并报告原因。动态配置每次开始编译时重新求值；查询、诊断和 SyncTeX 使用按配置内容与进程环境校验的最近解析结果，不因状态轮询启动进程。
+Ordinary queries only do bounded static reads and do not execute Perl. When encountering conditions, functions, string concatenation, environment variable interpolation, regular or configurations containing other rc, the `-dir-report-only` and controlled `-e` reporting codes of the actual latexmk are called at the compilation entry to obtain the effective engine and directory without starting TeX. When native parsing returns an empty output directory, a known static directory is used, otherwise the main file directory is used; `outputDirectory` can be explicitly set when a fixed location is required. Parse waits up to 5 seconds (or less for `timeoutSeconds`), retaining old logs on failure and reporting the reason. Dynamic configurations are re-evaluated each time compilation is started; queries, diagnostics, and SyncTeX use the latest parsed results verified against the configuration content and the process environment, and do not start processes due to status polling.
 
-开始、完成通知和编译状态的 `configuration` 包含 `sources`、`issues` 与 `native`。原生报告记录 latexmk 加载的配置文件，并补充字面量 `do 'file'` / `require 'file'` 的依赖；动态计算的包含路径应通过 latexmk 的 `process_rc_file` 加载，以便报告和监测它们。直接调用 TeX 引擎和 Tectonic 时继续使用 LSP 的目录设置。
+`configuration` for start, completion notification and compilation status includes `sources`, `issues` and `native`. The native report records the configuration files loaded by latexmk and supplements the dependencies of the literals `do 'file'` / `require 'file'`; dynamically calculated include paths should be loaded through latexmk's `process_rc_file` in order to report and monitor them. Continue to use LSP's directory settings when calling the TeX engine and Tectonic directly.
 
 
-`build.rebuildArguments` 单独指定强制编译的完整参数列表，也支持 `%f`、`%o`、`%j`；普通 `latex.build` 仍使用 `arguments`。自定义了 `arguments` 或使用未知编译工具时，必须显式设置 `rebuildArguments` 才能调用 `latex.rebuild`，否则在修改旧日志前报错。例如自定义 latexmk 参数时，可设 `"rebuildArguments": ["-g", "-pdf", "-interaction=nonstopmode", "-file-line-error", "-synctex=1", "-no-shell-escape", "-outdir=%o", "%f"]`；参数应包含工具所需的完整编译选项，设置 `jobName` 时也需自行传入 `%j`。使用这份自定义参数的重编译通知中，`engine` 为 `null`。
+`build.rebuildArguments` separately specifies the complete parameter list for forced compilation, and also supports `%f`, `%o`, and `%j`; ordinary `latex.build` still uses `arguments`. When `arguments` is customized or unknown compilation tools are used, `rebuildArguments` must be explicitly set before `latex.rebuild` can be called, otherwise an error will be reported before modifying the old log. For example, when customizing latexmk parameters, you can set `"rebuildArguments": ["-g", "-pdf", "-interaction=nonstopmode", "-file-line-error", "-synctex=1", "-no-shell-escape", "-outdir=%o", "%f"]`; the parameters should include the complete compilation options required by the tool. When setting `jobName`, you also need to pass in `%j` yourself. In the recompilation notice using this custom parameter, `engine` is `null`.
 
-例如 Neovim 配置中可加入 `init_options = { build = { executable = 'xelatex', onSave = true } }`。未配置显式后续处理时，手动使用 XeLaTeX/pdfLaTeX 只运行一遍；需要多遍处理时可以使用 latexmk，或配置下述文献与索引管线。
+For example, `init_options = { build = { executable = 'xelatex', onSave = true } }` can be added to the Neovim configuration. When explicit subsequent processing is not configured, manually use XeLaTeX/pdfLaTeX to run it only once; when multiple passes of processing are required, you can use latexmk, or configure the following document and index pipelines.
 
-`build.jobName` 可设置 PDF、日志、recorder 和 SyncTeX 的共同文件名，例如 `"jobName": "论文 draft.v2"` 生成 `论文 draft.v2.pdf`，主文件仍可以叫 `main.tex`。latexmk 和三个直接 TeX 引擎会自动添加 `-jobname`；自定义 `arguments` 需自行传递 `%j`。名称支持字母、数字、空格、点、下划线和短横线，不能包含目录或前后空格。Tectonic 默认调用不支持该选项。开始和完成通知的 `jobName` 返回实际产物名称；两个项目若将写入同一个 PDF，会拒绝并行编译，待前一次结束后可再次编译。
+`build.jobName` can set the common file name of PDF, log, recorder and SyncTeX. For example, `"jobName": "论文 draft.v2"` generates `论文 draft.v2.pdf`, and the main file can still be called `main.tex`. latexmk and the three direct TeX engines will automatically add `-jobname`; custom `arguments` needs to pass `%j` by yourself. The name supports letters, numbers, spaces, dots, underscores and dashes, and cannot contain directories or leading or trailing spaces. Tectonic default invocation does not support this option. `jobName` of the start and completion notifications returns the actual artifact name; if two projects are written to the same PDF, parallel compilation will be refused, and they can be compiled again after the previous one is completed.
 
-使用 latexmk 时，`engine` 可设为 `pdflatex`、`xelatex` 或 `lualatex`，服务器会选择相应的多遍编译模式。未指定时，优先读取主文件前 20 行的 `% !TeX program = xelatex` 或 `% !TeX TS-program = lualatex`，再读取主文档旁 `.latexmkrc`（不存在时为 `latexmkrc`）中直接赋值的 `$pdf_mode`：`1` 为 pdfLaTeX、`4` 为 LuaLaTeX、`5` 为 XeLaTeX；未设置时使用 pdfLaTeX。这样默认参数不会将项目的 `$pdf_mode = 5;` 覆盖为 pdfLaTeX，普通编译、强制重编译和引擎通知采用同一设置。动态表达式通过上述原生解析获取；其他输出模式仍需显式选择受支持的 `engine`。
+When using latexmk, `engine` can be set to `pdflatex`, `xelatex` or `lualatex`, and the server will select the corresponding multi-pass compilation mode. When not specified, `% !TeX program = xelatex` or `% !TeX TS-program = lualatex` in the first 20 lines of the main file is read first, and then `$pdf_mode` directly assigned in `.latexmkrc` (`latexmkrc` if it does not exist) next to the main document is read: `1` is pdfLaTeX, `4` is LuaLaTeX, `5` is XeLaTeX; when not set, pdfLaTeX is used. In this way, the default parameters will not overwrite the project's `$pdf_mode = 5;` to pdfLaTeX, and the same settings will be used for normal compilation, forced recompilation and engine notification. Dynamic expressions are obtained via the native parsing described above; other output modes still require explicit selection of supported `engine`.
 
-program 指令忽略大小写和逐字环境，只接受这三个引擎名称；子文件中的 program 指令不会覆盖主文件。显式 `engine` 优先于指令和 rc 文件，显式选择的直接引擎 `executable` 和自定义 `arguments` 保持其调用方式。例如 `init_options = { build = { engine = 'xelatex', onSave = true } }` 可用 latexmk 自动处理 XeLaTeX 的多遍编译及文献。
+The program directive ignores case and verbatim context and only accepts these three engine names; program directives in subfiles do not overwrite the main file. Explicit `engine` takes precedence over directives and rc files, explicitly selected direct engines `executable` and custom `arguments` retain their calling mode. For example, `init_options = { build = { engine = 'xelatex', onSave = true } }` can use latexmk to automatically handle multi-pass compilation and documentation of XeLaTeX.
 
-`build.indexTools` 可显式配置[索引与术语表处理管线](index-processing.md#显式编译管线)，在生成输入后运行工具并强制重编译；默认不启用。工具任务与当前编译共享取消、保存和产物冲突检查。
+`build.indexTools` [Index and Glossary Processing Pipeline](index-processing.md#explicit-compilation-pipeline) can be configured explicitly to run the tool after generating input and force a recompile; not enabled by default. Tool tasks share cancellation, save, and artifact conflict checking with the current compilation.
 
-`build.bibliographyTool` 可显式配置 [BibTeX / Biber 流程](bibliography-processing.md)，暂存文献产物、核对处理日志并运行后续 TeX 遍次；默认不启用，可与索引任务共同配置。
+`build.bibliographyTool` can explicitly configure [BibTeX / Biber process](bibliography-processing.md) to temporarily store document products, check processing logs, and run subsequent TeX passes; it is not enabled by default and can be configured together with the indexing task.
 
-rc 中缺少设置与无法解析是两种状态。静态解析无法判断时会进入原生解析；两者均失败时，在启动 TeX 和替换日志前报错，不会将无法判断的引擎静默覆盖为 pdfLaTeX。
+Missing settings in rc and failure to parse are two states. When static parsing cannot be determined, it will enter native parsing; when both fail, an error will be reported before starting TeX and replacing the log, and the undetermined engine will not be silently overwritten into pdfLaTeX.
 
-`build.auxiliaryDirectory` 与 `build.finalOutputDirectory` 用于默认 latexmk 调用（其他工具需自定义参数），分别覆盖 `$aux_dir` 和 `$out2_dir`。未设置时从项目 rc 读取，空值或缺省继承 `$out_dir`。`outputDirectory` 仍表示 TeX 输出目录；日志、recorder、文献、索引和章节辅助文件使用辅助目录，PDF 与 SyncTeX 使用最终目录。默认 latexmk 参数同步传入这些目录；清理仅删除这些目录中的已知产物，并检查每个目录的路径绑定。自定义参数需自行传递与这些设置一致的工具选项。
+`build.auxiliaryDirectory` and `build.finalOutputDirectory` are used for default latexmk calls (other tools require custom parameters), covering `$aux_dir` and `$out2_dir` respectively. Read from project rc when not set, null or default inherited `$out_dir`. `outputDirectory` still represents the TeX output directory; log, recorder, bibliography, index, and chapter auxiliary files use the auxiliary directory, and PDF and SyncTeX use the final directory. The default latexmk parameters are passed in these directories synchronously; cleaning only removes known artifacts in these directories and checks the path bindings for each directory. Custom parameters need to pass their own tool options consistent with these settings.
 
-自定义 `arguments` / `rebuildArguments` 保持原样调用，不自动推断其中的引擎或目录，请显式配置产物位置。rc 依赖监测独立生效：默认跟踪系统、用户和项目 rc；存在 `-norc` / `--norc` 时排除这些默认来源；每个 `-r file` / `--r file` 及其字面量包含文件仍被跟踪。配置路径支持 `%f`、`%o`、`%j`，与编译参数一样只展开一遍。强制编译使用 `rebuildArguments` 的 rc 集合；rc 内容修改、删除和候选文件创建会使正在编译的结果过期，即使编辑器没有发送文件监测事件，也会在完成时检查内容。
+Customize `arguments` / `rebuildArguments` and call it as it is. The engine or directory will not be automatically inferred. Please configure the product location explicitly. rc dependency monitoring takes effect independently: system, user and project rc are tracked by default; these default sources are excluded when `-norc` / `--norc` exists; each `-r file` / `--r file` and its literal containing files are still tracked. The configuration path supports `%f`, `%o`, and `%j`, and is expanded only once like the compilation parameters. Force compilation of the rc collection using `rebuildArguments`; rc content modifications, deletions, and candidate file creation will expire the results of the compilation, even if the editor does not send file monitoring events, the content will be checked on completion.

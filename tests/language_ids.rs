@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     editing::file_operations,
     language::features,
     project::workspace::{DocumentKind, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 #[test]
 fn supporting_sources_are_discovered_and_explicit_inputs_keep_project_scope_and_versioned_moves() {
@@ -29,7 +29,7 @@ fn supporting_sources_are_discovered_and_explicit_inputs_keep_project_scope_and_
             std::fs::write(root.join(name), text).unwrap();
         }
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 versioned_edits: true,
                 snippets: true,
                 ..Default::default()
@@ -41,7 +41,7 @@ fn supporting_sources_are_discovered_and_explicit_inputs_keep_project_scope_and_
             workspace.documents[&uri(&unused_name)].kind,
             DocumentKind::Latex
         );
-        let symbols = latex_lsp::language::navigation::workspace_symbols(&workspace, "unusedstyle");
+        let symbols = texquill::language::navigation::workspace_symbols(&workspace, "unusedstyle");
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].location.uri, uri(&unused_name));
         let main = uri("a.tex");
@@ -60,7 +60,7 @@ fn supporting_sources_are_discovered_and_explicit_inputs_keep_project_scope_and_
         };
         assert_eq!(edit.new_text, "shared{${1:arg1}}");
         assert_eq!(
-            latex_lsp::language::signature::help(&workspace, &main, text.position(source.len()))
+            texquill::language::signature::help(&workspace, &main, text.position(source.len()))
                 .unwrap()
                 .signatures[0]
                 .label,
@@ -103,7 +103,7 @@ fn neovim_bib_filetype_enables_unsaved_nonstandard_files_and_incremental_edits()
     let output = std::process::Command::new("nvim")
         .args(["--headless", "-u", "NONE", "-i", "NONE", "-n", "-l"])
         .arg(script)
-        .env("LATEX_LSP_TEST_BIN", env!("CARGO_BIN_EXE_latex-lsp"))
+        .env("TEXQUILL_TEST_BIN", env!("CARGO_BIN_EXE_texquill"))
         .env("XDG_CACHE_HOME", directory.path().join("cache"))
         .env("XDG_STATE_HOME", directory.path().join("state"))
         .env("XDG_CONFIG_HOME", directory.path().join("config"))

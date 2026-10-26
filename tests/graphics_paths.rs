@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeMap, path::Path};
+use texquill::{
     editing::file_operations,
     language::{features, navigation},
     project::{graphics, workspace::Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::{collections::BTreeMap, path::Path};
 
 const PNG: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0,
@@ -286,7 +286,7 @@ fn real_path_scope_and_batched_directory_and_root_moves_preserve_images() {
         for name in ["first", "second", "local"] {
             std::fs::write(root.join(format!("{name}/plot.png")), PNG).unwrap();
         }
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: "pdflatex".into(),
             ..Default::default()
         };
@@ -298,7 +298,7 @@ fn real_path_scope_and_batched_directory_and_root_moves_preserve_images() {
             };
             let main = uri(root, main_name);
             assert_eq!(targets(&workspace, &main), [uri(root, &path)], "{setting}");
-            let outcome = latex_lsp::compilation::build::run(
+            let outcome = texquill::compilation::build::run(
                 &root.join(main_name),
                 &config,
                 &Default::default(),

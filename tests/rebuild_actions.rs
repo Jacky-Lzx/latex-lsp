@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     config::{BibliographyBackend, BibliographyToolConfig, IndexToolConfig},
     editing,
     project::workspace::Workspace,
 };
-use lsp_types::*;
 
 const RERUN: &str =
     "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.";
@@ -27,7 +27,7 @@ impl Project {
         .unwrap();
         let root = Url::from_file_path(&main).unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: literals,
                 apply_edits,
                 ..Default::default()
@@ -365,11 +365,11 @@ fn index_actions_match_configured_input_names_paths_and_processing_kind() {
     for literals in [false, true] {
         let mut project = Project::new(literals, false);
         project.workspace.config.build.index_tools = vec![IndexToolConfig::default()];
-        let absolute = project.directory.path().join("build/latex-lsp/main.idx");
+        let absolute = project.directory.path().join("build/texquill/main.idx");
         for (file, kind, allowed) in [
             ("main.idx", "index", true),
             ("./main.idx", "index", true),
-            ("build/latex-lsp/main.idx", "index", true),
+            ("build/texquill/main.idx", "index", true),
             (absolute.to_str().unwrap(), "index", true),
             ("main.idx", "glossary", false),
             ("main.glo", "glossary", false),
@@ -435,7 +435,7 @@ fn shared_source_index_actions_use_each_roots_own_task_configuration() {
             .build_diagnostics
             .insert(Url::from_file_path(&path).unwrap(), diagnostics);
     }
-    std::fs::write(project.directory.path().join(".latex-lsp.json"), r#"{"projects":{"main.tex":{"build":{"indexTools":[{"jobName":"people"}]}},"other.tex":{"build":{"indexTools":[{}]}}}}"#).unwrap();
+    std::fs::write(project.directory.path().join(".texquill.json"), r#"{"projects":{"main.tex":{"build":{"indexTools":[{"jobName":"people"}]}},"other.tex":{"build":{"indexTools":[{}]}}}}"#).unwrap();
     project.workspace.reload(&project.root);
     project
         .workspace

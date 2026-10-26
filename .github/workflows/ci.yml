@@ -19,8 +19,8 @@ jobs:
       - name: Replay an editing session with kernel hook command and environment wrappers
         run: python3 benchmarks/editing.py --hook-renames --hook-wrappers --hook-environments --hook-interfaces --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/hooks-smoke.json
       - name: Validate the paired rename probe
-        run: PYTHONDONTWRITEBYTECODE=1 python3 benchmarks/rename_pairs.py --before target/release/latex-lsp --after target/release/latex-lsp --hook-wrappers --hook-environments --hook-interfaces --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/pairs-smoke.json
+        run: PYTHONDONTWRITEBYTECODE=1 python3 benchmarks/rename_pairs.py --before target/release/texquill --after target/release/texquill --hook-wrappers --hook-environments --hook-interfaces --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/pairs-smoke.json
       - name: Validate the paired definition probe
-        run: PYTHONDONTWRITEBYTECODE=1 python3 benchmarks/rename_pairs.py --before target/release/latex-lsp --after target/release/latex-lsp --query definition --hook-wrappers --hook-environments --hook-interfaces --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/definition-pairs-smoke.json
+        run: PYTHONDONTWRITEBYTECODE=1 python3 benchmarks/rename_pairs.py --before target/release/texquill --after target/release/texquill --query definition --hook-wrappers --hook-environments --hook-interfaces --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/definition-pairs-smoke.json
       - name: Validate the paired custom hook rename probe
-        run: PYTHONDONTWRITEBYTECODE=1 python3 benchmarks/rename_pairs.py --before target/release/latex-lsp --after target/release/latex-lsp --query hook-rename --hook-wrappers --hook-environments --hook-interfaces --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/hook-rename-pairs-smoke.json
+        run: PYTHONDONTWRITEBYTECODE=1 python3 benchmarks/rename_pairs.py --before target/release/texquill --after target/release/texquill --query hook-rename --hook-wrappers --hook-environments --hook-interfaces --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/hook-rename-pairs-smoke.json

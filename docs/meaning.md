@@ -1,32 +1,32 @@
-# meaning 的命令名操作数
+# meaning command-name operands
 
-[返回文档目录](README.md) · [符号与重命名](symbols.md) · [静态花括号诊断](brace-diagnostics.md)
+[Return to Documentation Directory](README.md) · [Symbols and Renaming](symbols.md) · [Static Braces Diagnostics](brace-diagnostics.md)
 
-原始 `\meaning` 查看下一个 token 的含义，不执行它。例如：
+Original `\meaning` View the meaning of the next token, do not execute it. For example:
 
 ```tex
 \newcommand{\ordinary}[1]{#1}
 \meaning\newcommand\ordinary{Body}
 ```
 
-这里仅有一处 `ordinary` 声明。被查看的 `newcommand` 不会再次声明后面的 `ordinary`；真实调用仍支持导航和跨文件重命名。
+There is only one `ordinary` statement. The `newcommand` being viewed will not re-declare the following `ordinary`; real calls still support navigation and cross-file renaming.
 
-## 引用与编辑
+## Quotes and Edits
 
-`\meaning\ordinary` 中的命令名保留为宏引用，可跳转到原定义并参与重命名。显式展开静态名称的 `\expandafter\meaning\csname ordinary\endcsname` 也保留名称引用。
+The command names in `\meaning\ordinary` are retained as macro references and can jump to the original definition and participate in renaming. Explicitly expanding the static name `\expandafter\meaning\csname ordinary\endcsname` also preserves the name reference.
 
-输入部分控制词时，命令名补全只替换名称，不插入参数占位符；适用于内置命令和跨文件用户命令，详见[补全规则](completion.md#命令名操作数)。
+When entering some control words, command name completion only replaces the name and does not insert parameter placeholders; it is applicable to built-in commands and cross-file user commands. For details, see [Completion Rules](completion.md#command-name-operands).
 
-被查看的命令不消费后续分组，不为这些分组提供名称补全、参数提示或名称编辑。例如 `\meaning\ref{real}` 中的 `{real}` 是普通分组，重命名同名标签时不会修改它。查看 `verb`、`begin` 或 `detokenize` 不会在该处启动逐字、环境或字符串转换扫描；后面实际出现的命令仍正常解析。
+The command being viewed does not consume subsequent packets and does not provide name completion, signature helping, or name editing for these packets. For example, `{real}` in `\meaning\ref{real}` is a common group, and it will not be modified when renaming a label with the same name. Viewing `verb`, `begin`, or `detokenize` does not initiate a verbatim, environmental, or string conversion scan there; actual subsequent commands still parse normally.
 
-## token 与诊断
+## tokens and diagnostics
 
-支持操作数前的空白、注释、命令 token 和字面花括号。`\meaning{` 和 `\meaning}` 的来源花括号不参与分组；连续查看花括号、与 `let` 混用及后续真实分组仍按各自边界检查。`*`、`=` 也各自是一个普通来源 token，不视为星号选项或赋值分隔符。
+Supports whitespace, comments, command tokens, and literal braces before operands. The source curly braces of `\meaning{` and `\meaning}` do not participate in grouping; continuous viewing of curly braces, mixing with `let` and subsequent real grouping are still checked according to their respective boundaries. `*` and `=` are also each a common source token and are not regarded as asterisk options or assignment separators.
 
-宏定义正文和分组实参仍在读取时按字面配对，不会因为正文中出现 `meaning` 而跳过其中的花括号。详见[静态花括号诊断](brace-diagnostics.md)。
+The macro definition body and grouping arguments are still paired literally when read, and curly braces are not skipped due to the occurrence of `meaning` in the body. See [Static Braces Diagnostics](brace-diagnostics.md) for details.
 
-## 静态分析边界
+## Static analysis boundaries
 
-符号扫描根据本文件前文的显式声明判断原语是否已被改写；已通过直接、命名或静态 `csname` 声明改写 `meaning` 时，保留后续普通调用。此判断不模拟分组恢复，也不完整推断跨文件改写、任意宏执行或类别码变更。
+A symbol scan determines whether a primitive has been overridden based on an explicit declaration earlier in this document; when `meaning` has been overridden via a direct, named, or static `csname` declaration, subsequent ordinary calls are preserved. This judgment does not simulate group recovery, nor does it fully infer cross-file overwrites, arbitrary macro execution, or category code changes.
 
-项目根文件、输入依赖和编译结果有效性检查另按项目上下文判断。只有确认原语含义时才排除被转为文字的文件加载；其他源码可能改写原语时，重新读取原始路径作为候选，不把该分组登记为符号索引中的实际参数。`let` 复制来源之后的普通分组仍不作为文件加载候选。相关规则见[项目与文件](projects.md)。
+Validity checks of project root files, input dependencies and compilation results are judged based on the project context. Files converted to text are excluded from loading only when the meaning of the primitive is confirmed; when other source codes may rewrite the primitive, the original path is re-read as a candidate and the group is not registered as an actual parameter in the symbol index. `let` Ordinary groups after the copy source are still not candidates for file loading. For relevant rules, see [Projects and Documents](projects.md).

@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::features,
     parser::syntax::Syntax,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 #[test]
 fn meaning_reads_one_control_without_executing_its_interface() {
@@ -105,7 +105,7 @@ fn inspected_reference_controls_do_not_edit_the_following_group() {
     let document = &workspace.documents[&uri];
     let inspected_group = source.find(r"\meaning\ref{").unwrap() + r"\meaning\ref{".len();
     let position = document.text.position(inspected_group + 2);
-    assert!(latex_lsp::language::signature::help(&workspace, &uri, position).is_none());
+    assert!(texquill::language::signature::help(&workspace, &uri, position).is_none());
     assert!(features::completion(&workspace, &uri, position).is_empty());
     assert!(features::prepare_rename(&workspace, &uri, position)
         .unwrap()
@@ -176,7 +176,7 @@ fn meaning_references_support_cross_file_navigation_and_rename() {
     assert_eq!(changes.len(), 2);
     assert_eq!(changes.values().map(Vec::len).sum::<usize>(), 5);
     let uncalled = document.text.position(source.find("Uncalled").unwrap() + 2);
-    assert!(latex_lsp::language::signature::help(&workspace, &uri, uncalled).is_none());
+    assert!(texquill::language::signature::help(&workspace, &uri, uncalled).is_none());
 }
 
 #[test]

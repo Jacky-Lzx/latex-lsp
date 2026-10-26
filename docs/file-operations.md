@@ -1,53 +1,53 @@
-# 文件操作
+# File operations
 
-[返回文档目录](README.md) · [项目与路径解析](projects.md)
+[Back to documentation](README.md) · [Project and path analysis](projects.md)
 
-支持文件及目录的创建、删除、重命名和移动。文件路径由编辑器修改，服务器负责维护源码引用与索引。
+Supports the creation, deletion, renaming and movement of files and directories. The file path is modified by the editor, and the server is responsible for maintaining source code references and indexes.
 
-## 重命名与移动
+## Rename and move
 
-`workspace/willRenameFiles` 更新输入文件、文献库、BibTeX 样式、本地宏包与文档类、图片、文件 URL 及 `% !TeX root` 路径。目录移动会重算内部相对路径，尽量保留省略扩展名的写法。图片搜索目录与同名文件遮蔽规则见[图片查找与移动](projects.md#图片查找与移动)。
+`workspace/willRenameFiles` Updates input files, libraries, BibTeX styles, local packages and document classes, images, file URLs, and `% !TeX root` paths. Directory movement will recalculate the internal relative path, and try to keep the writing method of omitting the extension. For the image search directory and masking rules for files with the same name, see [Image Search and Movement](projects.md#image-search-and-movement).
 
-`includeonly` 的章节列表也会同步更新，保留注释、列表分隔符、CRLF 及文件名内部空格；选择列表本身不会加载章节。缺失章节的 PDF 过期检查与拼写修复使用相同解析，遇到动态或不连续名称时保守处理。
+The chapter list of `includeonly` will also be updated simultaneously, retaining comments, list separators, CRLF and internal spaces in the file name; the selection list itself will not load chapters. PDF expiration checking for missing chapters uses the same parsing as spell repair, and is conservative when encountering dynamic or discontinuous names.
 
-输入源码改为其他扩展名时保留新后缀，例如 `\input{chapter}` 在 `.tex` 改为 `.ltx` 后更新为 `\input{chapter.ltx}`，根指令同步更新。以下加载方式要求目标保留对应后缀：
+Keep the new suffix when the input source code is changed to another extension. For example, `\input{chapter}` is updated to `\input{chapter.ltx}` after `.tex` is changed to `.ltx`, and the root command is updated simultaneously. The following loading methods require the target to retain the corresponding suffix:
 
-| 引用方式 | 必须保留的后缀 |
+| Reference method | Suffixes that must be retained |
 | --- | --- |
 | `include` / `includeonly` | `.tex` |
-| 宏包加载 | `.sty` |
-| 文档类加载 | `.cls` |
+| Package loading | `.sty` |
+| Document class loading | `.cls` |
 | `bibliographystyle` | `.bst` |
 | `bibliography` | `.bib` |
 
-文件名的首部空格使用 `./` 保留，主干末尾空格通过显式后缀保留；会被 TeX 合并或忽略的空白不生成引用编辑，具体规则见[源码文件名与移动](source-filenames.md)。
+The leading space of the file name is reserved with `./`, and the space at the end of the trunk is reserved with an explicit suffix; whitespace that will be merged or ignored by TeX does not generate reference editing. For specific rules, see [Source File Name and Movement](source-filenames.md).
 
-共享源码中的引用要求各项目需要的编辑一致；含宏展开、无法确定的目标或无法安全表达的新路径会拒绝改写。显式配置的 `build.rootFile` 需在主文件改名后同步修改。
+References in shared source code require that the edits required by each project are consistent; new paths that contain macro expansion, undetermined targets, or cannot be expressed safely will be rejected. The explicitly configured `build.rootFile` needs to be modified synchronously after the main file is renamed.
 
-## 文件 URL
+## File URL
 
-`\url`、`\href` 和四参数 `\hyperref` 中的 `file:` 链接会更新文件路径，同时保留源码中的查询参数与片段，包括其中的百分号编码、TeX 转义以及空的 `?` / `#` 分隔符。例如将 `manual.pdf` 改为 `guide.pdf` 时：
+The `file:` link in `\url`, `\href` and four-parameter `\hyperref` will update the file path while retaining the query parameters and fragments in the source code, including percent encoding, TeX escaping and empty `?` / `#` separator. For example, when changing `manual.pdf` to `guide.pdf`:
 
 ```tex
 \href{file:///project/manual.pdf?download=1#page=3}{Manual}
 ```
 
-更新为：
+Updated to:
 
 ```tex
 \href{file:///project/guide.pdf?download=1#page=3}{Manual}
 ```
 
-四参数 `\hyperref{file:///project/manual.pdf?download=1}{chapter}{intro}{Chapter}` 只修改第一参数中的路径，保留类别、名称和文字；导航使用的 `#chapter.intro` 不会额外写入第一参数。注释、逐字内容、普通正文和 HTTP 链接不参与文件改名。
+The four-parameter `\hyperref{file:///project/manual.pdf?download=1}{chapter}{intro}{Chapter}` only modifies the path in the first parameter, retaining the category, name and text; `#chapter.intro` used for navigation will not write the first parameter additionally. Comments, verbatim content, plain text, and HTTP links are not involved in file renaming.
 
-## 客户端调用顺序
+## Client calling sequence
 
-编辑器或文件管理插件需要按以下顺序执行：
+The editor or file management plug-in needs to be executed in the following order:
 
-1. 发送 `workspace/willRenameFiles`，应用返回的编辑。编辑指向移动前的文档 URI，并保留已打开文档的版本约束。
-2. 移动磁盘上的文件或目录。
-3. 发送 `workspace/didRenameFiles`，使服务器更新文档 URI、刷新磁盘索引，并停止使用旧输入路径的编译。
+1. Send `workspace/willRenameFiles` to apply the returned edits. Edit the URI that points to the document before the move and preserves the version constraints of the open document.
+2. Move files or directories on the disk.
+3. Send `workspace/didRenameFiles` to cause the server to update the document URI, refresh the disk index, and stop compilation using the old input path.
 
-## 创建与删除
+## Create and delete
 
-标准 `workspace/didCreateFiles` / `workspace/didDeleteFiles` 通知会递归更新来源索引，刷新导航、补全和重复定义诊断，保留未保存的缓冲区，取消受影响的编译并清除旧编译诊断。无需文件监听也能同步编辑器中的文件操作；服务器继续保留 recorder 输入，以检查旧 PDF 是否过期。
+Standard `workspace/didCreateFiles` / `workspace/didDeleteFiles` notifications recursively update the source index, refresh navigation, completion, and duplicate definition diagnostics, retain unsaved buffers, cancel affected compilations, and clear old compilation diagnostics. Ability to synchronize file operations in the editor without file listening; the server continues to retain recorder input to check if old PDFs are out of date.

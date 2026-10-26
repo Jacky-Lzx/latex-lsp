@@ -1,7 +1,7 @@
-use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
+use texquill::{compilation::build_log, text::Text};
 
-const GAP: &str = "[latex-lsp: middle of compiler output omitted]";
+const GAP: &str = "[texquill: middle of compiler output omitted]";
 
 #[test]
 fn truncated_traditional_contexts_remain_unconfirmed_until_a_source_is_observed_again() {
@@ -57,11 +57,11 @@ fn numbered_sources_after_a_truncation_still_confirm_their_own_locations() {
 #[cfg(unix)]
 #[test]
 fn real_bounded_compiler_streams_and_logs_do_not_borrow_root_fixes_after_omission() {
-    use latex_lsp::{
-        compilation::build, config::BuildConfig, editing, project::workspace::Workspace,
-    };
     use lsp_types::{CodeActionContext, CodeActionKind};
     use std::{io::Write, os::unix::fs::PermissionsExt};
+    use texquill::{
+        compilation::build, config::BuildConfig, editing, project::workspace::Workspace,
+    };
     for channel in ["stdout", "log"] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -111,7 +111,7 @@ fn real_bounded_compiler_streams_and_logs_do_not_borrow_root_fixes_after_omissio
             Text::new(source.into()).range(0, source.len())
         );
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },

@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///subref/{name}")).unwrap();
@@ -170,7 +170,7 @@ fn subfigure_warning_prefixes_select_source_keys_and_repair_their_own_namespace(
         let start = source.rfind('{').unwrap() + 1;
         let expected = Text::new(source.clone()).range(start, source.rfind('}').unwrap());
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -236,8 +236,8 @@ fn literal_and_generated_subfigure_warning_names_keep_distinct_source_ranges() {
 #[test]
 #[ignore = "requires pdflatex, subcaption and hyperref"]
 fn real_subfigure_warning_repairs_and_label_renames_keep_both_auxiliary_labels() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -266,7 +266,7 @@ fn real_subfigure_warning_repairs_and_label_renames_keep_both_auxiliary_labels()
         .unwrap()
         .clone();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },

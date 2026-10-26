@@ -20,15 +20,15 @@ async function eventually<T>(description: string, operation: () => Thenable<T> |
 type Status = { status: string; buildId?: number; pdfUri?: string; stale?: boolean };
 
 export async function run(): Promise<void> {
-  const root = process.env.LATEX_LSP_TEST_WORKSPACE!;
+  const root = process.env.TEXQUILL_TEST_WORKSPACE!;
   const mainUri = vscode.Uri.file(path.join(root, 'main.tex'));
   const chapterUri = vscode.Uri.file(path.join(root, 'chapter.tex'));
   const document = await vscode.workspace.openTextDocument(mainUri);
   await vscode.window.showTextDocument(document);
-  const extension = vscode.extensions.getExtension('Jacky-Lzx.latex-lsp');
+  const extension = vscode.extensions.getExtension('Jacky-Lzx.texquill');
   assert.ok(extension, 'development extension is installed');
   await extension.activate();
-  const status = () => vscode.commands.executeCommand<Status>('latex-lsp.buildStatus', mainUri);
+  const status = () => vscode.commands.executeCommand<Status>('texquill.buildStatus', mainUri);
   assert.equal((await status())?.status, 'idle');
   console.log('PASS activation and command registration');
 
@@ -69,7 +69,7 @@ export async function run(): Promise<void> {
   assert.ok(first!.pdfUri);
   assert.ok((await fs.stat(vscode.Uri.parse(first!.pdfUri!).fsPath)).size > 0);
   console.log('PASS CodeLens executes server command and real pdfLaTeX build');
-  await vscode.commands.executeCommand('latex-lsp.openPdf', mainUri);
+  await vscode.commands.executeCommand('texquill.openPdf', mainUri);
   assert.ok(vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => {
     const input = tab.input;
     return (input instanceof vscode.TabInputText || input instanceof vscode.TabInputCustom)
@@ -77,13 +77,13 @@ export async function run(): Promise<void> {
   }), 'Open PDF opens the compiled artifact in VS Code');
   console.log('PASS Open PDF command');
 
-  await vscode.commands.executeCommand('latex-lsp.rebuild', mainUri);
+  await vscode.commands.executeCommand('texquill.rebuild', mainUri);
   const second = await eventually('rebuild completes', status,
     result => result?.status === 'success' && result.buildId !== first!.buildId);
   assert.ok(second);
   console.log('PASS rebuild command');
 
-  const config = vscode.workspace.getConfiguration('latex-lsp');
+  const config = vscode.workspace.getConfiguration('texquill');
   await config.update('settings', {
     distribution: { enabled: false },
     build: { executable: 'pdflatex', outputDirectory: 'build', onSave: true },
@@ -100,13 +100,13 @@ export async function run(): Promise<void> {
 
   await config.update('settings', {
     distribution: { enabled: false },
-    build: { executable: process.env.LATEX_LSP_TEST_NODE, arguments: [path.join(root, 'slow.cjs')], outputDirectory: 'build' },
+    build: { executable: process.env.TEXQUILL_TEST_NODE, arguments: [path.join(root, 'slow.cjs')], outputDirectory: 'build' },
   }, vscode.ConfigurationTarget.Global);
   await new Promise(resolve => setTimeout(resolve, 500));
-  await vscode.commands.executeCommand('latex-lsp.build', mainUri);
+  await vscode.commands.executeCommand('texquill.build', mainUri);
   const compilerPid = await eventually('compiler subprocess starts',
     async () => Number(await fs.readFile(path.join(root, 'slow.pid'), 'utf8')), pid => pid > 0);
-  await vscode.commands.executeCommand('latex-lsp.cancelBuild', mainUri);
+  await vscode.commands.executeCommand('texquill.cancelBuild', mainUri);
   await eventually('build cancellation', status, result => result?.status === 'cancelled');
   await eventually('compiler subprocess exits', () => {
     try { process.kill(compilerPid, 0); return false; }
@@ -118,7 +118,7 @@ export async function run(): Promise<void> {
   await eventually('pull diagnostics update after editing',
     () => vscode.languages.getDiagnostics(mainUri),
     diagnostics => diagnostics.some(diagnostic => diagnostic.message.includes('missing-label')));
-  await vscode.commands.executeCommand('latex-lsp.restart');
+  await vscode.commands.executeCommand('texquill.restart');
   await eventually('unsaved document survives restart',
     () => vscode.languages.getDiagnostics(mainUri),
     diagnostics => diagnostics.some(diagnostic => diagnostic.message.includes('missing-label')));
@@ -130,10 +130,10 @@ export async function run(): Promise<void> {
 
   const serverPath = config.get<string>('serverPath')!;
   await config.update('serverPath', path.join(root, 'missing-server'), vscode.ConfigurationTarget.Global);
-  await assert.rejects(() => Promise.resolve(vscode.commands.executeCommand('latex-lsp.restart')),
-    /Check latex-lsp.serverPath and PATH/);
+  await assert.rejects(() => Promise.resolve(vscode.commands.executeCommand('texquill.restart')),
+    /Check texquill.serverPath and PATH/);
   await config.update('serverPath', serverPath, vscode.ConfigurationTarget.Global);
-  await vscode.commands.executeCommand('latex-lsp.restart');
+  await vscode.commands.executeCommand('texquill.restart');
   const recovered = await eventually('server recovers after invalid executable',
     () => vscode.commands.executeCommand<vscode.Location[]>('vscode.executeDefinitionProvider', mainUri,
       document.positionAt(document.getText().indexOf('sec:intro') + 2)), result => !!result?.length);

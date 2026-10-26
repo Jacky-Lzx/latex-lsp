@@ -1,15 +1,15 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::collections::BTreeMap;
+use texquill::{
     editing,
     project::workspace::{Document, Workspace},
 };
-use lsp_types::*;
-use std::collections::BTreeMap;
 
 fn setup(source: &str, definitions: &str) -> (Workspace, Url, Url) {
     let uri = Url::parse("file:///counter-fixes/main.tex").unwrap();
     let declarations = Url::parse("file:///counter-fixes/definitions.tex").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             code_action_literals: true,
             ..Default::default()
@@ -579,8 +579,8 @@ fn legacy_counter_fixes_revalidate_versions_candidates_and_source_arguments() {
 #[test]
 #[ignore = "requires pdflatex"]
 fn counter_spelling_fixes_turn_a_real_failed_build_into_a_successful_one() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main = root.join("main.tex");
@@ -607,7 +607,7 @@ fn counter_spelling_fixes_turn_a_real_failed_build_into_a_successful_one() {
         .unwrap()
         .clone();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             code_action_literals: true,
             ..Default::default()

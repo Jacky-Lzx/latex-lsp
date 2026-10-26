@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn call(form: &str, loader: &str) -> String {
     match form {
@@ -95,7 +95,7 @@ fn missing_indirect_packages_preserve_options_lists_comments_and_versions_in_fix
                 assert_eq!(diagnostic.data.as_ref().unwrap()["loaderCommand"], loader);
                 assert_eq!(diagnostic.data.as_ref().unwrap()["file"], report);
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         code_action_literals: true,
                         versioned_edits: true,
                         ..Default::default()
@@ -203,7 +203,7 @@ fn legacy_package_repairs_recheck_loaded_aliases_and_the_selected_project() {
         std::fs::write(root.join("definitions.sty"), r"\def\loadpkg{\usepackage}").unwrap();
         std::fs::write(root.join("fixture.sty"), "Package").unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 apply_edits: true,
                 versioned_edits: true,
                 ..Default::default()

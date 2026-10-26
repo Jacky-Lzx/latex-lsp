@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const HELP: &str = "\nSee the etoolbox package documentation for explanation.\nType  H <return>  for immediate help.\n ...\n\n";
 
@@ -22,7 +22,7 @@ fn fixture(declarations: &str, call: &str) -> (tempfile::TempDir, Workspace, Url
     let uri = Url::from_file_path(&main).unwrap();
     let diagnostic = diagnostics[&uri][0].clone();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -318,8 +318,8 @@ fn toggle_fixes_recheck_versions_operands_candidate_types_and_macro_sources() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_toggle_repairs_preserve_scopes_branches_and_boolean_independence_in_all_engines() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let source = concat!(
         "{\\global\\settoggle{darft}{true}}\n",
@@ -384,7 +384,7 @@ fn real_toggle_repairs_preserve_scopes_branches_and_boolean_independence_in_all_
                     before.output
                 );
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         code_action_literals: true,
                         ..Default::default()
                     },

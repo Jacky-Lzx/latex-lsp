@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use serde_json::json;
+use texquill::{
     compilation::build_log,
     editing,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use serde_json::json;
 
 const AMP: &str = "Misplaced alignment tab character &.";
 const HASH: &str = "You can't use `macro parameter character #' in horizontal mode.";
@@ -24,7 +24,7 @@ fn setup(source: &str, log: &str) -> (tempfile::TempDir, Workspace, Url, Vec<Dia
     let parsed = build_log::parse(&root.join("main.tex"), log);
     let diagnostics = parsed.get(&uri).cloned().unwrap_or_default();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             versioned_edits: true,
             ..Default::default()
@@ -374,7 +374,7 @@ fn real_special_character_fixes_repair_child_sources_without_changing_valid_tex(
             let compiler = root.join(engine);
             std::fs::write(&compiler, format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nmax_print_line={width}\nexport TEXMFVAR TEXMFCACHE max_print_line\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
             std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable: compiler.to_string_lossy().into(),
                 ..Default::default()
             };
@@ -400,7 +400,7 @@ fn real_special_character_fixes_repair_child_sources_without_changing_valid_tex(
                 "\\verb|Verbatim & #|\n",
             );
             std::fs::write(&child, source).unwrap();
-            let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+            let outcome = texquill::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(
                 outcome.status, "error",
                 "{engine}/{width}: {}",
@@ -422,7 +422,7 @@ fn real_special_character_fixes_repair_child_sources_without_changing_valid_tex(
                 outcome.output
             );
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     versioned_edits: true,
                     ..Default::default()
@@ -453,7 +453,7 @@ fn real_special_character_fixes_repair_child_sources_without_changing_valid_tex(
             }
             assert!(fixed.ends_with("Escaped \\& and \\#.\nEscaped \\_ and \\textasciicircum{}. $x_1^2$\n\\begin{tabular}{ll}A & B\\end{tabular}\n% Comment & #\n\\verb|Verbatim & #|\n"));
             std::fs::write(&child, fixed).unwrap();
-            let repaired = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+            let repaired = texquill::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(
                 repaired.status, "success",
                 "{engine}/{width}: {}",
@@ -594,7 +594,7 @@ fn real_extra_alignment_tabs_repair_tables_arrays_and_raw_alignments() {
                     if numbered {
                         arguments.insert(0, "-file-line-error".into());
                     }
-                    let config = latex_lsp::config::BuildConfig {
+                    let config = texquill::config::BuildConfig {
                         executable: compiler.to_string_lossy().into(),
                         arguments: Some(arguments),
                         ..Default::default()
@@ -608,7 +608,7 @@ fn real_extra_alignment_tabs_repair_tables_arrays_and_raw_alignments() {
                     );
                     std::fs::write(&child, source).unwrap();
                     let outcome =
-                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
+                        texquill::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(
                         outcome.status, "error",
                         "{engine}/{width}/{verbose}/{numbered}: {}",
@@ -630,7 +630,7 @@ fn real_extra_alignment_tabs_repair_tables_arrays_and_raw_alignments() {
                         outcome.output
                     );
                     let mut workspace = Workspace {
-                        client: latex_lsp::project::state::ClientCapabilities {
+                        client: texquill::project::state::ClientCapabilities {
                             code_action_literals: true,
                             versioned_edits: true,
                             ..Default::default()
@@ -668,7 +668,7 @@ fn real_extra_alignment_tabs_repair_tables_arrays_and_raw_alignments() {
                         .ends_with("\\begin{tabular}{ll}Legal & Escaped \\&\\\\\\end{tabular}\n"));
                     std::fs::write(&child, fixed).unwrap();
                     let repaired =
-                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
+                        texquill::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(
                         repaired.status, "success",
                         "{engine}/{width}/{verbose}/{numbered}: {}",
@@ -685,7 +685,7 @@ fn real_extra_alignment_tabs_repair_tables_arrays_and_raw_alignments() {
                     )
                     .unwrap();
                     let macro_error =
-                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
+                        texquill::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(macro_error.status, "error");
                     assert!(
                         macro_error
@@ -947,7 +947,7 @@ fn real_extra_closing_brace_deletions_repair_text_math_and_explicit_groups() {
                     if numbered {
                         arguments.insert(0, "-file-line-error".into());
                     }
-                    let config = latex_lsp::config::BuildConfig {
+                    let config = texquill::config::BuildConfig {
                         executable: compiler.to_string_lossy().into(),
                         arguments: Some(arguments),
                         ..Default::default()
@@ -961,7 +961,7 @@ fn real_extra_closing_brace_deletions_repair_text_math_and_explicit_groups() {
                     let source = format!("{{Valid}} {}First extra}} then Second extra}} tail.\n$a extra}} b$\n\\begingroup text extra}}\\endgroup\n$\\left(a extra}} b\\right)$\n{legal}","long prefix ".repeat(20));
                     std::fs::write(&child, &source).unwrap();
                     let outcome =
-                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
+                        texquill::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(
                         outcome.status, "error",
                         "{engine}/{width}/{numbered}/{verbose}: {}",
@@ -990,7 +990,7 @@ fn real_extra_closing_brace_deletions_repair_text_math_and_explicit_groups() {
                         expected
                     );
                     let mut workspace = Workspace {
-                        client: latex_lsp::project::state::ClientCapabilities {
+                        client: texquill::project::state::ClientCapabilities {
                             code_action_literals: true,
                             versioned_edits: true,
                             ..Default::default()
@@ -1027,7 +1027,7 @@ fn real_extra_closing_brace_deletions_repair_text_math_and_explicit_groups() {
                     assert!(fixed.ends_with(legal));
                     std::fs::write(&child, &fixed).unwrap();
                     let repaired =
-                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
+                        texquill::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(
                         repaired.status, "success",
                         "{engine}/{width}/{numbered}/{verbose}: {}",
@@ -1040,7 +1040,7 @@ fn real_extra_closing_brace_deletions_repair_text_math_and_explicit_groups() {
                         .all(|item| item.severity != Some(DiagnosticSeverity::ERROR)));
                     std::fs::write(&child, r"\def\bad{\egroup}\bad").unwrap();
                     let macro_error =
-                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
+                        texquill::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(macro_error.status, "error");
                     assert!(
                         macro_error.diagnostics.values().flatten().all(
@@ -1240,7 +1240,7 @@ fn real_double_script_empty_bases_repair_inline_display_and_grouped_scripts() {
                     if numbered {
                         arguments.insert(0, "-file-line-error".into());
                     }
-                    let config = latex_lsp::config::BuildConfig {
+                    let config = texquill::config::BuildConfig {
                         executable: compiler.to_string_lossy().into(),
                         arguments: Some(arguments),
                         ..Default::default()
@@ -1253,7 +1253,7 @@ fn real_double_script_empty_bases_repair_inline_display_and_grouped_scripts() {
                     let source=format!("{}$x_1_2$ and $y^1^2$ and $z_{{ab}}_{{cd}}$ and $w^{{ab}}^{{cd}}$ and $a_1_2_3$\n\\[d_1_2\\]\n$q_1% preserve comment\n _2$\n{legal}","long prefix ".repeat(20));
                     std::fs::write(&child, &source).unwrap();
                     let outcome =
-                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
+                        texquill::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(
                         outcome.status, "error",
                         "{engine}/{width}/{numbered}/{verbose}: {}",
@@ -1269,7 +1269,7 @@ fn real_double_script_empty_bases_repair_inline_display_and_grouped_scripts() {
                         outcome.output
                     );
                     let mut workspace = Workspace {
-                        client: latex_lsp::project::state::ClientCapabilities {
+                        client: texquill::project::state::ClientCapabilities {
                             code_action_literals: true,
                             versioned_edits: true,
                             ..Default::default()
@@ -1310,7 +1310,7 @@ fn real_double_script_empty_bases_repair_inline_display_and_grouped_scripts() {
                     assert!(fixed.ends_with(legal));
                     std::fs::write(&child, fixed).unwrap();
                     let repaired =
-                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
+                        texquill::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(
                         repaired.status, "success",
                         "{engine}/{width}/{numbered}/{verbose}: {}",
@@ -1327,7 +1327,7 @@ fn real_double_script_empty_bases_repair_inline_display_and_grouped_scripts() {
                     ] {
                         std::fs::write(&child, source).unwrap();
                         let macro_error =
-                            latex_lsp::compilation::build::run(&main, &config, &Default::default());
+                            texquill::compilation::build::run(&main, &config, &Default::default());
                         assert_eq!(macro_error.status, "error");
                         assert!(macro_error.diagnostics.values().flatten().all(|item|!matches!(item.code.as_ref(),Some(NumberOrString::String(code)) if matches!(code.as_str(),"double-subscript"|"double-superscript"))),"{engine}/{width}/{numbered}/{verbose}: {:?}",macro_error.diagnostics);
                     }

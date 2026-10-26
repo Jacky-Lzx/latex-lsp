@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::signature,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn setup(definitions: &str, marked: &str) -> (Workspace, Url, Position) {
     let mut workspace = Workspace::default();
@@ -64,7 +64,7 @@ fn optional_default_previews_remove_comments_without_joining_control_words() {
             check(&declaration, r"\pair{BO¦DY}", &label, 1);
             let (mut workspace, uri, position) = setup(&declaration, r"\pa¦");
             workspace.client.snippets = true;
-            let item = latex_lsp::language::features::completion(&workspace, &uri, position)
+            let item = texquill::language::features::completion(&workspace, &uri, position)
                 .into_iter()
                 .find(|item| item.label == "pair")
                 .unwrap();
@@ -104,8 +104,8 @@ fn optional_default_previews_remove_comments_without_joining_control_words() {
 #[cfg(unix)]
 #[ignore = "requires pdflatex, xelatex and lualatex"]
 fn optional_default_previews_preserve_real_tex_token_identities() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
 
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         let directory = tempfile::tempdir().unwrap();
@@ -175,7 +175,7 @@ fn commented_argument_counts_preserve_cross_file_signatures_and_completion_defau
         check(&declaration, r"\pair{BO¦DY}", r"\pair[#1=DEF]{#2}", 1);
         let (mut workspace, uri, position) = setup(&declaration, r"\pa¦");
         workspace.client.snippets = true;
-        let item = latex_lsp::language::features::completion(&workspace, &uri, position)
+        let item = texquill::language::features::completion(&workspace, &uri, position)
             .into_iter()
             .find(|item| item.label == "pair")
             .unwrap();
@@ -232,8 +232,8 @@ fn commented_argument_counts_keep_dynamic_invalid_and_out_of_range_counts_unknow
 #[cfg(unix)]
 #[ignore = "requires pdflatex, xelatex, lualatex and mathtools"]
 fn commented_argument_counts_keep_cross_file_rename_and_real_engine_values_consistent() {
-    use latex_lsp::{compilation::build, config::BuildConfig, language::features};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig, language::features};
 
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         let directory = tempfile::tempdir().unwrap();
@@ -537,7 +537,7 @@ fn declaration_completions_preserve_existing_control_word_targets() {
     ] {
         let (mut workspace, uri, position) = setup("", call);
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("missing edit");
@@ -547,7 +547,7 @@ fn declaration_completions_preserve_existing_control_word_targets() {
     }
     let (mut workspace, uri, position) = setup("", "\\newcom¦mand\n\\end{document}");
     workspace.client.snippets = true;
-    let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+    let items = texquill::language::features::completion(&workspace, &uri, position);
     let item = items
         .iter()
         .find(|item| item.label == "newcommand")
@@ -568,7 +568,7 @@ fn builtin_completions_preserve_existing_ungrouped_required_arguments() {
     ] {
         let (mut workspace, uri, position) = setup("", call);
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("missing edit");
@@ -615,7 +615,7 @@ fn completion_placeholders_remain_before_surrounding_tex_boundaries() {
             let call = format!("{math}\\{}¦{} {suffix}", &name[..2], &name[2..]);
             let (mut workspace, uri, position) = setup(definition, &call);
             workspace.client.snippets = true;
-            let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+            let items = texquill::language::features::completion(&workspace, &uri, position);
             let item = items.iter().find(|item| item.label == name).unwrap();
             let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
                 panic!("missing edit");
@@ -635,7 +635,7 @@ fn completion_placeholders_remain_before_surrounding_tex_boundaries() {
     ] {
         let (mut workspace, uri, position) = setup(definition, call);
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "probe").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("missing edit");
@@ -654,7 +654,7 @@ fn catalog_templates_for_commands_without_required_arguments() {
     ] {
         let (mut workspace, uri, position) = setup("", call);
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("missing edit");
@@ -693,7 +693,7 @@ fn custom_completions_preserve_existing_ungrouped_required_arguments() {
         ] {
             let (mut workspace, uri, position) = setup(definition, call);
             workspace.client.snippets = true;
-            let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+            let items = texquill::language::features::completion(&workspace, &uri, position);
             let item = items.iter().find(|item| item.label == "pair").unwrap();
             let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
                 panic!("missing edit");
@@ -725,7 +725,7 @@ fn custom_completions_keep_snippets_before_unrelated_lines() {
         let call = format!("\\pa¦ir{suffix}");
         let (mut workspace, uri, position) = setup(definition, &call);
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "pair").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("missing edit");
@@ -918,8 +918,8 @@ fn engine_dependent_ungrouped_tokens_and_paragraphs_remain_conservative() {
 #[test]
 #[ignore = "requires pdflatex and xelatex"]
 fn ungrouped_signature_arguments_match_real_tex_tokens_and_optional_values() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     for declaration in [r"\newcommand\pair[2]", r"\NewDocumentCommand\pair{mm}"] {
@@ -1242,8 +1242,8 @@ fn paragraph_tokens_end_grouped_call_signatures_instead_of_becoming_whitespace()
 #[test]
 #[ignore = "requires pdflatex, xelatex and etoolbox"]
 fn xparse_bang_signatures_match_real_optional_values_in_macros_and_environments() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
     let definitions = r"\NewDocumentCommand\probe{m !O{DEF}}{\typeout{PROBE=#2}}
 \NewDocumentCommand\initial{!O{DEF}}{\typeout{INITIAL=#1}}
 \NewDocumentCommand\control{r\OPEN\CLOSE !O{DEF}}{\typeout{CONTROL=#2}}
@@ -1515,7 +1515,7 @@ fn xparse_flag_completions_omit_flags_and_preserve_already_written_tokens() {
     ] {
         let (mut workspace, uri, position) = setup(definition, &format!("\\pro¦{following}"));
         workspace.client.snippets = snippets;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "probe").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("missing edit")
@@ -1535,8 +1535,8 @@ fn xparse_flag_completions_omit_flags_and_preserve_already_written_tokens() {
 #[test]
 #[ignore = "requires pdflatex and xelatex"]
 fn xparse_signature_flags_match_real_boolean_and_optional_values() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     for engine in ["pdflatex", "xelatex"] {
@@ -1748,7 +1748,7 @@ fn xparse_delimited_completions_insert_required_tokens_and_preserve_existing_arg
     ] {
         let (mut workspace, uri, position) = setup(definition, &format!("\\pro¦{following}"));
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "probe").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("missing edit")
@@ -1794,8 +1794,8 @@ fn xparse_malformed_or_multi_token_delimiters_remain_conservative() {
 #[test]
 #[ignore = "requires pdflatex and xelatex"]
 fn xparse_delimited_signature_boundaries_match_real_tex_argument_values() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     for engine in ["pdflatex", "xelatex"] {
@@ -1852,7 +1852,7 @@ fn text_font_commands_skip_encodings_and_retain_optional_defaults_in_call_signat
         );
         let (mut workspace, uri, position) = setup(&definition, r"\cust¦");
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "custom").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("missing call snippet")
@@ -1922,7 +1922,7 @@ fn command_copy_declarations_hint_both_command_tokens_with_or_without_groups() {
         }
         let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("missing snippet: {name}")
@@ -1957,7 +1957,7 @@ fn document_command_declarations_hint_grouped_and_bare_targets_and_preserve_snip
         }
         let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("missing snippet: {name}")
@@ -2011,7 +2011,7 @@ fn fontspec_declarations_accept_bare_and_grouped_switches_and_both_feature_lists
         }
         let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("missing snippet: {name}")
@@ -2100,7 +2100,7 @@ fn classic_font_declarations_hint_font_fields_and_offer_valid_command_snippets()
     ] {
         let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!()
@@ -2136,7 +2136,7 @@ fn paired_delimiter_signatures_follow_body_counts_and_exclusive_sizing_modes() {
         }
         let (mut workspace, uri, position) = setup(definition, r"\no¦");
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "norm").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!()
@@ -2157,7 +2157,7 @@ fn paired_delimiter_signatures_follow_body_counts_and_exclusive_sizing_modes() {
         );
         let (mut workspace, uri, position) = setup(definition, r"\pa¦");
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == "pair").unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!()
@@ -2248,7 +2248,7 @@ fn paired_delimiter_declarations_offer_target_count_and_body_hints_and_snippets(
     ] {
         let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!()
@@ -2273,7 +2273,7 @@ fn pdfbookmark_hints_distinguish_level_title_and_destination_base_and_offer_a_sn
     }
     let (mut workspace, uri, position) = setup("", r"\pdfbook¦");
     workspace.client.snippets = true;
-    let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+    let items = texquill::language::features::completion(&workspace, &uri, position);
     let item = items
         .iter()
         .find(|item| item.label == "pdfbookmark")
@@ -2366,7 +2366,7 @@ fn full_citation_signatures_and_snippets_preserve_optional_notes() {
         let marked = format!("\\{command}¦");
         let (mut workspace, uri, at) = setup("", &marked);
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, at);
+        let items = texquill::language::features::completion(&workspace, &uri, at);
         let item = items.iter().find(|item| item.label == command).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("missing snippet")
@@ -2428,7 +2428,7 @@ fn hyperdef_signatures_offer_optional_labels_and_separate_destination_fields() {
     }
     let (mut workspace, uri, position) = setup("", r"\hyperd¦");
     workspace.client.snippets = true;
-    let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+    let items = texquill::language::features::completion(&workspace, &uri, position);
     let item = items.iter().find(|item| item.label == "hyperdef").unwrap();
     let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
         panic!("missing edit")
@@ -2488,7 +2488,7 @@ fn refcount_queries_offer_label_field_default_and_branch_parameters() {
     }
     let (mut workspace, uri, position) = setup("", r"\getrefb¦");
     workspace.client.snippets = true;
-    let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+    let items = texquill::language::features::completion(&workspace, &uri, position);
     let item = items
         .iter()
         .find(|item| item.label == "getrefbykeydefault")
@@ -2630,7 +2630,7 @@ fn builtin_signatures_select_nested_arguments_and_skip_omitted_optional_paramete
 
 #[test]
 fn custom_macro_completions_insert_required_tabstops_and_preserve_existing_arguments() {
-    use latex_lsp::language::features;
+    use texquill::language::features;
     let definitions = r"\newcommand{\pair}[2][\linewidth]{#2}\NewDocumentCommand{\render}{s O{blue} m m}{#3#4}\def\texpair#1#2{#1#2}\NewDocumentCommand{\optional}{O{blue}}{#1}";
     for (source, name, snippets, expected, format) in [
         (
@@ -2853,7 +2853,7 @@ fn alias_completions_insert_only_required_arguments_and_preserve_existing_calls(
             Some((label.into(), Some(snippet.into())))
         );
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, at);
+        let items = texquill::language::features::completion(&workspace, &uri, at);
         let item = items.iter().find(|i| i.label == "bridge").unwrap();
         assert_eq!(item.detail.as_deref(), Some(label));
         assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
@@ -2883,7 +2883,7 @@ fn alias_completions_insert_only_required_arguments_and_preserve_existing_calls(
     ] {
         let (mut workspace, uri, at) = setup(definitions, &format!("\\bri¦dge{suffix}"));
         workspace.client.snippets = true;
-        let item = latex_lsp::language::features::completion(&workspace, &uri, at)
+        let item = texquill::language::features::completion(&workspace, &uri, at)
             .into_iter()
             .find(|i| i.label == "bridge")
             .unwrap();
@@ -2931,7 +2931,7 @@ fn alias_completions_follow_changed_target_and_alias_definitions() {
             definitions_uri.clone(),
             Document::new(&definitions_uri, definitions.into(), Some(version)),
         );
-        let item = latex_lsp::language::features::completion(&workspace, &uri, at)
+        let item = texquill::language::features::completion(&workspace, &uri, at)
             .into_iter()
             .find(|i| i.label == "bridge")
             .unwrap();
@@ -3105,7 +3105,7 @@ fn classic_macro_defaults_and_calls_end_at_the_first_unbraced_closing_bracket() 
     }
     let (mut workspace, uri, at) = setup(r"\newcommand{\pair}[2][x[y]{#1:#2}", r"\pa¦");
     workspace.client.snippets = true;
-    let items = latex_lsp::language::features::completion(&workspace, &uri, at);
+    let items = texquill::language::features::completion(&workspace, &uri, at);
     let item = items.iter().find(|item| item.label == "pair").unwrap();
     let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
         panic!("missing macro snippet")
@@ -3326,8 +3326,8 @@ fn named_builtin_calls_keep_the_same_optional_boundaries_as_direct_calls() {
 #[test]
 #[ignore = "requires pdflatex"]
 fn optional_signature_boundaries_match_the_values_received_by_real_tex_macros() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
@@ -3662,7 +3662,7 @@ fn theorem_signatures_offer_optional_notes_for_numbered_shared_and_starred_decla
 
 #[test]
 fn direct_environment_completions_insert_required_arguments_and_omit_optional_defaults() {
-    use latex_lsp::language::features;
+    use texquill::language::features;
     for (definitions, marked, name, snippets, expected, label) in [
         (
             r"\newenvironment{panel}[2][blue]{}{}",
@@ -3941,7 +3941,7 @@ fn package_and_class_loader_signatures_include_minimum_versions_and_forwarded_op
     ] {
         let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
         workspace.client.snippets = true;
-        let items = latex_lsp::language::features::completion(&workspace, &uri, position);
+        let items = texquill::language::features::completion(&workspace, &uri, position);
         let item = items.iter().find(|item| item.label == name).unwrap();
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!()

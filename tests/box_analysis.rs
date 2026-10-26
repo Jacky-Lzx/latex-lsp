@@ -1,7 +1,7 @@
-use latex_lsp::compilation::build_log::{compilation_analysis, parse};
 use lsp_types::*;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use texquill::compilation::build_log::{compilation_analysis, parse};
 
 fn warning(message: impl Into<String>) -> Diagnostic {
     Diagnostic {
@@ -221,11 +221,11 @@ fn real_box_summaries_distinguish_four_categories_and_clear_after_layout_repair(
             std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
             let source = "\\documentclass{article}\n\\begin{document}\n\\setbox0=\\hbox to 1pt{\\hskip 20pt}\n\\setbox1=\\vbox to 1pt{\\vskip 20pt}\n\\setbox2=\\hbox to 20pt{A}\n\\setbox3=\\vbox to 20pt{\\vskip 1pt}\nHello.\n\\end{document}\n";
             std::fs::write(&main, source).unwrap();
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable: compiler.to_string_lossy().into(),
                 ..Default::default()
             };
-            let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+            let outcome = texquill::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(
                 outcome.status, "success",
                 "{engine}/{width}: {}",
@@ -247,7 +247,7 @@ fn real_box_summaries_distinguish_four_categories_and_clear_after_layout_repair(
             assert_eq!(analysis["truncated"], false);
             let fixed = "\\documentclass{article}\n\\begin{document}\nHello.\n\\end{document}\n";
             std::fs::write(&main, fixed).unwrap();
-            let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+            let outcome = texquill::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(
                 outcome.status, "success",
                 "{engine}/{width}: {}",

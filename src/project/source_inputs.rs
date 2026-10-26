@@ -765,7 +765,7 @@ mod selection_filter_tests {
     }
 
     fn fixture(source: &str) -> (Workspace, BTreeSet<Url>) {
-        let main = Url::parse("file:///tmp/latex-lsp-selection-unit/main.tex").unwrap();
+        let main = Url::parse("file:///tmp/texquill-selection-unit/main.tex").unwrap();
         let mut workspace = Workspace::default();
         workspace
             .documents
@@ -797,13 +797,13 @@ mod selection_filter_tests {
             let source = format!("{}{{first,% keep 😀\r\nsecond.tex% tail\r\n}}", call(form));
             let (mut workspace, mut scope) = fixture(&source);
             let provider =
-                Url::parse("file:///tmp/latex-lsp-selection-unit/definitions.sty").unwrap();
+                Url::parse("file:///tmp/texquill-selection-unit/definitions.sty").unwrap();
             workspace.documents.insert(
                 provider.clone(),
                 Document::new(&provider, r"\def\choose{\includeonly}".into(), None),
             );
             scope.insert(provider);
-            let data = Url::parse("file:///tmp/latex-lsp-selection-unit/resource.tex").unwrap();
+            let data = Url::parse("file:///tmp/texquill-selection-unit/resource.tex").unwrap();
             let mut doc = Document::new(&data, r"\renewcommand{\includeonly}[1]{}".into(), None);
             doc.kind = DocumentKind::BibtexStyle;
             workspace.documents.insert(data.clone(), doc);
@@ -866,7 +866,7 @@ mod selection_filter_tests {
         let (mut workspace, mut scope) = fixture(r"\includeonly{selected}");
         for index in 0..MAX_SOURCES {
             let uri = Url::parse(&format!(
-                "file:///tmp/latex-lsp-selection-unit/source-{index}.tex"
+                "file:///tmp/texquill-selection-unit/source-{index}.tex"
             ))
             .unwrap();
             workspace
@@ -880,7 +880,7 @@ mod selection_filter_tests {
         let (mut workspace, mut scope) = fixture(r"\includeonly{selected}");
         for index in 0..8 {
             let uri = Url::parse(&format!(
-                "file:///tmp/latex-lsp-selection-unit/big-{index}.tex"
+                "file:///tmp/texquill-selection-unit/big-{index}.tex"
             ))
             .unwrap();
             workspace.documents.insert(

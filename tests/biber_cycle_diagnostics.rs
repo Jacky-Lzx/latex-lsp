@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "cyclic-bibliography-inheritance";
 fn uri(root: &Path, name: &str) -> Url {
@@ -194,7 +194,7 @@ fn history_failures_missing_inputs_and_canonical_child_collisions_preserve_root_
         format!("{}{}{error}", found("refs.data"), found("missing.data")),
         format!("{}ERROR - Unknown failure\n{error}", found("refs.data")),
         format!(
-            "{}[latex-lsp: middle of compiler output omitted]\n{error}",
+            "{}[texquill: middle of compiler output omitted]\n{error}",
             found("refs.data")
         ),
         format!("{}{}{error}", found("refs.data"), found("duplicate.data")),
@@ -386,7 +386,7 @@ fn real_biber_crossref_and_xdata_cycles_move_and_clear_after_repair() {
             let target=raw_key(data["key"].as_str().unwrap());
             let parent=raw_key(data["parent"].as_str().unwrap());
             let text=Text::new(current.clone());
-            let syntax=latex_lsp::parser::syntax::Syntax::bibtex(&text);
+            let syntax=texquill::parser::syntax::Syntax::bibtex(&text);
             let expected=if xdata {
                 let entry=syntax.citations.iter().find(|entry|entry.name==target).unwrap();
                 text.range(entry.span.start,entry.span.end)
@@ -419,7 +419,7 @@ fn real_biber_macro_mapped_and_alias_crossref_cycles_use_original_child_keys() {
         let item=&items[0];let data=item.data.as_ref().unwrap();
         let key=raw_key(data["key"].as_str().unwrap());
         let text=Text::new(source.into());
-        let syntax=latex_lsp::parser::syntax::Syntax::bibtex(&text);
+        let syntax=texquill::parser::syntax::Syntax::bibtex(&text);
         let entry=syntax.citations.iter().find(|entry|entry.name==key).unwrap();
         assert_eq!(item.range,text.range(entry.span.start,entry.span.end));
         assert_eq!(data["unresolvedField"],true);

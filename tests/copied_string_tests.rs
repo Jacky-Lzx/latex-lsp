@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
 
 fn setup(files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace, Url) {
     let directory = tempfile::tempdir().unwrap();
@@ -246,8 +246,8 @@ fn shared_native_and_custom_copies_guard_only_names_whose_execution_differs() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_direct_copies_preserve_literal_tokens_and_states_after_macro_and_boolean_renames() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for (predicate, destination) in [
             ("ifblank", "saved"),

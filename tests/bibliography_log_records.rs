@@ -1,6 +1,6 @@
-use latex_lsp::compilation::{build_log, recorder};
 use lsp_types::*;
 use std::path::Path;
+use texquill::compilation::{build_log, recorder};
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -246,7 +246,7 @@ fn generic_entry_cache_refreshes_between_logs_and_preserves_utf16_and_explicit_l
         let at = source.find("中😀").unwrap();
         assert_eq!(
             items[0].range,
-            latex_lsp::text::Text::new(source.into()).range(at, at + "中😀".len())
+            texquill::text::Text::new(source.into()).range(at, at + "中😀".len())
         );
         assert_eq!(items[0].source.as_deref(), Some("latex-build"));
         assert_eq!(items[0].severity, Some(DiagnosticSeverity::WARNING));
@@ -339,7 +339,7 @@ fn real_bibtex_generic_field_warnings_refresh_key_ranges_and_clear_after_repair(
             let at = source.find("entry").unwrap();
             assert_eq!(
                 found[&uri(root, "refs.bib")][0].range,
-                latex_lsp::text::Text::new(source.into()).range(at, at + 5)
+                texquill::text::Text::new(source.into()).range(at, at + 5)
             );
         }
     }

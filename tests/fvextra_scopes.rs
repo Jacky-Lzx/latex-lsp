@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, navigation},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
 
 const PHASES: [&str; 4] = ["inside", "inner", "afterinner", "afterouter"];
 
@@ -65,7 +65,7 @@ fn check(source: &str, root: &std::path::Path, expected: &[&str]) -> String {
         std::fs::write(root.join(format!("{phase}.tex")), "Chapter text").unwrap();
     }
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },
@@ -189,8 +189,8 @@ fn malformed_environment_ends_recover_settings_without_discarding_outer_scopes()
 #[test]
 #[ignore = "requires pdflatex, xelatex, fvextra, listings, and verbatim"]
 fn real_environment_settings_match_labels_and_inputs_before_and_after_rename() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
     for engine in ["pdflatex", "xelatex"] {
         for (initial, outer, inner, expected) in cases() {
             for caller in ["Verb", "code"] {
@@ -217,11 +217,11 @@ fn real_environment_settings_match_labels_and_inputs_before_and_after_rename() {
                     );
                     assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
                     let aux =
-                        std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                        std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                     assert!(aux.contains(&format!("newlabel{{{kept}}}")), "{aux}");
                     assert!(!aux.contains(&format!("newlabel{{{absent}}}")), "{aux}");
                     let fls =
-                        std::fs::read_to_string(root.join("build/latex-lsp/main.fls")).unwrap();
+                        std::fs::read_to_string(root.join("build/texquill/main.fls")).unwrap();
                     for phase in PHASES {
                         assert_eq!(
                             aux.contains(&format!("newlabel{{{phase}}}")),

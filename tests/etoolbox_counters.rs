@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
 
 fn project(source: &str) -> (tempfile::TempDir, Workspace, Url, Url) {
     let directory = tempfile::tempdir().unwrap();
@@ -179,8 +179,8 @@ fn etoolbox_counter_commands_offer_snippets_and_protect_their_command_names() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_etoolbox_counter_renames_preserve_local_global_and_existence_results() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let source = concat!(
         "% 😀\r\n\\defcounter % keep assignment\r\n{exercise}{2+3}\n",
@@ -295,7 +295,7 @@ fn explicit_completion_can_replace_a_spaced_counter_name_without_merging_its_ide
 
 #[test]
 fn semantic_tokens_mark_only_the_static_counter_operands() {
-    use latex_lsp::language::semantic;
+    use texquill::language::semantic;
     let source = r"\defcounter{exercise}{2+3}\ifltxcounter{exercise}{exercise}{exercise}\defcounter*{exercise}{1}\ifltxcounter*{exercise}{Y}{N}";
     let (_directory, workspace, content, _) = project(source);
     let doc = &workspace.documents[&content];
@@ -326,7 +326,7 @@ fn semantic_tokens_mark_only_the_static_counter_operands() {
 
 #[test]
 fn missing_counter_errors_locate_the_assignment_instead_of_a_same_line_existence_check() {
-    use latex_lsp::compilation::build_log;
+    use texquill::compilation::build_log;
     let source =
         "\\documentclass{article}\n\\ifltxcounter{equatoin}{Yes}{No}\\defcounter{equatoin}{2+3}\n";
     let (_directory, workspace, content, _) = project(source);
@@ -351,8 +351,8 @@ fn missing_counter_errors_locate_the_assignment_instead_of_a_same_line_existence
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_missing_counter_assignments_offer_a_spelling_fix_and_compile_after_repair() {
-    use latex_lsp::{compilation::build, config::BuildConfig, editing};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig, editing};
 
     let source = "\\ifltxcounter{equatoin}{Yes}{No}\\defcounter{equatoin}{2+3}\n";
     for engine in ["pdflatex", "xelatex", "lualatex"] {

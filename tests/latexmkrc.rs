@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::Url;
+use std::sync::atomic::AtomicBool;
+use texquill::{
     compilation::{build, synctex},
     config::{BuildConfig, Config, Engine},
     project::workspace::Workspace,
 };
-use lsp_types::Url;
-use std::sync::atomic::AtomicBool;
 
 #[test]
 fn project_pdf_mode_selects_build_and_rebuild_engines_and_refreshes_from_disk() {
@@ -98,7 +98,7 @@ fn project_rc_selection_matches_latexmk_and_is_refreshed_from_disk() {
     let uri = Url::from_file_path(&main).unwrap();
     let workspace = Workspace::default();
     let output = || workspace.build_config(&uri).output_path(&main).unwrap();
-    assert_eq!(output(), root.join("build/latex-lsp"));
+    assert_eq!(output(), root.join("build/texquill"));
     std::fs::write(root.join("latexmkrc"), "$out_dir = 'visible';").unwrap();
     assert_eq!(output(), root.join("visible"));
     std::fs::write(root.join(".latexmkrc"), "$out_dir = 'build';").unwrap();
@@ -108,7 +108,7 @@ fn project_rc_selection_matches_latexmk_and_is_refreshed_from_disk() {
     // latexmk reads only the first existing project rc, even if it does not
     // define an output directory. Do not borrow a value from the other file.
     std::fs::write(root.join(".latexmkrc"), "$pdf_mode = 1;").unwrap();
-    assert_eq!(output(), root.join("build/latex-lsp"));
+    assert_eq!(output(), root.join("build/texquill"));
     std::fs::remove_file(root.join(".latexmkrc")).unwrap();
     assert_eq!(output(), root.join("visible"));
 }
@@ -123,8 +123,8 @@ fn explicit_output_settings_override_rc_including_the_previous_default() {
         (serde_json::json!({"outputDirectory":null}), "build"),
         (serde_json::json!({"outputDirectory":"custom"}), "custom"),
         (
-            serde_json::json!({"outputDirectory":"build/latex-lsp"}),
-            "build/latex-lsp",
+            serde_json::json!({"outputDirectory":"build/texquill"}),
+            "build/texquill",
         ),
     ] {
         let config = Config::parse(serde_json::json!({"latex":{"build":value}})).unwrap();
@@ -159,13 +159,13 @@ fn rc_is_read_beside_the_main_document_only_for_default_latexmk_arguments() {
     workspace.config.build.executable = "pdflatex".into();
     assert_eq!(
         workspace.build_config(&uri).output_path(&main).unwrap(),
-        sub.join("build/latex-lsp")
+        sub.join("build/texquill")
     );
     workspace.config.build.executable = "latexmk".into();
     workspace.config.build.arguments = Some(vec!["-norc".into(), "%f".into()]);
     assert_eq!(
         workspace.build_config(&uri).output_path(&main).unwrap(),
-        sub.join("build/latex-lsp")
+        sub.join("build/texquill")
     );
 }
 
@@ -240,7 +240,7 @@ printf 'SyncTeX data\n' > "$output/main.synctex.gz"
         let project = synctex::prepare(&workspace, &uri).unwrap();
         assert_eq!(project.pdf, root.join("输出 build/main.pdf"));
     }
-    assert!(!root.join("build/latex-lsp").exists());
+    assert!(!root.join("build/texquill").exists());
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn real_latexmk_uses_project_rc_output_and_preserves_explicit_overrides() {
                 .is_file());
         }
     }
-    assert!(!root.join("build/latex-lsp").exists());
+    assert!(!root.join("build/texquill").exists());
 }
 
 #[test]

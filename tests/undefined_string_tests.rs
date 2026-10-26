@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace, text::Text};
 
 fn setup(files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace, Url) {
     let directory = tempfile::tempdir().unwrap();
@@ -134,7 +134,7 @@ fn named_undefinitions_without_a_copy_or_redefinition_still_refresh_string_seman
 
 #[test]
 fn removal_targets_remain_macro_references_and_offer_control_operand_signatures() {
-    use latex_lsp::language::signature;
+    use texquill::language::signature;
     for removal in [
         r"\undef\saved",
         r"\gundef{\saved}",
@@ -251,8 +251,8 @@ fn dynamic_and_shared_removal_targets_guard_affected_operands_only() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_removals_and_redefinitions_preserve_rename_results_in_three_engines() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for predicate in ["ifblank", "notblank", "ifstrempty", "ifstrequal"] {
             for removal in [
@@ -359,8 +359,8 @@ fn real_removals_and_redefinitions_preserve_rename_results_in_three_engines() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_undefined_copies_report_the_control_and_leave_following_groups_executable() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for removal in [r"\undef\saved", r"\csundef{saved}"] {
             let source = format!("\\documentclass{{article}}\\usepackage{{etoolbox}}\\newbool{{draft}}\\let\\saved\\ifblank\\begin{{document}}{removal}\n\\saved{{\\booltrue{{draft}}\\ifbool{{draft}}{{\\typeout{{UNDEF:executed}}}}{{Wrong.}}}}\\ifbool{{draft}}{{Wrong.}}{{\\typeout{{UNDEF:local}}}}Text.\\end{{document}}");

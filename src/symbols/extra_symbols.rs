@@ -510,7 +510,7 @@ pub(crate) fn diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
             result.push(Diagnostic {
                 range: location(ws, uri, entry).range,
                 severity: Some(DiagnosticSeverity::WARNING),
-                source: Some("latex-lsp".into()),
+                source: Some("texquill".into()),
                 code: Some(NumberOrString::String(
                     if entry.kind == Kind::Glossary {
                         "undefined-glossary"
@@ -527,7 +527,7 @@ pub(crate) fn diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
             result.push(Diagnostic {
                 range: location(ws, uri, entry).range,
                 severity: Some(DiagnosticSeverity::WARNING),
-                source: Some("latex-lsp".into()),
+                source: Some("texquill".into()),
                 code: Some(NumberOrString::String("duplicate-symbol".into())),
                 message: format!("Duplicate {} `{}`", entry.kind.description(), entry.name),
                 related_information: Some(

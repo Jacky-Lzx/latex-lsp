@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     editing::file_operations,
     language::{features, navigation},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -164,7 +164,7 @@ fn package_list_completion_preserves_comments_and_obeys_actual_optional_argument
                     Text::new(source.clone()).position(marked.find('¦').unwrap()),
                 );
                 if arguments.contains("loc¦") {
-                    let hint = latex_lsp::language::signature::help(
+                    let hint = texquill::language::signature::help(
                         &workspace,
                         &main,
                         Text::new(source.clone()).position(marked.find('¦').unwrap()),
@@ -274,7 +274,7 @@ fn package_errors_and_repairs_do_not_guess_from_partly_dynamic_commented_lists()
             std::fs::write(root.join("local.sty"), "Local.\n").unwrap();
             let log = format!("(./main.tex\n! LaTeX Error: File `locla.sty' not found.\n! Emergency stop.\n<read *>\nl.{} \\relax\n", source.lines().count());
             let main_uri = uri(root, "main.tex");
-            let parsed = latex_lsp::compilation::build_log::parse(&main, &log);
+            let parsed = texquill::compilation::build_log::parse(&main, &log);
             let mut diagnostic = parsed[&main_uri]
                 .iter()
                 .find(|diagnostic| diagnostic.message.contains("not found"))
@@ -287,7 +287,7 @@ fn package_errors_and_repairs_do_not_guess_from_partly_dynamic_commented_lists()
             diagnostic.code = Some(NumberOrString::String("missing-package".into()));
             diagnostic.data = Some(serde_json::json!({"file":"locla.sty","loaderCommand":command}));
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     ..Default::default()
                 },
@@ -299,7 +299,7 @@ fn package_errors_and_repairs_do_not_guess_from_partly_dynamic_commented_lists()
                 main_uri.clone(),
                 [(main_uri.clone(), vec![diagnostic.clone()])].into(),
             );
-            let actions = latex_lsp::editing::code_actions(
+            let actions = texquill::editing::code_actions(
                 &workspace,
                 &main_uri,
                 diagnostic.range,

@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{path::Path, sync::atomic::AtomicBool};
+use texquill::{
     compilation::build,
     editing::{self, file_operations},
     language::{features, navigation, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::{path::Path, sync::atomic::AtomicBool};
 
 const ENVIRONMENTS: [&str; 10] = [
     "Verbatim",
@@ -240,7 +240,7 @@ fn literal_examples_do_not_define_symbols_import_files_or_participate_in_renames
         );
         std::fs::write(root.join("main.tex"), &source).unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 versioned_edits: true,
                 ..Default::default()
             },
@@ -439,7 +439,7 @@ fn closing_line_suffixes_are_discarded_without_losing_delimiters_or_the_next_sou
             );
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -575,7 +575,7 @@ fn header_markers_never_close_the_body_and_preserve_real_source_renames() {
                 let source =
                     format!("{before}{header}{newline}{body}{newline}{marker}{newline}{after}");
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         ..Default::default()
                     },
@@ -715,7 +715,7 @@ fn incomplete_raw_environments_offer_one_versioned_close_fix_without_parsing_the
             argument(environment)
         );
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 versioned_edits: true,
                 code_action_literals: true,
                 ..Default::default()
@@ -845,7 +845,7 @@ fn real_header_markers_keep_body_literal_after_versioned_label_rename() {
                 );
                 std::fs::write(root.join("main.tex"), &source).unwrap();
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         ..Default::default()
                     },
@@ -888,7 +888,7 @@ fn real_header_markers_keep_body_literal_after_versioned_label_rename() {
                 std::fs::write(root.join("main.tex"), &updated).unwrap();
                 let outcome = build::run(
                     &root.join("main.tex"),
-                    &latex_lsp::config::BuildConfig {
+                    &texquill::config::BuildConfig {
                         executable: engine.into(),
                         ..Default::default()
                     },
@@ -900,7 +900,7 @@ fn real_header_markers_keep_body_literal_after_versioned_label_rename() {
                     outcome.output
                 );
                 assert!(!outcome.inputs.unwrap().contains(&fake));
-                let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                let aux = std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                 assert!(aux.contains("newlabel{renamedlabel}"), "{aux}");
                 for key in ["kept", "fake", "fakeinput"] {
                     assert!(!aux.contains(&format!("newlabel{{{key}}}")), "{aux}");
@@ -974,7 +974,7 @@ fn real_discarded_closing_suffix_preserves_the_compiler_error_and_safe_rename() 
                     .recorded_inputs
                     .insert(main.clone(), inputs);
                 assert!(!workspace.project_documents(&main).contains(&discarded));
-                let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                let aux = std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                 assert!(aux.contains(&format!("newlabel{{{key}}}")), "{aux}");
                 assert!(
                     !aux.contains("newlabel{discarded}")
@@ -1045,7 +1045,7 @@ fn real_fancyverb_environments_keep_example_labels_literal_before_and_after_rena
                         .flatten()
                         .all(|diagnostic| diagnostic.severity != Some(DiagnosticSeverity::ERROR)));
                     let aux =
-                        std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                        std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                     assert!(aux.contains(&format!("newlabel{{{key}}}")), "{aux}");
                     assert!(!aux.contains("newlabel{fake}"), "{aux}");
                     assert!(!aux.contains("newlabel{fakeafter}"), "{aux}");
@@ -1054,7 +1054,7 @@ fn real_fancyverb_environments_keep_example_labels_literal_before_and_after_rena
                     }
                     if environment.starts_with("VerbatimOut") {
                         let output =
-                            std::fs::read_to_string(root.join("build/latex-lsp/output.txt"))
+                            std::fs::read_to_string(root.join("build/texquill/output.txt"))
                                 .unwrap();
                         assert!(output.contains("\\label{kept}\\label{fake}"), "{output}");
                     }

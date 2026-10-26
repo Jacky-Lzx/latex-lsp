@@ -1,7 +1,7 @@
 #![cfg(unix)]
-use latex_lsp::{compilation::build, config::BuildConfig};
 use lsp_types::*;
 use std::os::unix::fs::PermissionsExt;
+use texquill::{compilation::build, config::BuildConfig};
 
 fn build_fixture(
     root: &std::path::Path,
@@ -126,8 +126,8 @@ fn copying_a_source_is_not_an_invocation_and_completed_copies_keep_tab_repairs()
                 Some(NumberOrString::String("extra-alignment-tab".into())),
                 "{copy}/{call}: {item:?}"
             );
-            let mut workspace = latex_lsp::project::workspace::Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+            let mut workspace = texquill::project::workspace::Workspace {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     ..Default::default()
                 },
@@ -206,8 +206,8 @@ fn completed_or_argument_free_redeclarations_still_offer_literal_tab_repairs() {
             "{definition}: {:?}",
             outcome.diagnostics
         );
-        let mut workspace = latex_lsp::project::workspace::Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+        let mut workspace = texquill::project::workspace::Workspace {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -240,8 +240,8 @@ fn cross_file_aliases_use_complete_project_arguments_for_diagnostics_and_repairs
         let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
         let item = outcome.diagnostics[&uri][0].clone();
         assert_eq!(item.code.is_some(), precise, "{arguments}: {item:?}");
-        let mut workspace = latex_lsp::project::workspace::Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+        let mut workspace = texquill::project::workspace::Workspace {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -306,11 +306,11 @@ fn completed_cross_file_macros_do_not_blame_their_second_bare_or_delimited_argum
 }
 
 fn selected_actions(
-    workspace: &latex_lsp::project::workspace::Workspace,
+    workspace: &texquill::project::workspace::Workspace,
     uri: &Url,
     diagnostic: &Diagnostic,
 ) -> CodeActionResponse {
-    latex_lsp::editing::code_actions(
+    texquill::editing::code_actions(
         workspace,
         uri,
         diagnostic.range,
@@ -324,7 +324,7 @@ fn selected_actions(
 
 #[test]
 fn literal_fixes_record_loaded_scopes_and_recheck_macro_arities_before_legacy_execution() {
-    use latex_lsp::{editing, project::workspace::Workspace};
+    use texquill::{editing, project::workspace::Workspace};
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let source = "\\input{macros}\n\\begin{tabular}{ll}A & B\\bad x& C\\\\\\end{tabular}\n";
@@ -342,7 +342,7 @@ fn literal_fixes_record_loaded_scopes_and_recheck_macro_arities_before_legacy_ex
         serde_json::from_value(data["macroSources"].clone()).unwrap();
     assert_eq!(scope, [main.clone(), macros.clone()].into());
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: false,
             apply_edits: true,
             versioned_edits: true,
@@ -587,8 +587,8 @@ fn real_copied_commands_exclude_arguments_and_repair_following_literal_tabs() {
                         })
                         .clone();
                     let main_uri = Url::from_file_path(&main).unwrap();
-                    let mut workspace = latex_lsp::project::workspace::Workspace {
-                        client: latex_lsp::project::state::ClientCapabilities {
+                    let mut workspace = texquill::project::workspace::Workspace {
+                        client: texquill::project::state::ClientCapabilities {
                             code_action_literals: true,
                             versioned_edits: true,
                             ..Default::default()
@@ -618,7 +618,7 @@ fn real_copied_commands_exclude_arguments_and_repair_following_literal_tabs() {
                     let OneOf::Left(edit) = &changes[0].edits[0] else {
                         panic!()
                     };
-                    let text = latex_lsp::text::Text::new(source.clone());
+                    let text = texquill::text::Text::new(source.clone());
                     let mut fixed = source;
                     fixed.replace_range(
                         text.offset(edit.range.start).unwrap()
@@ -727,8 +727,8 @@ fn real_paused_environment_parameters_and_completed_redeclarations_keep_distinct
                         item.data.as_ref().unwrap()["macroPausedSources"],
                         serde_json::json!([main_uri])
                     );
-                    let mut workspace = latex_lsp::project::workspace::Workspace {
-                        client: latex_lsp::project::state::ClientCapabilities {
+                    let mut workspace = texquill::project::workspace::Workspace {
+                        client: texquill::project::state::ClientCapabilities {
                             code_action_literals: true,
                             versioned_edits: true,
                             ..Default::default()
@@ -759,7 +759,7 @@ fn real_paused_environment_parameters_and_completed_redeclarations_keep_distinct
                         panic!()
                     };
                     assert_eq!(edit.new_text, r"\&");
-                    let text = latex_lsp::text::Text::new(source.clone());
+                    let text = texquill::text::Text::new(source.clone());
                     let mut fixed = source;
                     fixed.replace_range(
                         text.offset(edit.range.start).unwrap()
@@ -838,8 +838,8 @@ fn real_cross_file_macro_arguments_are_excluded_and_literal_tabs_can_be_repaired
                     scope,
                     [uri.clone(), Url::from_file_path(&macros).unwrap()].into()
                 );
-                let mut workspace = latex_lsp::project::workspace::Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                let mut workspace = texquill::project::workspace::Workspace {
+                    client: texquill::project::state::ClientCapabilities {
                         code_action_literals: true,
                         versioned_edits: true,
                         ..Default::default()
@@ -870,7 +870,7 @@ fn real_cross_file_macro_arguments_are_excluded_and_literal_tabs_can_be_repaired
                     panic!()
                 };
                 assert_eq!(edit.new_text, r"\&");
-                let text = latex_lsp::text::Text::new(source.into());
+                let text = texquill::text::Text::new(source.into());
                 let mut fixed = source.to_owned();
                 fixed.replace_range(
                     text.offset(edit.range.start).unwrap()..text.offset(edit.range.end).unwrap(),

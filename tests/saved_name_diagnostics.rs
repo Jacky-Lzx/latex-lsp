@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::sync::atomic::AtomicBool;
+use texquill::{
     compilation::{build, build_log},
     config::BuildConfig,
     editing,
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::sync::atomic::AtomicBool;
 
 fn undefined(diagnostics: &[Diagnostic]) -> &Diagnostic {
     diagnostics
@@ -248,7 +248,7 @@ fn compiler_confirmed_saved_name_macro_errors_offer_versioned_spelling_repairs()
         Some(NumberOrString::String("undefined-control-sequence".into()))
     );
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             code_action_literals: true,
             ..Default::default()
@@ -290,14 +290,14 @@ fn real_saved_name_macro_spelling_repairs_restore_successful_compilation() {
             let diagnostic = undefined(&before.diagnostics[&uri]);
             let start = source.find(r"\keynme").unwrap();
             assert_eq!(diagnostic.range, Text::new(source.clone()).range(start, start + 7), "{engine}/{call}: {}", before.output);
-            let mut workspace = Workspace { client: latex_lsp::project::state::ClientCapabilities { versioned_edits: true, code_action_literals: true, ..Default::default() }, ..Default::default() };
+            let mut workspace = Workspace { client: texquill::project::state::ClientCapabilities { versioned_edits: true, code_action_literals: true, ..Default::default() }, ..Default::default() };
             workspace.open(uri.clone(), source.clone(), 7);
             workspace.project.build_diagnostics.insert(uri.clone(), before.diagnostics.clone());
             let result = apply(&workspace, &uri, repair(&workspace, &uri, diagnostic));
             std::fs::write(&main, result).unwrap();
             let after = build::run(&main, &config, &AtomicBool::new(false));
             assert_eq!(after.status, "success", "{engine}/{call}: {}", after.output);
-            assert!(main.parent().unwrap().join("build/latex-lsp/main.pdf").is_file());
+            assert!(main.parent().unwrap().join("build/texquill/main.pdf").is_file());
         }
     }
 }

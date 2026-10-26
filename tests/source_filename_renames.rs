@@ -1,8 +1,8 @@
-use latex_lsp::{
-    editing::file_operations, language::navigation, project::workspace::Workspace, text::Text,
-};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{
+    editing::file_operations, language::navigation, project::workspace::Workspace, text::Text,
+};
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -25,7 +25,7 @@ fn project(root: &Path, body: &str) -> Workspace {
     )
     .unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },
@@ -247,11 +247,11 @@ fn real_source_file_renames_preserve_exact_inputs_across_engines_and_input_forms
                 std::fs::write(&compiler,format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
                 std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755))
                     .unwrap();
-                let config = latex_lsp::config::BuildConfig {
+                let config = texquill::config::BuildConfig {
                     executable: compiler.to_string_lossy().into(),
                     ..Default::default()
                 };
-                let before = latex_lsp::compilation::build::run(
+                let before = texquill::compilation::build::run(
                     &root.join("main.tex"),
                     &config,
                     &Default::default(),
@@ -286,7 +286,7 @@ fn real_source_file_renames_preserve_exact_inputs_across_engines_and_input_forms
                 )
                 .unwrap();
                 file_operations::did_rename(&mut workspace, &files).unwrap();
-                let after = latex_lsp::compilation::build::run(
+                let after = texquill::compilation::build::run(
                     &root.join("main.tex"),
                     &config,
                     &Default::default(),

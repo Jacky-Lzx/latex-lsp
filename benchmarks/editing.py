@@ -303,7 +303,7 @@ def relative_hook_label_locations(sources, declarations_only=True, lifecycle=Fal
                                 key=lambda match: match.start(1))]
 
 def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_renames=False, hook_labels=False, lifecycle_labels=False, global_hook_rules=False, default_hook_labels=False, document_hook_slots=False, relative_hook_labels=False):
-    with tempfile.TemporaryDirectory(prefix="latex-lsp-benchmark-") as directory:
+    with tempfile.TemporaryDirectory(prefix="texquill-benchmark-") as directory:
         root = Path(directory)
         metadata = fixture(root, scale, hooks, hook_wrappers, hook_environments, hook_interfaces, hook_labels, lifecycle_labels, global_hook_rules, default_hook_labels, document_hook_slots, relative_hook_labels)
         server = Server(binary, root, timeout)
@@ -590,7 +590,7 @@ def summary(values):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--server", type=Path, default=Path("target/release/latex-lsp"))
+    parser.add_argument("--server", type=Path, default=Path("target/release/texquill"))
     parser.add_argument("--scales", nargs="+", choices=SCALES, default=list(SCALES))
     parser.add_argument("--iterations", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=3)

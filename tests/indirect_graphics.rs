@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeMap, path::Path};
+use texquill::{
     editing::file_operations,
     language::{features, navigation},
     project::{graphics, workspace::Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::{collections::BTreeMap, path::Path};
 
 const PNG: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0,
@@ -265,7 +265,7 @@ fn real_image_aliases_keep_recorder_inputs_after_image_and_root_moves() {
         let source = format!("\\documentclass{{article}}\\usepackage{{graphicx,etoolbox}}\\def\\Image{{\\includegraphics}}\\graphicspath{{{{assets/}}}}\\DeclareGraphicsExtensions{{.png}}\\begin{{document}}{call}*[width=1cm]{{plot}}\\end{{document}}");
         let mut workspace = project(root, &source);
         std::fs::write(root.join("assets/plot.png"), PNG).unwrap();
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: "pdflatex".into(),
             ..Default::default()
         };
@@ -283,7 +283,7 @@ fn real_image_aliases_keep_recorder_inputs_after_image_and_root_moves() {
                 targets(&workspace, &uri(root, main_name)).as_slice(),
                 std::slice::from_ref(&image)
             );
-            let outcome = latex_lsp::compilation::build::run(
+            let outcome = texquill::compilation::build::run(
                 &root.join(main_name),
                 &config,
                 &Default::default(),
@@ -324,15 +324,12 @@ fn real_missing_alias_images_have_precise_diagnostics_and_repairable_names() {
         let mut workspace = project(root, &source);
         workspace.client.code_action_literals = true;
         std::fs::write(root.join("assets/plot.png"), PNG).unwrap();
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: "pdflatex".into(),
             ..Default::default()
         };
-        let outcome = latex_lsp::compilation::build::run(
-            &root.join("main.tex"),
-            &config,
-            &Default::default(),
-        );
+        let outcome =
+            texquill::compilation::build::run(&root.join("main.tex"), &config, &Default::default());
         assert_eq!(outcome.status, "error", "{call}: {}", outcome.output);
         let main = uri(root, "main.tex");
         let diagnostic = outcome.diagnostics[&main]
@@ -347,7 +344,7 @@ fn real_missing_alias_images_have_precise_diagnostics_and_repairable_names() {
             .project
             .build_diagnostics
             .insert(main.clone(), outcome.diagnostics);
-        let fixes = latex_lsp::editing::code_actions(
+        let fixes = texquill::editing::code_actions(
             &workspace,
             &main,
             diagnostic.range,
@@ -378,11 +375,8 @@ fn real_missing_alias_images_have_precise_diagnostics_and_repairable_names() {
             }])
             .unwrap();
         std::fs::write(root.join("main.tex"), &repaired.source).unwrap();
-        let outcome = latex_lsp::compilation::build::run(
-            &root.join("main.tex"),
-            &config,
-            &Default::default(),
-        );
+        let outcome =
+            texquill::compilation::build::run(&root.join("main.tex"), &config, &Default::default());
         assert_eq!(outcome.status, "success", "{call}: {}", outcome.output);
         assert!(outcome
             .inputs
@@ -574,7 +568,7 @@ fn recorded_image_fixes_recheck_alias_definitions_before_editing() {
         [(generated.clone(), vec![diagnostic.clone()])].into(),
     );
     let fixes = |workspace: &Workspace| {
-        latex_lsp::editing::code_actions(
+        texquill::editing::code_actions(
             workspace,
             &generated,
             diagnostic.range,
@@ -606,7 +600,7 @@ fn real_dynamic_source_images_keep_navigation_and_build_inputs_after_moves() {
         .unwrap();
         std::fs::write(root.join("plot.png"), PNG).unwrap();
         workspace.reload(&generated);
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: "pdflatex".into(),
             ..Default::default()
         };
@@ -619,7 +613,7 @@ fn real_dynamic_source_images_keep_navigation_and_build_inputs_after_moves() {
                     "plot.png"
                 },
             );
-            let outcome = latex_lsp::compilation::build::run(
+            let outcome = texquill::compilation::build::run(
                 &root.join("main.tex"),
                 &config,
                 &Default::default(),

@@ -1,10 +1,10 @@
-# 用户宏调用层次
+# User macro call hierarchy
 
-[返回文档目录](README.md) · [符号与重命名](symbols.md) · [参数提示](signatures.md)
+[Back to documentation](README.md) · [Symbols and renaming](symbols.md) ·[Signature help](signatures.md)
 
-支持标准 `textDocument/prepareCallHierarchy`、`callHierarchy/incomingCalls` 和 `callHierarchy/outgoingCalls`。在用户宏名称或调用处打开调用层次，可查看哪些宏、哪些源文件直接调用它，以及该宏的替换正文调用哪些其他用户宏。Neovim 可使用 `vim.lsp.buf.incoming_calls()` 和 `vim.lsp.buf.outgoing_calls()`。
+Supports standards `textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls` and `callHierarchy/outgoingCalls`. Open the call hierarchy at a user macro name or call site to see which macros, which source files call it directly, and which other user macros are called by the macro's replacement text. Neovim works with `vim.lsp.buf.incoming_calls()` and `vim.lsp.buf.outgoing_calls()`.
 
-例如：
+For example:
 
 ```tex
 \newcommand{\leaf}{Text}
@@ -13,27 +13,27 @@
 \leaf
 ```
 
-`\leaf` 的调用方包含 `\parent`（两处调用位置）和当前源文件（文件顶层的一处位置）。同一调用方／目标的多处位置合并到一个结果。选择文件调用方后，可以继续查看该文件顶层的出站调用；宏正文内的位置归入对应宏。递归宏返回自己的直接调用边，不递归展开整个图。
+The caller of `\leaf` contains `\parent` (two calling locations) and the current source file (one location at the top level of the file). Multiple locations from the same caller/target are combined into one result. After selecting the file caller, you can continue to view the outbound calls at the top level of the file; the positions within the macro body are classified into the corresponding macros. Recursive macros return their own direct calling edges and do not recursively expand the entire graph.
 
-使用当前缓冲区与项目依赖，支持跨文件、未保存编辑、未命名缓冲区、UTF-16 和 CRLF。宏节点的范围覆盖声明及替换正文，名称范围用于跳转；直接调用位置对应实际控制序列，不包含其参数。不同主文档按现有项目作用域隔离。
+Uses current buffer with project dependencies, supports cross-file, unsaved edits, unnamed buffers, UTF-16 and CRLF. The scope of the macro node covers the declaration and replacement text, and the name range is used for jumps; the direct call position corresponds to the actual control sequence and does not include its parameters. Different root documents are isolated by existing project scope.
 
-静态 `\csuse{leaf}` 和 `\csname leaf\endcsname` 也可指向同一个 `\leaf` 节点，支持从名称处打开调用层次。调用位置包含整个命名表达式，包括名称分组或 `endcsname`，不包含目标宏的后续参数。名称必须可静态确认；项目内显式重定义 `csuse`、`csname` 或 `endcsname` 时，相应表达式保守地按普通用户命令处理。仍可看到对重定义命令本身的直接调用。
+Static `\csuse{leaf}` and `\csname leaf\endcsname` can also point to the same `\leaf` node, supporting opening the call hierarchy from the name. The call position contains the entire named expression, including the name grouping or `endcsname`, and does not contain subsequent arguments to the target macro. The name must be statically confirmable; when `csuse`, `csname` or `endcsname` is explicitly redefined within the project, the corresponding expression is conservatively processed as a normal user command. A direct call to the redefine command itself can still be seen.
 
-## 支持边界
+## Support boundaries
 
-目前限定到项目内唯一、具有完整替换正文的用户命令。传统 `newcommand` 系列、xparse 命令声明、TeX `def` 系列和 etoolbox 命名定义复用现有参数解析。相同名字有多个声明、定义未完成或定义嵌套在其他定义正文时，不提供该宏节点；内置命令与系统宏包实现不进入此图。
+Currently limited to the only user commands in the project that have a complete replacement body. Traditional `newcommand` series, xparse command declarations, TeX `def` series, and etoolbox named definitions reuse existing parameter parsing. When there are multiple declarations with the same name, the definition is incomplete, or the definition is nested in the body of other definitions, the macro node is not provided; built-in commands and system package implementations do not enter this diagram.
 
-边表示源码中的直接或静态命名调用，不执行 TeX。注释、逐字内容、字面转换／测试、命令名检查与复制操作数、`noexpand` 操作数、宏参数数据和声明参数头不形成调用。命名声明的目标也不形成调用，完整声明正文中的调用归入该宏。环境定义、嵌套或其他不能确认的定义正文也不计作外层宏或文件顶层的调用。一般宏参数是否最终执行取决于展开，图只保留现有参数分析允许确认的调用。
+Edges represent direct or static named calls in the source code, without executing TeX. Comments, verbatim content, literal conversion/testing, command name checking and copying operands, `noexpand` operands, macro parameter data and declaration parameter headers do not form a call. The target of a named declaration also does not form a call; calls in the body of the complete declaration are subsumed by this macro. Environment definitions, nested or other unidentified definition bodies also do not count as calls to outer macros or top-level files. Whether macro arguments are ultimately executed or not depends on expansion, and the graph only retains calls where existing argument analysis allows confirmation.
 
-当前不展开动态名称、复制命令的捕获含义或任意宏替换；不推断运行时分支、调用次数或执行顺序。已有查找引用功能仍可查看不属于调用的名称使用。
+Dynamic names, captured meanings of copy commands, or arbitrary macro substitutions are not currently expanded; runtime branches, call counts, or execution order are not inferred. The existing Find References feature can still view name uses that are not part of the call.
 
-`noexpand` 沿用参数分析中的单 token 边界：只抑制紧随的控制序列，不把整个分组当成宏参数。普通控制词及字面 `endcsname` 后的词法空白被忽略，`csuse` 名称分组后的实际空白仍是 token；因此 `\csuse{noexpand}\leaf` 抑制 `leaf`，`\csuse{noexpand} \leaf` 则仍有对 `leaf` 的调用。可确认的纯转发别名使用相同规则。用户显式重定义 `noexpand` 时使用其声明的参数语法，对这个用户宏本身的调用也进入图。
+`noexpand` follows the single token boundary in parameter analysis: only suppresses the following control sequence and does not treat the entire group as a macro parameter. The lexical blank after ordinary control words and literal `endcsname` is ignored, and the actual blank after the name grouping of `csuse` is still token; therefore, `\csuse{noexpand}\leaf` suppresses `leaf`, and `\csuse{noexpand} \leaf` still calls `leaf`. Confirmable forward-only aliases use the same rules. When the user explicitly redefines `noexpand` using its declared parameter syntax, the call to the user macro itself also enters the figure.
 
-返回节点的数据保留最初请求的项目来源和内容指纹。后续请求重新解析当前作用域；节点文件内容／版本改变、定义移除或变得不唯一时，返回 `ContentModified`（`-32801`），请重新打开调用层次。缺少有效节点数据返回 `InvalidParams`。调用方列表可根据其他文件的最新内容更新。
+The data returned for the node retains the originally requested item origin and content fingerprint. Subsequent requests re-parse the current scope; when the node file content/version changes, the definition is removed, or becomes non-unique, `ContentModified` (`-32801`) is returned. Please reopen the calling hierarchy. Missing valid node data returns `InvalidParams`. The caller list can be updated with the latest contents of other files.
 
-索引不完整时返回明确错误；单次分析还限制为 1024 个 LaTeX 文档、合计 16 MiB、4096 个声明、100,000 个命令和 20,000 处调用，超限时返回错误而不是部分图。
+An explicit error is returned if the index is incomplete; a single analysis is also limited to 1024 LaTeX documents, 16 MiB total, 4096 declarations, 100,000 commands, and 20,000 calls, and an error is returned instead of a partial figure if the limit is exceeded.
 
-## 验证
+## verify
 
 ```sh
 cargo test --locked --lib call_hierarchy
@@ -41,6 +41,6 @@ cargo test --locked --test protocol call_hierarchy
 cargo test --locked --lib real_noexpand_ -- --include-ignored
 ```
 
-覆盖项目隔离、跨文件与文件顶层调用、重复位置、递归、声明语法、宏参数与字面数据、嵌套定义、UTF-16／CRLF、增量编辑、歧义、过期或无效节点以及分析预算。
+Covers project isolation, calls across files and at the top of files, duplicate locations, recursion, declaration syntax, macro parameters and literal data, nested definitions, UTF-16/CRLF, incremental editing, ambiguity, expired or invalid nodes, and analysis budgets.
 
-最后一项需要 pdfLaTeX 与 etoolbox，通过实际输出次数对照原语／用户重定义、命名调用空白及分组的调用边。
+The last one requires pdfLaTeX and etoolbox to compare primitives/user redefinitions with actual output times, named call whitespace, and grouped call edges.

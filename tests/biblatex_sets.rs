@@ -1,13 +1,13 @@
 #[path = "support/biber.rs"]
 mod biber;
 
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     editing,
     language::{features, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///biblatex-sets/{name}")).unwrap();
@@ -256,7 +256,7 @@ fn duplicate_dynamic_sets_and_database_collisions_reject_ambiguous_renames() {
 fn set_commands_offer_snippets_and_existing_arguments_are_preserved() {
     for following in ["", "{group}{alpha}"] {
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 snippets: true,
                 ..Default::default()
             },

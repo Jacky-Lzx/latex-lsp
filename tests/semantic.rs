@@ -1,5 +1,5 @@
-use latex_lsp::{language::semantic, project::workspace::Document};
 use lsp_types::*;
+use texquill::{language::semantic, project::workspace::Document};
 
 fn document(name: &str, source: &str) -> Document {
     Document::new(

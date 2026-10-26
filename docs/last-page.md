@@ -1,39 +1,39 @@
-# 末页变更与重编译
+# Last-page changes and reruns
 
-[返回文档目录](README.md) · [编译结果分析](build-analysis.md)
+[Back to documentation](README.md) · [Compilation result analysis](build-analysis.md)
 
-使用 `shipout/lastpage` 钩子时，LaTeX 根据上一遍的实际总页数决定在哪里执行末页内容。编辑使总页数变化后，即使本次成功生成 PDF，末页内容仍可能需要再次编译才能正确放置。
+When using the `shipout/lastpage` hook, LaTeX determines where to execute the last page content based on the actual total number of pages in the previous pass. After editing changes the total number of pages, even if the PDF is successfully generated this time, the content of the last page may still need to be compiled again to be correctly placed.
 
-## 两类明确请求
+## Two types of explicit requests
 
-文档缩短后，钩子预期的末页可能已不存在。LaTeX 临时附加一页来承载末页内容，并报告：
+After the document is shortened, the last page expected by the hook may no longer exist. LaTeX temporarily appends a page to hold the contents of the last page and reports:
 
 ```text
 LaTeX Warning: Temporary extra page added at the end. Rerun to get it removed.
 ```
 
-例如从三页缩为一页，第一遍可能生成两页 PDF；再次编译后恢复一页。结果中的 `pages` 始终报告本次实际生成的页数，包括临时页面。
+For example, when reducing from three pages to one, a two-page PDF may be generated in the first pass; one page will be restored after compilation again. `pages` in the results always reports the actual number of pages generated this time, including temporary pages.
 
-文档变长后，钩子可能在原来的末页过早执行，并报告：
+When the document becomes longer, the hook may execute prematurely on the original last page and report:
 
 ```text
 LaTeX Warning: Hook 'shipout/lastpage' executed on wrong page (1 not 3).
                Rerun to correct this.
 ```
 
-括号中依次为上一遍和本遍的实际总页数。例如从一页增为三页，第一遍 PDF 已有三页，但钩子仍在第一页执行；再次编译后移至第三页。
+The actual total number of pages in the previous pass and this pass is in parentheses. For example, from one page to three pages, the first PDF has three pages, but the hook is still executed on the first page; after compiling again, it moves to the third page.
 
-这两类完整警告设置 `analysis.rerunRequired: true`，并在诊断处提供 `Rebuild …` 操作。它们不要求文献或索引工具；没有其他工具请求时，`requiredBibliographyTools` 和 `requiredIndexTools` 都为 `[]`。操作使用现有[重编译配置](build.md#从诊断重新编译)。
+Both types of complete warnings set `analysis.rerunRequired: true` and provide `Rebuild …` action at diagnostics. They do not require bibliography or indexing tools; `requiredBibliographyTools` and `requiredIndexTools` are both `[]` when no other tools are requested. The operation uses the existing [Recompile Configuration](build.md#recompile-from-diagnostics).
 
-## 日志与清除
+## Log and Clear
 
-识别兼容逐字节折行、LF / CRLF 和 LaTeX 的缩进续行。末页钩子警告必须包含两个不同的正整数页数和完整的 `Rerun to correct this.` 请求。普通宏包中的相似文字、示例、不完整请求、额外说明及错误级别的消息不会触发该标记或操作。
+Recognizes indented continuation lines compatible with byte-by-byte wrapping, LF/CRLF, and LaTeX. The last page hook warning must contain two distinct positive integer page numbers and the full `Rerun to correct this.` request. Similar text, examples, incomplete requests, additional instructions, and error-level messages in ordinary packages will not trigger this flag or action.
 
-分析依据本次最终日志。后续编译中警告消失时，标记与操作随之清除；编译管道早期轮次的提示不会覆盖最终结果。完成通知与 `latex.buildStatus` 返回一致的摘要，旧诊断对应的菜单命令失效。
+The analysis is based on this final log. When the warning disappears on subsequent compilations, the flags and operations are cleared; hints from earlier passes in the compilation pipeline do not overwrite the final result. The completion notification returns the same summary as `latex.buildStatus`, and the menu commands corresponding to the old diagnostics are invalid.
 
-## 复现与测试
+## Reproduction and testing
 
-使用下面的主文档，将 `child.tex` 的正文从三页缩成一页，或从一页增加为三页。每次修改后连续编译两遍即可观察请求与收敛：
+Using the root document below, reduce the text of `child.tex` from three pages to one, or increase it from one page to three pages. Compile twice continuously after each modification to observe the request and convergence:
 
 ```latex
 \documentclass{article}
@@ -43,7 +43,7 @@ LaTeX Warning: Hook 'shipout/lastpage' executed on wrong page (1 not 3).
 \end{document}
 ```
 
-默认回归核对折行、续行、页数格式、相邻来源边界及两种客户端操作。真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和支持上述钩子的 LaTeX 内核，在 60 / 70 / 79 列日志中检查实际 PDF 页数、钩子执行页、请求和操作的出现与清除，包括右括号单独折行的情况：
+The default regression checks line breaks, line continuations, page number formats, adjacent source boundaries, and two client operations. Real regression requires pdfLaTeX, XeLaTeX, LuaLaTeX and a LaTeX kernel that supports the above hooks. Check the actual PDF page count, hook execution page, occurrence and removal of requests and operations in the 60 / 70 / 79 column log, including the case of the right bracket wrapping alone:
 
 ```sh
 cargo test --locked --test rerun_warnings

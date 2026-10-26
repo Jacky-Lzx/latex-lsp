@@ -15,7 +15,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-const STAGED_JOB: &str = "latex-lsp-bibliography";
+const STAGED_JOB: &str = "texquill-bibliography";
 
 pub(crate) struct Report {
     pub diagnostics: BTreeMap<Url, Vec<Diagnostic>>,
@@ -121,7 +121,7 @@ impl Plan {
             return Err(Failure::error("Bibliography output must be a regular file".into()).into());
         }
         let stage = tempfile::Builder::new()
-            .prefix("latex-lsp-bibliography-")
+            .prefix("texquill-bibliography-")
             .tempdir_in(&self.output)
             .map_err(|error| Failure::error(format!("Cannot stage bibliography: {error}")))?;
         let extension = match self.config.backend {
@@ -401,7 +401,7 @@ impl AuxCopies<'_> {
                     .names
                     .get(&key)
                     .cloned()
-                    .unwrap_or_else(|| format!("latex-lsp-aux/{}.aux", self.names.len()));
+                    .unwrap_or_else(|| format!("texquill-aux/{}.aux", self.names.len()));
                 self.copy(&input, &child, depth + 1)?;
                 rewritten.extend_from_slice(format!("\\@input{{{child}}}").as_bytes());
                 rewritten.extend_from_slice(&tail[end + 1..]);

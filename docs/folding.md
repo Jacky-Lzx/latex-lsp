@@ -1,18 +1,18 @@
-# 文档折叠
+# Document folding
 
-[返回文档目录](README.md) · [编辑功能](editing.md)
+[Back to documentation](README.md) · [Editing features](editing.md)
 
-通过标准 `textDocument/foldingRange` 请求提供折叠，使用当前缓冲区内容，无需编译。完整和增量编辑后，下一次请求立即返回新的范围。
+Folding is provided via the standard `textDocument/foldingRange` request, using the current buffer contents without compilation. After full and incremental edits, the next request returns the new range immediately.
 
 ## LaTeX
 
-支持章节、嵌套环境、多行花括号、连续的整行 `%` 注释及逐字环境。章节折叠在下一同级或更高级标题之前结束，保留该标题。逐字环境只折叠解析器确认的正文边界，其中展示的花括号和公式分隔符不参与扫描。
+Supports chapters, nested environments, multiline curly braces, continuous full-line `%` comments, and verbatim environments. Chapter collapse ends before the next sibling or higher heading, retaining that heading. A verbatim environment only collapses text boundaries recognized by the parser; curly braces and formula delimiters displayed within them are not scanned.
 
-支持成对的 `% region 标题` / `% endregion` 和 `% #region 标题` / `% #endregion` 注释标记，可嵌套使用，也适用于 BibTeX 顶层注释。标记必须是整行注释，不区分缩进；缺少对应标记时不生成区域折叠。`comment` 环境标记为注释折叠，便于使用编辑器的“折叠所有注释”。
+Supports pairs of `% region title` / `% endregion` and `% #region title` / `% #endregion` comment tags, which can be nested and also work with BibTeX top-level comments. The mark must be a whole line comment, regardless of indentation; no area folding is generated when the corresponding mark is missing. `comment` The environment is marked for comment collapse to facilitate the use of the editor's "Collapse all comments".
 
-环境名称复用静态参数规则，支持名称外围注释及裸 ASCII 单字符参数。普通环境头部紧接 `%` 注释时仍正常折叠；动态环境名称不配对。
+Environment name reuses static parameter rules, supporting name peripheral comments and bare ASCII single-character parameters. The normal environment header is still folded normally when it is immediately followed by the `%` comment; the dynamic environment name does not match.
 
-支持以下四种显式分隔符的多行公式：
+Multiline formulas with the following four explicit delimiters are supported:
 
 ```tex
 \[
@@ -32,13 +32,13 @@ $
 $
 ```
 
-公式内的分组继续单独折叠。`\text{for $x$}` 等较深分组中的公式不会提前关闭外层公式；内部公式跨行时，也提供独立的折叠范围。
+Groups within formulas continue to collapse individually. Formulas in deeper groups such as `\text{for $x$}` will not close the outer formula in advance; when the inner formula spans rows, an independent folding range is also provided.
 
-注释、URL、行内逐字内容、逐字环境和 `\detokenize` / `\string` 的字面转换数据不产生公式折叠。解析器确认的 `\let` 复制来源及 `\meaning` 操作数中的控制符、花括号和 `$` 也不作为分隔符。单行公式、缺少结束符、不同种类的关闭符及跨越所属花括号分组的未闭合公式不产生公式折叠；合法花括号分组仍可折叠。
+Comments, URLs, inline verbatim content, verbatim environments, and literal conversion data of `\detokenize` / `\string` do not produce formula folding. Control characters, curly braces, and `$` in the `\let` copy source and `\meaning` operands confirmed by the parser are also not used as delimiters. Single-line formulas, missing terminators, different types of closing characters, and unclosed formulas that span the corresponding brace groups do not cause formula folding; legal brace groups can still be folded.
 
 ## BibTeX
 
-折叠边界复用文献解析器，支持 `{...}` 和 `(...)` 两种条目形式，以及大小写不敏感的 `@string`、`@preamble` 和 `@comment`。`@comment` 和连续整行 `%` 注释标记为注释折叠，包括条目内字段之间的注释；其余条目标记为区域折叠。字面值中的百分号不参与注释折叠。
+Collapse boundary reuse document parser, supports two entry forms `{...}` and `(...)`, as well as case-insensitive `@string`, `@preamble` and `@comment`. `@comment` and contiguous entire lines of `%` comments are marked as comment folding, including comments between fields within the entry; the remaining entries are marked as zone folding. Percent signs in literal values do not participate in comment folding.
 
 ```bibtex
 @article(example,
@@ -47,22 +47,22 @@ $
 )
 ```
 
-引号或花括号值中的括号、百分号及看似条目的文字不会提前结束或另建条目折叠。缺少关闭符的条目不折叠。BibTeX 的普通文本、字段值内的 LaTeX 花括号和公式不按 LaTeX 源码再次扫描；`.bst` 样式文件也不采用这些规则。
+Parentheses, percent signs, and text that appears to be an item within a quoted or braced value will not end prematurely or create another item fold. Items missing a closing character are not collapsed. Ordinary text in BibTeX, LaTeX curly braces and formulas within field values are not scanned again according to the LaTeX source code; `.bst` style files do not adopt these rules either.
 
-## 客户端能力
+## Client capabilities
 
-- `lineFoldingOnly: true`：只返回起止行；相同行范围去重。
-- 其他客户端：返回 UTF-16 起止列，同一组行中不同列的嵌套范围分别保留。CRLF 的回车不计入结束列。
-- `foldingRange.collapsedText: true`：返回首行文字预览，最多取 80 个 Unicode 字符，再附加省略标记；未声明支持时省略此字段。
-- `rangeLimit`：排序和去重后限制返回数量，`0` 返回空列表。
+- `lineFoldingOnly: true`: Only the starting and ending lines are returned; duplicates are removed from the same line range.
+- Other clients: UTF-16 starting and ending columns are returned, and nested ranges of different columns in the same group of rows are retained separately. CRLF carriage returns do not count towards the end of the column.
+- `foldingRange.collapsedText: true`: Returns the first line of text preview, up to 80 Unicode characters, and appends an omission mark; this field is omitted when support is not declared.
+- `rangeLimit`: Limit the number of returns after sorting and deduplication, `0` returns an empty list.
 
-公式采用静态分隔符分析，不执行宏展开，也不推断自定义分隔符或类别码变更；环境别名的执行语义由其他导航功能处理，折叠仍基于直接的环境结构。
+Formulas use static delimiter analysis, no macro expansion is performed, and custom delimiters or category code changes are not inferred; the execution semantics of environment aliases are handled by other navigation functions, and collapse is still based on the direct environment structure.
 
-## 验证
+## verify
 
 ```sh
 cargo test --locked --test folding --test navigation --test fancyvrb_environments
 cargo test --locked --test protocol folding_
 ```
 
-覆盖四种公式分隔符、文本分组中的嵌套公式、字面操作数、BibTeX 圆括号键与引号、特殊条目、注释区域及嵌套标记、不完整输入、UTF-16、CRLF、预览长度、客户端数量限制，以及 stdio 下未保存的增量编辑。
+Covers four formula delimiters, nested formulas in text groups, literal operands, BibTeX parentheses keys and quotes, special entries, comment areas and nested tags, incomplete input, UTF-16, CRLF, preview length, client limit, and unsaved incremental edits under stdio.

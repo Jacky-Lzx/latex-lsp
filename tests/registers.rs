@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeMap, path::Path, sync::atomic::AtomicBool};
+use texquill::{
     compilation::build,
     language::{features, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::{collections::BTreeMap, path::Path, sync::atomic::AtomicBool};
 
 fn setup(root: &Path, files: &[(&str, &str)]) -> Workspace {
     for (name, source) in files {
@@ -119,7 +119,7 @@ fn real_text_font_declaration_renames_preserve_defaults_symbols_accents_and_fall
         "\\verb|\\fonttextcmd \\fontprovidecmd \\fontdefaultcmd \\fontfallbackcmd \\fontsymbolcmd \\fontaccentcmd|\n",
     );
     setup(root, &[("main.tex", "\\documentclass{article}\\input{definitions}\\begin{document}\\input{content}\\end{document}\n"), ("definitions.tex", definitions), ("content.tex", content)]);
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -178,7 +178,7 @@ fn real_math_font_renames_preserve_accents_radicals_and_extensible_delimiters() 
         "\\verb|\\mathaccentcmd \\mathradicalcmd \\mathdelimitercmd|\n",
     );
     setup(root, &[("main.tex", "\\documentclass{article}\\input{definitions}\\begin{document}\\input{content}\\end{document}\n"), ("definitions.tex", definitions), ("content.tex", content)]);
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -359,7 +359,7 @@ fn real_classic_font_renames_preserve_selected_fonts_and_text_and_math_dimension
     );
     setup(root, &[("main.tex", "\\documentclass{article}\\input{definitions}\\begin{document}\\input{content}\\end{document}\n"), ("definitions.tex", &definitions), ("content.tex", content)]);
     let main = root.join("main.tex");
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -551,7 +551,7 @@ fn real_fontspec_renames_preserve_font_selection_and_compile_across_files() {
         ));
     }
     setup(root, &[("main.tex", "\\documentclass{article}\n\\usepackage{fontspec}\n\\input{definitions}\n\\begin{document}\n\\input{content}\n\\end{document}\n"), ("definitions.tex", &definitions), ("content.tex", &content)]);
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "xelatex".into(),
         ..Default::default()
     };
@@ -766,7 +766,7 @@ fn real_register_renames_keep_lengths_numbers_tokens_boxes_and_constants_unchang
         &[("main.tex", source), ("definitions.tex", definitions)],
     );
     let main = root.join("main.tex");
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };

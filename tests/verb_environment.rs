@@ -1,4 +1,6 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::sync::atomic::AtomicBool;
+use texquill::{
     compilation::build,
     config::BuildConfig,
     editing,
@@ -6,8 +8,6 @@ use latex_lsp::{
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::sync::atomic::AtomicBool;
 
 fn apply(source: &str, edit: WorkspaceEdit) -> String {
     let Some(DocumentChanges::Edits(documents)) = edit.document_changes else {
@@ -50,7 +50,7 @@ fn single_code_lines_keep_commands_braces_and_files_literal() {
             let source = format!("\\usepackage{{fvextra}}\\newcommand{{\\say}}{{Text}}\\label{{kept}}{newline}{literal}{newline}\\input{{chapter}}\\say\\ref{{kept}}");
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -231,7 +231,7 @@ fn real_single_line_code_and_recovery_preserve_aux_labels_after_rename() {
             let main = Url::from_file_path(root.join("main.tex")).unwrap();
             let source = format!("\\documentclass{{article}}\n\\usepackage{{fvextra}}\n\\begin{{document}}\n\\label{{kept}}\\begin{{VerbEnv}}[showspaces=true]\n{body}\n{ending}\n\\label{{after}}\\fvset{{extra=false}}\\textbf{{\\Verb|\\label{{inside}}|}}{}\\textbf{{\\Verb|\\label{{outside}}|}}Text.\\ref{{kept}}\\label{{real}}\n\\end{{document}}\n", if repair { "\\end{VerbEnv}\n" } else { "" });
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -280,7 +280,7 @@ fn real_single_line_code_and_recovery_preserve_aux_labels_after_rename() {
                         outcome.output
                     );
                 }
-                let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                let aux = std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                 for name in [kept, "after", "inside", "real"] {
                     assert!(aux.contains(&format!("newlabel{{{name}}}")), "{aux}");
                 }
@@ -288,7 +288,7 @@ fn real_single_line_code_and_recovery_preserve_aux_labels_after_rename() {
                 for name in [absent, "phantom"] {
                     assert!(!aux.contains(&format!("newlabel{{{name}}}")), "{aux}");
                 }
-                let fls = std::fs::read_to_string(root.join("build/latex-lsp/main.fls")).unwrap();
+                let fls = std::fs::read_to_string(root.join("build/texquill/main.fls")).unwrap();
                 assert!(!fls.contains("fake.tex"));
             }
         }

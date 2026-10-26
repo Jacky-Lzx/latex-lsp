@@ -3,11 +3,11 @@ local ok, err = xpcall(function()
   do
     local config, enable = vim.lsp.config, vim.lsp.enable
     vim.lsp.config = function(name, options)
-      assert(name == "latex_lsp")
+      assert(name == "texquill")
       documented = options
     end
     vim.lsp.enable = function() end
-    dofile(assert(vim.env.LATEX_LSP_AUDIT_CONFIG))
+    dofile(assert(vim.env.TEXQUILL_AUDIT_CONFIG))
     vim.lsp.config, vim.lsp.enable = config, enable
   end
   assert(documented and documented.handlers)
@@ -26,8 +26,8 @@ local ok, err = xpcall(function()
   local buffer, finished, pushes, refreshes = vim.api.nvim_get_current_buf(), nil, 0, 0
   local native_refresh = documented.handlers["workspace/diagnostic/refresh"]
   local id = vim.lsp.start({
-    name = "latex_lsp",
-    cmd = { vim.env.LATEX_LSP_AUDIT_BIN or vim.fn.getcwd() .. "/target/release/latex-lsp", "--stdio" },
+    name = "texquill",
+    cmd = { vim.env.TEXQUILL_AUDIT_BIN or vim.fn.getcwd() .. "/target/release/texquill", "--stdio" },
     root_dir = project,
     init_options = { build = { executable = "pdflatex" } },
     capabilities = documented.capabilities,
@@ -86,10 +86,10 @@ local ok, err = xpcall(function()
     end, 20),
     "workspace refresh did not display the closed child diagnostic"
   )
-  local first = request("textDocument/diagnostic", { textDocument = { uri = uri }, identifier = "latex-lsp" })
+  local first = request("textDocument/diagnostic", { textDocument = { uri = uri }, identifier = "texquill" })
   local unchanged = request(
     "textDocument/diagnostic",
-    { textDocument = { uri = uri }, identifier = "latex-lsp", previousResultId = first.resultId }
+    { textDocument = { uri = uri }, identifier = "texquill", previousResultId = first.resultId }
   )
   assert(unchanged.kind == "unchanged", vim.inspect(unchanged))
   local raw = vim.iter(first.items):find(function(d)
@@ -112,7 +112,7 @@ local ok, err = xpcall(function()
     vim.inspect(vim.diagnostic.get(buffer))
   )
   compile("success")
-  local workspace = request("workspace/diagnostic", { identifier = "latex-lsp", previousResultIds = {} })
+  local workspace = request("workspace/diagnostic", { identifier = "texquill", previousResultIds = {} })
   local main = vim.iter(workspace.items):find(function(d)
     return d.uri == uri
   end)

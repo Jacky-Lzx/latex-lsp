@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
 
 fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url) {
     let directory = tempfile::tempdir().unwrap();

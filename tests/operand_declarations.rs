@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::features,
     parser::syntax::Syntax,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn count(parsed: &Syntax, kind: &str) -> usize {
     match kind {
@@ -252,7 +252,7 @@ fn copied_named_interfaces_do_not_supply_parameter_help_or_name_completion() {
             .text
             .position(source.find("ordinary").unwrap() + 3);
         assert!(
-            latex_lsp::language::signature::help(&workspace, &uri, cursor).is_none(),
+            texquill::language::signature::help(&workspace, &uri, cursor).is_none(),
             "{source}"
         );
         assert!(
@@ -340,7 +340,7 @@ fn real_copied_declaration_sources_preserve_ordinary_calls_and_symbol_renames() 
         let compiler = root.join("compiler");
         std::fs::write(&compiler, format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
         std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: compiler.to_string_lossy().into(),
             arguments: Some(
                 [
@@ -355,7 +355,7 @@ fn real_copied_declaration_sources_preserve_ordinary_calls_and_symbol_renames() 
             ),
             ..Default::default()
         };
-        let before = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+        let before = texquill::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(before.status, "success", "{engine}: {}", before.output);
         for (old, new, file, documents) in [
             ("ordinary", "renamedordinary", "definitions.tex", 2),
@@ -398,7 +398,7 @@ fn real_copied_declaration_sources_preserve_ordinary_calls_and_symbol_renames() 
             changed.split_once('%').unwrap().1,
             content.split_once('%').unwrap().1
         );
-        let after = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+        let after = texquill::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(after.status, "success", "{engine}: {}", after.output);
         for outcome in [before, after] {
             let observed: Vec<_> = outcome

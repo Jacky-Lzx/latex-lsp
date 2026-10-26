@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, text::Text};
 
 const CODE: &str = "repeated-bibliography-field";
 
@@ -236,7 +236,7 @@ fn incomplete_or_ambiguous_groups_do_not_choose_one_of_several_fields() {
     for (prefix, repetitions) in [
         ("", 1),
         ("", 3),
-        ("[latex-lsp: middle of compiler output omitted]\n", 2),
+        ("[texquill: middle of compiler output omitted]\n", 2),
         ("Illegal end---line 1 of file refs.bib\n", 2),
     ] {
         let directory = tempfile::tempdir().unwrap();

@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     config::DistributionConfig,
     language::{features, navigation, signature},
     project::{distribution::Distribution, workspace::Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn fixture() -> (tempfile::TempDir, Distribution) {
     let dir = tempfile::tempdir().unwrap();

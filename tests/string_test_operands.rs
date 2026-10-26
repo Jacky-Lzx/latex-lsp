@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
 
 fn setup(files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace, Url) {
     let directory = tempfile::tempdir().unwrap();
@@ -167,8 +167,8 @@ fn a_predicate_control_operand_uses_its_imported_wrappers_signature() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_imported_predicate_operands_preserve_macro_and_boolean_renames_in_three_engines() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for predicate in ["ifblank", "notblank", "ifstrempty", "ifstrequal"] {
             for (definition, call, delimiter) in [

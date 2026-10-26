@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///varioref-ranges/{name}")).unwrap();
@@ -215,7 +215,7 @@ fn range_completion_replaces_only_the_active_endpoint_including_incomplete_calls
 fn range_signatures_and_snippets_expose_both_required_labels() {
     for name in ["vrefrange", "vpagerefrange"] {
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 snippets: true,
                 ..Default::default()
             },
@@ -278,7 +278,7 @@ fn multiline_range_warnings_select_and_repair_each_endpoint_at_the_final_input_l
         assert_eq!(diagnostics[&uri].len(), 2);
         let text = Text::new(source.clone());
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },

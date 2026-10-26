@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeSet, path::Path};
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
 };
-use lsp_types::*;
-use std::{collections::BTreeSet, path::Path};
 
 const LOADERS: [&str; 4] = ["input", "include", "subfile", "InputIfFileExists"];
 fn uri(root: &Path, name: &str) -> Url {
@@ -16,7 +16,7 @@ fn workspace(root: &Path, files: &[(&str, &str)]) -> Workspace {
         std::fs::write(path, source).unwrap();
     }
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },

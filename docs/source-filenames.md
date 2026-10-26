@@ -1,29 +1,29 @@
-# 源码文件名与移动
+# Source filenames and moves
 
-[返回文档目录](README.md) · [文件操作](file-operations.md) · [项目与文件](projects.md)
+[Back to documentation](README.md) · [File operations](file-operations.md) · [Projects and files](projects.md)
 
-文件移动后，引用必须继续选择同一目标。`workspace/willRenameFiles` 同时检查新位置的查找顺序和路径在 LaTeX 中的实际含义，保留已打开来源的版本约束；客户端仍按[文件操作顺序](file-operations.md#客户端调用顺序)应用编辑并移动磁盘文件。
+After the file is moved, the reference must continue to select the same target. `workspace/willRenameFiles` Also checks the search order of the new location and the actual meaning of the path in LaTeX, preserving the version constraints of the opened source; the client still applies edits and moves disk files in [File Operation Order](file-operations.md#client-calling-sequence).
 
-## 空格与扩展名
+## Spaces and extensions
 
-单个内部空格可用于静态文件引用。例如把 `chapter.tex` 改为 `chapter name.tex`，服务器将 `\input{chapter}` 更新为 `\input{chapter name}`。原来没有分组的 `\input chapter` 会按需补入花括号；已有引号继续保留。
+A single internal space can be used for static file references. For example, if `chapter.tex` is changed to `chapter name.tex`, the server will update `\input{chapter}` to `\input{chapter name}`. The original ungrouped `\input chapter` will be filled with curly braces as needed; existing quotation marks will be retained.
 
-文件名以一个空格开始时，直接写在参数开头会被 LaTeX 忽略。服务器添加 `./`，把空格保留在路径内部。例如目标 ` leading.tex` 使用：
+When the file name starts with a space, it will be ignored by LaTeX if written directly at the beginning of the parameter. The server adds `./`, leaving spaces inside the path. For example target ` leading.tex` uses:
 
 ```tex
 \input{./ leading}
 ```
 
-文件名主干以空格结尾时，保留显式后缀，避免编辑器将有效空格裁掉。例如目标 `chapter .tex` 使用：
+When the backbone of the file name ends in a space, keep the explicit suffix to prevent the editor from trimming the valid spaces. For example target `chapter .tex` uses:
 
 ```tex
 \input{chapter .tex}
 ```
 
-这些写法适用于 `input`、`include` 及静态 `InputIfFileExists` / `IfFileExists` 文件参数；移动根文档或目录时继续重算相对路径。移动完成后的导航、依赖索引和再次重命名沿用同一目标。
+These writing methods are applicable to `input`, `include` and static `InputIfFileExists` / `IfFileExists` file parameters; relative paths will continue to be recalculated when moving the root document or directory. Navigation, dependency indexing and renaming after the move is completed follow the same target.
 
-## 无法直接表达的路径
+## Paths that cannot be expressed directly
 
-源码引用中的连续空格、Tab 和换行可能被 TeX 合并或忽略；控制字符也不能作为普通源码文件名直接写入。若新路径会因此改变目标，服务器拒绝此次引用更新，不返回部分编辑。给整个参数添加普通引号不能保留已在 TeX 分词时合并的空格。此规则不展开动态文件名或插入用于拼接文件名的宏。
+Consecutive spaces, tabs, and newlines in source code quotations may be merged or ignored by TeX; control characters cannot be written directly as ordinary source code file names. If the new path will change the target, the server rejects the reference update and does not return the partial edit. Placing normal quotes around the entire argument does not preserve whitespace that was already merged during TeX tokenization. This rule does not expand dynamic file names or insert macros that concatenate file names.
 
-`% !TeX root` 注释和 `file:` 链接按各自语义处理，不套用源码参数的空格合并规则；内部连续空格可保留，文件 URL 使用百分号编码。图片和 biblatex 资源各自的路径规则见[图片文件名](graphics-filenames.md)和[biblatex 文献资源](biblatex-resources.md)。宏包、文档类及其他加载命令仍遵守[后缀要求](file-operations.md#重命名与移动)。
+`% !TeX root` comments and `file:` links are processed according to their respective semantics, and the space merging rules of source code parameters are not applied; internal continuous spaces can be retained, and the file URL uses percent encoding. For the respective path rules for pictures and biblatex resources, see [Picture File Name](graphics-filenames.md) and [biblatex Documentation Resources](biblatex-resources.md). Packages, document classes and other loading commands still comply with [suffix requirements](file-operations.md#rename-and-move).

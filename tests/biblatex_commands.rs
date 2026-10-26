@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///biblatex-commands/{name}")).unwrap();
@@ -111,7 +111,7 @@ fn all_commands_and_stars_share_key_navigation_highlights_and_safe_renames() {
                     2
                 );
                 assert_eq!(
-                    latex_lsp::editing::highlights(&workspace, &main, position).len(),
+                    texquill::editing::highlights(&workspace, &main, position).len(),
                     1
                 );
                 let changes = features::rename(&workspace, &main, position, "renamed")
@@ -132,7 +132,7 @@ fn all_commands_and_stars_share_key_navigation_highlights_and_safe_renames() {
                 }
             }
             assert_eq!(
-                latex_lsp::language::semantic::tokens(doc, None)
+                texquill::language::semantic::tokens(doc, None)
                     .unwrap()
                     .data
                     .iter()
@@ -182,7 +182,7 @@ fn command_snippets_preserve_existing_arguments_and_user_signatures_win() {
     for name in COMMANDS {
         for following in ["", "{alpha}", "[pre][post]{alpha}"] {
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     snippets: true,
                     ..Default::default()
                 },
@@ -215,7 +215,7 @@ fn command_snippets_preserve_existing_arguments_and_user_signatures_win() {
             .text
             .position(source.find("custom").unwrap() + 2);
         assert_eq!(
-            latex_lsp::language::signature::help(&workspace, &main, position)
+            texquill::language::signature::help(&workspace, &main, position)
                 .unwrap()
                 .signatures[0]
                 .label,
@@ -240,7 +240,7 @@ fn signature_help_distinguishes_notes_and_keys_for_regular_and_starred_commands(
                 let position = workspace.documents[&main]
                     .text
                     .position(marked.find('¦').unwrap());
-                let help = latex_lsp::language::signature::help(&workspace, &main, position)
+                let help = texquill::language::signature::help(&workspace, &main, position)
                     .unwrap_or_else(|| panic!("{marked}"));
                 assert_eq!(help.active_parameter, Some(active), "{marked}");
                 assert!(
@@ -325,14 +325,14 @@ fn missing_key_warnings_and_spelling_fixes_preserve_notes_and_prose() {
             )
             .unwrap();
             let uri = Url::from_file_path(&main).unwrap();
-            let diagnostics = latex_lsp::compilation::build_log::parse(&main, "Package biblatex Warning: Citation 'alphaa' on page 1 undefined on input line 2.\n");
+            let diagnostics = texquill::compilation::build_log::parse(&main, "Package biblatex Warning: Citation 'alphaa' on page 1 undefined on input line 2.\n");
             let items = &diagnostics[&uri];
             assert_eq!(items.len(), 1, "{source}: {items:?}");
             let text = Text::new(source.clone());
             let start = source.find("{alphaa}").unwrap() + 1;
             assert_eq!(items[0].range, text.range(start, start + 6), "{source}");
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     ..Default::default()
                 },
@@ -348,7 +348,7 @@ fn missing_key_warnings_and_spelling_fixes_preserve_notes_and_prose() {
                 .project
                 .build_diagnostics
                 .insert(uri.clone(), diagnostics.clone());
-            let actions = latex_lsp::editing::code_actions(
+            let actions = texquill::editing::code_actions(
                 &workspace,
                 &uri,
                 items[0].range,
@@ -419,7 +419,7 @@ fn real_biblatex_single_citations_resolve_after_bibliography_key_rename() {
     tex();
     let log = fs::read_to_string(directory.path().join("main.log")).unwrap();
     let uri = Url::from_file_path(&main).unwrap();
-    let diagnostics = latex_lsp::compilation::build_log::parse(&main, &log);
+    let diagnostics = texquill::compilation::build_log::parse(&main, &log);
     let citations = diagnostics[&uri]
         .iter()
         .filter(|diagnostic| diagnostic.message.contains("Citation '"))

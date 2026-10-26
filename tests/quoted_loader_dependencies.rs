@@ -1,6 +1,6 @@
-use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
 use std::{collections::BTreeSet, path::Path};
+use texquill::{language::features, project::workspace::Workspace};
 
 const LOADERS: [(&str, &str); 6] = [
     ("usepackage", "sty"),
@@ -26,7 +26,7 @@ fn project(root: &Path, source: &str, extension: &str) -> Workspace {
     )
     .unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },

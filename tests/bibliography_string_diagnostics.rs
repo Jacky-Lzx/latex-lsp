@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "undefined-bibliography-string";
 
@@ -22,7 +22,7 @@ fn project(root: &Path, source: &str, definitions: &str, log: &str) -> (Workspac
     std::fs::write(root.join("refs.bib"), source).unwrap();
     std::fs::write(root.join("later.bib"), "@string{Journals={Later}}").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             code_action_literals: true,
             ..Default::default()
@@ -278,7 +278,7 @@ fn incomplete_database_history_keeps_locations_but_disables_repairs() {
         format!(
             "{}\n{}\n",
             history(&warning("jouranl", 1, "refs.bib")),
-            "[latex-lsp: middle of compiler output omitted]"
+            "[texquill: middle of compiler output omitted]"
         ),
     ] {
         let directory = tempfile::tempdir().unwrap();

@@ -4,8 +4,8 @@ local ok, err = xpcall(function()
   local buffer = vim.api.nvim_get_current_buf()
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { '@book{first,title={First}}' })
   local id = assert(vim.lsp.start({
-    name = 'latex_lsp',
-    cmd = { assert(vim.env.LATEX_LSP_TEST_BIN), '--stdio' },
+    name = 'texquill',
+    cmd = { assert(vim.env.TEXQUILL_TEST_BIN), '--stdio' },
     root_dir = vim.fn.getcwd(),
   }))
   local client = assert(vim.lsp.get_client_by_id(id))

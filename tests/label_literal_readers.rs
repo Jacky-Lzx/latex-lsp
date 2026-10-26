@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace};
 
 fn setup(preamble: &str, body: &str) -> (Workspace, Url) {
     let uri = Url::parse("untitled:label-literal-readers.tex").unwrap();

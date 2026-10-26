@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::{DiagnosticSeverity, Url};
+use std::sync::atomic::AtomicBool;
+use texquill::{
     compilation::{build, build_log},
     config::BuildConfig,
     text::Text,
 };
-use lsp_types::{DiagnosticSeverity, Url};
-use std::sync::atomic::AtomicBool;
 
 #[test]
 fn specific_causes_replace_fatal_summaries_across_sources_and_message_orderings() {
@@ -306,7 +306,7 @@ fn pending_errors_are_preserved_without_borrowing_unrelated_file_or_line_context
         (
             "LaTeX Error: File `missing.tex' not found.",
             "! Emergency stop.",
-            "[latex-lsp: middle of compiler output omitted]\nl.3 Third.\n",
+            "[texquill: middle of compiler output omitted]\nl.3 Third.\n",
         ),
         (
             "LaTeX Error: File `missing.tex' not found.",
@@ -591,7 +591,7 @@ fn incomplete_file_line_headers_do_not_absorb_real_errors_or_cross_truncated_out
     let prefix = format!("./{}", "missing-path-".repeat(8));
     for boundary in [
         "./main.tex:2: Actual error.",
-        "[latex-lsp: middle of compiler output omitted]\n./main.tex:2: Actual error.",
+        "[texquill: middle of compiler output omitted]\n./main.tex:2: Actual error.",
         "! Actual error.\nl.2 bad",
     ] {
         let log = format!("(./main.tex\n{prefix}\n{boundary}\n)\n");

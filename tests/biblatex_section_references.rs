@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace};
 
 fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url) {
     let dir = tempfile::tempdir().unwrap();
@@ -267,7 +267,7 @@ fn every_relation_member_and_named_citation_uses_exact_unicode_ranges_and_highli
         for query in &expected {
             check(&ws, &query.uri, query.range.start, &declaration, &expected);
         }
-        let highlights = latex_lsp::editing::highlights(&ws, &bib, at(&ws, &bib, "xref=\"par"));
+        let highlights = texquill::editing::highlights(&ws, &bib, at(&ws, &bib, "xref=\"par"));
         assert_eq!(highlights.len(), 6);
         assert_eq!(
             highlights
@@ -280,8 +280,7 @@ fn every_relation_member_and_named_citation_uses_exact_unicode_ranges_and_highli
         assert!(highlights
             .iter()
             .all(|h| h.range == declaration.range || h.kind == Some(DocumentHighlightKind::READ)));
-        let highlights =
-            latex_lsp::editing::highlights(&ws, &main, source_calls[index].range.start);
+        let highlights = texquill::editing::highlights(&ws, &main, source_calls[index].range.start);
         assert_eq!(
             highlights,
             vec![DocumentHighlight {

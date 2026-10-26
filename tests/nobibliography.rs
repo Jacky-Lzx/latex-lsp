@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     editing::file_operations,
     language::{features, navigation, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()

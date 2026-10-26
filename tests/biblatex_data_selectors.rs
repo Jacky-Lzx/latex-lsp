@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///data-selectors/{name}")).unwrap();
@@ -53,7 +53,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
 fn data_selector_candidates_follow_output_field_and_list_kinds() {
     for (name, before, expected) in COMMANDS {
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 snippets: true,
                 ..Default::default()
             },
@@ -278,7 +278,7 @@ fn raw_field_accessors_and_undefined_tests_complete_only_their_first_name_argume
         assert!(features::prepare_rename(&workspace, &main, at)
             .unwrap()
             .is_none());
-        let help = latex_lsp::language::signature::help(&workspace, &main, at).unwrap();
+        let help = texquill::language::signature::help(&workspace, &main, at).unwrap();
         assert_eq!(help.active_parameter, Some(0));
         assert_eq!(
             help.signatures[0].label,
@@ -297,7 +297,7 @@ fn raw_field_accessors_and_undefined_tests_complete_only_their_first_name_argume
                     .any(|item| item.kind == Some(CompletionItemKind::FIELD)));
                 assert!(features::hover(&workspace, &main, at).is_none());
                 assert_eq!(
-                    latex_lsp::language::signature::help(&workspace, &main, at)
+                    texquill::language::signature::help(&workspace, &main, at)
                         .unwrap()
                         .active_parameter,
                     Some(parameter)
@@ -318,7 +318,7 @@ fn generated_counter_theorem_and_conditional_commands_disable_conflicting_builti
         ("\\newif\\ifnameundef", "ifnameundef", "author"),
     ] {
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 snippets: true,
                 ..Default::default()
             },
@@ -337,7 +337,7 @@ fn generated_counter_theorem_and_conditional_commands_disable_conflicting_builti
         );
         assert!(features::hover(&workspace, &main, at).is_none(), "{source}");
         assert!(
-            latex_lsp::language::signature::help(&workspace, &main, at).is_none(),
+            texquill::language::signature::help(&workspace, &main, at).is_none(),
             "{source}"
         );
         let source = format!("{declaration}\\{name}");

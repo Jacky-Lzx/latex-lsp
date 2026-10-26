@@ -1,4 +1,3 @@
-use latex_lsp::{compilation::build, config::BuildConfig, project::workspace::Workspace};
 use lsp_types::{DiagnosticSeverity, Url};
 use std::{
     sync::{
@@ -7,11 +6,12 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use texquill::{compilation::build, config::BuildConfig, project::workspace::Workspace};
 
 #[test]
 fn invalid_reported_lines_never_borrow_names_or_ranges_from_clamped_source_lines() {
-    use latex_lsp::{compilation::build_log, text::Text};
     use lsp_types::{Position, Range};
+    use texquill::{compilation::build_log, text::Text};
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     let child = directory.path().join("child.tex");
@@ -72,7 +72,7 @@ fn valid_and_zero_line_warnings_both_survive_parsing_and_publication() {
         workspace.open(uri.clone(), source.into(), 1);
         workspace.project.build_diagnostics.insert(
             uri.clone(),
-            latex_lsp::compilation::build_log::parse(&main, &log),
+            texquill::compilation::build_log::parse(&main, &log),
         );
         let diagnostics = workspace.diagnostics(&uri);
         assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
@@ -98,8 +98,8 @@ fn valid_and_zero_line_warnings_both_survive_parsing_and_publication() {
 
 #[test]
 fn unresolved_numbered_sources_do_not_borrow_warning_ranges_or_codes_from_the_root() {
-    use latex_lsp::{compilation::build_log, text::Text};
     use lsp_types::{NumberOrString, Position, Range};
+    use texquill::{compilation::build_log, text::Text};
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main = root.join("main.tex");
@@ -166,7 +166,7 @@ fn trusted_and_unresolved_numbered_warnings_do_not_suppress_each_other() {
             let log = names
                 .map(|name| format!("./{name}:1: {message}\n"))
                 .concat();
-            let diagnostics = latex_lsp::compilation::build_log::parse(&main, &log);
+            let diagnostics = texquill::compilation::build_log::parse(&main, &log);
             let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
             assert_eq!(items.len(), 2, "{log}");
             assert_eq!(items.iter().filter(|item| item.code.is_some()).count(), 1);
@@ -259,7 +259,7 @@ fn real_pdfbookmark_levels_match_actual_targets_across_engines_and_duplicate_war
                 })
                 .collect();
             assert_eq!(warnings.len(), 2, "{engine}: {:?}", outcome.diagnostics);
-            let doc = latex_lsp::project::workspace::Document::new(
+            let doc = texquill::project::workspace::Document::new(
                 &Url::from_file_path(&main).unwrap(),
                 duplicated,
                 None,
@@ -345,7 +345,7 @@ fn real_duplicate_destinations_include_automatic_collisions_and_long_compound_de
         };
         let outcome = build::run(&main, &config, &Default::default());
         assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
-        let doc = latex_lsp::project::workspace::Document::new(
+        let doc = texquill::project::workspace::Document::new(
             &Url::from_file_path(&main).unwrap(),
             source.clone(),
             None,
@@ -454,7 +454,7 @@ fn real_long_destination_warnings_recover_names_and_wrapped_explanatory_words() 
         };
         let outcome = build::run(&main, &config, &Default::default());
         assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
-        let doc = latex_lsp::project::workspace::Document::new(
+        let doc = texquill::project::workspace::Document::new(
             &Url::from_file_path(&main).unwrap(),
             source,
             None,
@@ -522,7 +522,7 @@ fn real_destination_warnings_locate_links_and_clear_after_repair() {
         };
         let outcome = build::run(&main, &config, &Default::default());
         assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
-        let document = latex_lsp::project::workspace::Document::new(
+        let document = texquill::project::workspace::Document::new(
             &Url::from_file_path(&main).unwrap(),
             source.into(),
             None,
@@ -635,14 +635,14 @@ fn custom_job_names_locate_pdf_logs_recorder_inputs_and_synctex_for_all_tex_engi
         workspace.config.build = config;
         workspace.add_root(root.into());
         assert!(
-            latex_lsp::compilation::synctex::prepare(
+            texquill::compilation::synctex::prepare(
                 &workspace,
                 &Url::from_file_path(&main).unwrap()
             )
             .is_ok(),
             "{executable}"
         );
-        assert!(!root.join("build/latex-lsp/main.pdf").exists());
+        assert!(!root.join("build/texquill/main.pdf").exists());
     }
 }
 
@@ -688,7 +688,7 @@ fn bibliography_builds_with_custom_job_names_still_resolve_and_analyze_the_datab
 #[cfg(unix)]
 #[ignore = "requires latexmk, BibTeX, pdflatex and xelatex"]
 fn real_bibtex_errors_follow_database_and_style_aliases_to_the_correct_file_and_line() {
-    use latex_lsp::config::Engine;
+    use texquill::config::Engine;
     for engine in [Engine::PdfLatex, Engine::XeLatex] {
         for style_error in [false, true] {
             for extension in ["payload", "png", "tex"] {
@@ -755,8 +755,8 @@ fn real_bibtex_errors_follow_database_and_style_aliases_to_the_correct_file_and_
 #[test]
 #[ignore = "requires latexmk, BibTeX, pdflatex and xelatex"]
 fn real_bibtex_warnings_keep_literal_entry_keys_despite_namesake_files() {
-    use latex_lsp::config::Engine;
     use lsp_types::{Position, Range};
+    use texquill::config::Engine;
     for engine in [Engine::PdfLatex, Engine::XeLatex] {
         for key in ["'entry'", "'entry.bib'", "entry.bib"] {
             let directory = tempfile::tempdir().unwrap();
@@ -798,8 +798,8 @@ fn real_bibtex_warnings_keep_literal_entry_keys_despite_namesake_files() {
 #[test]
 #[ignore = "requires latexmk, BibTeX, pdflatex and xelatex"]
 fn real_bibtex_style_warning_text_keeps_the_actual_entry_location() {
-    use latex_lsp::config::Engine;
     use lsp_types::{Position, Range};
+    use texquill::config::Engine;
     for engine in [Engine::PdfLatex, Engine::XeLatex] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -992,9 +992,7 @@ fn nested_chapter_includes_prepare_auxiliary_directories_with_default_and_direct
             outcome.output
         );
         assert!(outcome.output.contains("NESTED INCLUDE OK"));
-        assert!(root
-            .join("build/latex-lsp/chapters/deep/part.aux")
-            .is_file());
+        assert!(root.join("build/texquill/chapters/deep/part.aux").is_file());
         assert!(!root.join("chapters/deep/part.aux").exists());
         assert!(outcome.pdf.unwrap().ends_with("paper.v2.pdf"));
     }
@@ -1021,9 +1019,9 @@ fn auxiliary_directory_preparation_skips_comments_macros_and_paths_outside_the_o
     assert_eq!(outcome.status, "success", "{}", outcome.output);
     for name in [
         "build/escape",
-        "build/latex-lsp/generated",
-        "build/latex-lsp/commented",
-        "build/latex-lsp/raw",
+        "build/texquill/generated",
+        "build/texquill/commented",
+        "build/texquill/raw",
     ] {
         assert!(!root.join(name).exists(), "{name}");
     }
@@ -1067,10 +1065,10 @@ fn auxiliary_directories_follow_static_include_aliases_in_nested_project_sources
         );
         for name in [
             "build/escape",
-            "build/latex-lsp/deferred",
-            "build/latex-lsp/data",
-            "build/latex-lsp/dynamic",
-            "build/latex-lsp/after",
+            "build/texquill/deferred",
+            "build/texquill/data",
+            "build/texquill/dynamic",
+            "build/texquill/after",
         ] {
             assert!(!root.join(name).exists(), "{invocation}: {name}");
         }
@@ -1094,13 +1092,13 @@ fn auxiliary_directory_preparation_does_not_guess_redefined_indirect_includes() 
     let outcome = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
     assert_eq!(outcome.status, "success", "{}", outcome.output);
     for name in ["uncertain", "aliased", "named"] {
-        assert!(!root.join("build/latex-lsp").join(name).exists());
+        assert!(!root.join("build/texquill").join(name).exists());
     }
 }
 
 #[test]
 fn engine_directives_use_the_root_comment_and_respect_explicit_configuration() {
-    use latex_lsp::{config::Engine, project::workspace::Document};
+    use texquill::{config::Engine, project::workspace::Document};
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     let uri = Url::from_file_path(&main).unwrap();
@@ -1144,7 +1142,7 @@ fn initial_latexmk_refresh_still_rejects_a_compiler_leaving_the_pdf_outdated() {
     let root = directory.path();
     let main = root.join("main.tex");
     std::fs::write(&main, "Source\n").unwrap();
-    let output = root.join("build/latex-lsp");
+    let output = root.join("build/texquill");
     std::fs::create_dir_all(&output).unwrap();
     let pdf = output.join("main.pdf");
     std::fs::write(&pdf, "%PDF-1.4\n").unwrap();
@@ -1175,7 +1173,7 @@ fn initial_latexmk_refresh_still_rejects_a_compiler_leaving_the_pdf_outdated() {
 fn unchanged_pdf_is_accepted_only_when_it_is_not_older_than_the_source() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     std::fs::create_dir_all(&output).unwrap();
     let pdf = output.join("main.pdf");
     std::fs::write(&main, "Original\n").unwrap();
@@ -1366,7 +1364,7 @@ fn root_magic_comments_inside_verbatim_are_ignored() {
     workspace.add_root(directory.path().into());
     let uri = Url::from_file_path(&main).unwrap();
     assert_eq!(workspace.root_document(&uri).unwrap(), uri);
-    assert!(latex_lsp::language::navigation::document_links(&workspace, &uri).is_empty());
+    assert!(texquill::language::navigation::document_links(&workspace, &uri).is_empty());
 }
 
 #[test]
@@ -1481,7 +1479,7 @@ fn bibliography_log_errors_are_reported_even_when_tex_produced_a_pdf() {
 #[cfg(unix)]
 fn arguments_are_passed_without_shell_interpolation_and_dotted_names_work() {
     let directory = tempfile::Builder::new()
-        .prefix("latex lsp 中文 ")
+        .prefix("texquill 中文 ")
         .tempdir()
         .unwrap();
     let main = directory.path().join("main.v1.tex");
@@ -1586,7 +1584,7 @@ fn cancellation_and_timeout_terminate_the_compiler_process_group() {
         let worker_cancel = cancel.clone();
         let started = Instant::now();
         let worker = std::thread::spawn(move || build::run(&main, &config, &worker_cancel));
-        let pid_file = directory.path().join("build/latex-lsp/child.pid");
+        let pid_file = directory.path().join("build/texquill/child.pid");
         while !pid_file.is_file() {
             assert!(started.elapsed() < Duration::from_secs(5));
             std::thread::sleep(Duration::from_millis(10));
@@ -1634,8 +1632,8 @@ fn real_hyperref_urls_with_percent_escapes_compile_without_syntax_errors() {
     let source = "\\documentclass{article}\n\\usepackage{hyperref}\n\\begin{document}\n\\url{https://example.com/a%20b?x=some_value}\n\\href{https://example.com/a%20b#section}{\\textbf{Link}}\n\\end{document}\n";
     std::fs::write(&main, source).unwrap();
     let uri = Url::from_file_path(&main).unwrap();
-    let document = latex_lsp::project::workspace::Document::new(&uri, source.into(), Some(1));
-    assert!(latex_lsp::language::features::diagnostics(&document).is_empty());
+    let document = texquill::project::workspace::Document::new(&uri, source.into(), Some(1));
+    assert!(texquill::language::features::diagnostics(&document).is_empty());
     let config = BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
@@ -1924,7 +1922,7 @@ fn real_undefined_reference_and_citation_warnings_highlight_only_the_missing_key
         outcome.message, outcome.output
     );
     let diagnostics = &outcome.diagnostics[&Url::from_file_path(&chapter).unwrap()];
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     let values: Vec<_> = diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.message.contains("undefined"))
@@ -1953,13 +1951,13 @@ fn real_hyperref_warnings_select_bracketed_labels_and_clear_after_repair() {
                 "\\hyperref{https://example.com/a%20b?x=some_value#section}{sec:itnro}{sec:itnro}{URL}\n",
             );
             std::fs::write(&chapter, source).unwrap();
-            let document = latex_lsp::project::workspace::Document::new(
+            let document = texquill::project::workspace::Document::new(
                 &Url::from_file_path(&chapter).unwrap(),
                 source.into(),
                 None,
             );
             assert!(
-                latex_lsp::language::features::diagnostics(&document).is_empty(),
+                texquill::language::features::diagnostics(&document).is_empty(),
                 "{:?}",
                 document.syntax.diagnostics
             );
@@ -1976,7 +1974,7 @@ fn real_hyperref_warnings_select_bracketed_labels_and_clear_after_repair() {
             } else {
                 engine.into()
             };
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable,
                 arguments: Some(arguments),
                 ..Default::default()
@@ -1998,7 +1996,7 @@ fn real_hyperref_warnings_select_bracketed_labels_and_clear_after_repair() {
                 outcome.diagnostics,
                 outcome.output
             );
-            let text = latex_lsp::text::Text::new(source.into());
+            let text = texquill::text::Text::new(source.into());
             for warning in warnings {
                 assert_eq!(
                     &source[text.offset(warning.range.start).unwrap()
@@ -2088,7 +2086,7 @@ fn real_capitalized_and_named_page_reference_warnings_distinguish_starred_calls_
                 .filter(|diagnostic| diagnostic.message.contains("undefined"))
                 .collect();
             assert_eq!(diagnostics.len(), 8, "{engine}: {diagnostics:?}");
-            let text = latex_lsp::text::Text::new(source.into());
+            let text = texquill::text::Text::new(source.into());
             for diagnostic in diagnostics {
                 let value = &source[text.offset(diagnostic.range.start).unwrap()
                     ..text.offset(diagnostic.range.end).unwrap()];
@@ -2239,8 +2237,8 @@ printf '%s:1: LaTeX Warning: rebuilt.\n' "$3" > "$2/$4.log"
 #[ignore = "requires latexmk, pdflatex and xelatex"]
 fn real_forced_latexmk_rebuild_replaces_an_existing_pdf_after_a_noop() {
     for engine in [
-        latex_lsp::config::Engine::PdfLatex,
-        latex_lsp::config::Engine::XeLatex,
+        texquill::config::Engine::PdfLatex,
+        texquill::config::Engine::XeLatex,
     ] {
         let directory = tempfile::tempdir().unwrap();
         let main = directory.path().join("main.tex");
@@ -2346,7 +2344,7 @@ fn real_verbatim_inputs_preserve_arbitrary_file_names_and_code_roles() {
             let code_uri = Url::from_file_path(&code_path).unwrap();
             // Unknown and suffixless names are static data dependencies;
             // recorder classification intentionally accepts known types only.
-            let recorder = std::fs::read_to_string(root.join("build/latex-lsp/main.fls")).unwrap();
+            let recorder = std::fs::read_to_string(root.join("build/texquill/main.fls")).unwrap();
             assert!(
                 recorder
                     .lines()
@@ -2393,7 +2391,7 @@ fn real_fancyverb_inputs_read_quoted_and_detokenized_file_names() {
                 "{engine}/{name}: {}",
                 outcome.output
             );
-            let recorder = std::fs::read_to_string(root.join("build/latex-lsp/main.fls")).unwrap();
+            let recorder = std::fs::read_to_string(root.join("build/texquill/main.fls")).unwrap();
             assert!(
                 recorder
                     .lines()
@@ -2443,7 +2441,7 @@ fn real_fancyverb_internal_customizations_keep_executed_labels_as_source() {
             );
             assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
             assert!(
-                std::fs::read_to_string(root.join("build/latex-lsp/main.aux"))
+                std::fs::read_to_string(root.join("build/texquill/main.aux"))
                     .unwrap()
                     .contains("newlabel{executedlabel}")
             );
@@ -2457,13 +2455,13 @@ fn real_fancyverb_internal_customizations_keep_executed_labels_as_source() {
                 .insert(main_uri.clone(), outcome.inputs.unwrap());
             assert!(workspace.project_documents(&main_uri).contains(&code));
             assert!(
-                latex_lsp::language::navigation::document_links(&workspace, &main_uri).is_empty()
+                texquill::language::navigation::document_links(&workspace, &main_uri).is_empty()
             );
             workspace.open(main_uri.clone(), source.clone(), 7);
-            let position = latex_lsp::text::Text::new(source.clone())
+            let position = texquill::text::Text::new(source.clone())
                 .position(source.rfind("executedlabel").unwrap());
             let definitions =
-                latex_lsp::language::features::definitions(&workspace, &main_uri, position);
+                texquill::language::features::definitions(&workspace, &main_uri, position);
             assert_eq!(definitions.len(), 1, "{engine}: {definitions:?}");
             assert_eq!(definitions[0].uri, code);
         }

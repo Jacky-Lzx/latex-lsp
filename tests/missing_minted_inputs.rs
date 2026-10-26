@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "missing-minted-input";
 
@@ -139,7 +139,7 @@ fn spelling_repairs_preserve_headers_and_are_rechecked_after_global_settings_cha
         let item = missing(&items).unwrap().clone();
         std::fs::write(directory.path().join(right), "\\label{data-only}").unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 versioned_edits: true,
                 ..Default::default()
@@ -231,7 +231,7 @@ fn real_missing_inputminted_files_offer_repairs_that_compile_in_both_reader_mode
             .unwrap_or_else(|| panic!("{log}\n{diagnostics:?}"))
             .clone();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 versioned_edits: true,
                 ..Default::default()

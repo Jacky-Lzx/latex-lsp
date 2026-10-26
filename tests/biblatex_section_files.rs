@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     editing::file_operations,
     language::{features, navigation},
     project::workspace::{DocumentKind, Workspace},
     text::Text,
 };
-use lsp_types::*;
 fn setup(source: &str, files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace, Url) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("main.tex"), source).unwrap();

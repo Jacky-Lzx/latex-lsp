@@ -1,5 +1,5 @@
-use latex_lsp::project::workspace::Workspace;
 use lsp_types::*;
+use texquill::project::workspace::Workspace;
 
 fn setup(extra: &str, body: &str) -> (tempfile::TempDir, Workspace, Url) {
     let dir = tempfile::tempdir().unwrap();

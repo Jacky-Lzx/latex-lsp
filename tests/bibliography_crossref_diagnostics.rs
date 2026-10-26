@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, text::Text};
 
 const CODE: &str = "bad-bibliography-crossref";
 const NESTED_CODE: &str = "nested-bibliography-crossref";
@@ -213,7 +213,7 @@ fn nested_warnings_with_uncertain_sources_stay_warnings_on_the_root() {
             "@misc{child,crossref={parent}}",
         ),
         (
-            "Database file #1: refs.bib\n[latex-lsp: middle of compiler output omitted]\n",
+            "Database file #1: refs.bib\n[texquill: middle of compiler output omitted]\n",
             "@misc{child,crossref={parent}}",
         ),
         (
@@ -455,7 +455,7 @@ fn incomplete_unread_invalid_or_missing_database_histories_do_not_guess_location
         "Database file #1: missing.bib\nDatabase file #2: refs.bib\n",
         "Database file #1: refs.bib\nDatabase file #2: refs.bib\n",
         "Database file #1: refs.bib\nExpected a comma---line 1 of file refs.bib\n",
-        "Database file #1: refs.bib\n[latex-lsp: middle of compiler output omitted]\n",
+        "Database file #1: refs.bib\n[texquill: middle of compiler output omitted]\n",
         "Database file #1: refs.data\n",
         "INFO - Found BibTeX data source 'refs.bib'\n",
     ] {

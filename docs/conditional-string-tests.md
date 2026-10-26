@@ -1,14 +1,14 @@
-# 条件文件钩子与字符串测试
+# Conditional file hooks
 
-[返回文档目录](README.md) · [跨文件上下文](string-test-projects.md) · [项目与文件](projects.md)
+[Back to documentation](README.md) · [Cross-file context](string-test-projects.md) · [Projects and files](projects.md)
 
-## 钩子执行顺序
+## Hook execution order
 
-字符串测试的含义传播支持未重定义的直接 `InputIfFileExists` 和 `IfFileExists` 调用。文件名及两个钩子须使用完整花括号参数，文件名须能静态解析。
+Meaning propagation of string tests supports direct `InputIfFileExists` and `IfFileExists` calls without redefinition. The file name and the two hook parameters must use complete curly braces, and the file name must be statically parsable.
 
-`InputIfFileExists` 找到文件时，先分析第二个参数的命令，再读取子文件；第三个参数不会向后传播声明。文件确认不存在时只传播第三个参数。`IfFileExists` 采用相同的分支选择，但不会读取被检查文件中的源码。
+`InputIfFileExists` When a file is found, the command with the second parameter is parsed first, and then the subfile is read; the third parameter does not propagate the statement backwards. Only the third parameter is propagated if the file confirms that it does not exist. `IfFileExists` uses the same branch selection, but does not read the source code in the checked file.
 
-例如：
+For example:
 
 ```tex
 \documentclass{article}
@@ -27,17 +27,17 @@
 \ifblank{\booltrue{draft}}
 ```
 
-子文件执行前，`ifblank` 已被改成单参数宏，因此 `booltrue` 的参数可导航和重命名。主文件较早调用中的 `boolfalse` 仍是字符串数据，改名保留原文。也支持钩子内的嵌套文件检查及静态输入。
+Before the subfile is executed, `ifblank` has been changed into a single-parameter macro, so the parameters of `booltrue` can be navigated and renamed. `boolfalse` in the earlier call of the main file is still string data, and the name is changed to retain the original text. Nested file inspection and static input within hooks are also supported.
 
-## 本地条件与更新
+## Local conditions and updates
 
-查找遵守项目既有的主文档目录、当前文件目录和后缀规则。已找到的本地文件可确定成功分支；带目录的显式路径（如 `./missing`）在本地候选均不存在时可确定失败分支。无法在项目中找到的裸名称仍可能来自 TeX 发行版，不能仅据本地缺失选择失败分支。
+The search follows the project's existing main documentation, current file directory, and suffix rules. A found local file determines the success branch; an explicit path with a directory (such as `./missing`) determines the failure branch when none of the local candidates exist. Naked names that cannot be found in the project may still come from the TeX distribution, and failing branches cannot be selected based solely on local absences.
 
-未选中钩子的源码继续参与静态符号索引，但其中的声明和输入不作为这次文件条件的执行副作用传播。动态文件名、被重定义的检查命令、未完成的参数及无法确认的条件保留不确定性，相关字符串参数不提供猜测性的自动改名。不执行任意宏展开，也不模拟其他 TeX 条件。
+The source code of unchecked hooks continues to participate in the static symbol index, but the declarations and inputs therein are not propagated as side effects of the execution of this file condition. Dynamic file names, redefined check commands, unfinished parameters, and unconfirmed conditions remain uncertain, and related string parameters do not provide speculative automatic renaming. No arbitrary macro expansion is performed, and no other TeX conditions are simulated.
 
-存在性检查也可以引用 CSV、图片等非源码文件。创建、删除或文件监听通知会重新分析相关上下文，主文档的文本和版本号保持不变，非源码文件不会因此进入 LaTeX 符号索引。共享源码的文件条件按各根文档分别解析；同一参数出现不同含义时拒绝修改该参数，其他符号仍可改名。
+Existence checks can also reference non-source files such as CSV and images. Creation, deletion or file listening notifications will re-analyze the relevant context, the text and version number of the main document remain unchanged, and non-source files will not enter the LaTeX symbol index. The file conditions of shared source code are parsed separately for each root document; when the same parameter has different meanings, the parameter is refused to be modified, and other symbols can still be renamed.
 
-## 验证
+## verify
 
 ```sh
 cargo test --locked --test conditional_string_tests
@@ -45,4 +45,4 @@ cargo test --locked --test protocol conditional_string_hooks
 cargo test --locked --test conditional_string_tests -- --include-ignored
 ```
 
-真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox。在三个引擎中分别检查两种命令的成功与失败分支，比较重命名前后的钩子、子文件执行顺序、boolean 状态和 PDF 页数。
+True regression requires pdfLaTeX, XeLaTeX, LuaLaTeX and etoolbox. Check the success and failure branches of the two commands in the three engines respectively, and compare the hooks, subfile execution order, boolean status and PDF page count before and after renaming.

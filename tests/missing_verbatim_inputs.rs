@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::{build, build_log},
     editing,
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -131,7 +131,7 @@ fn no_file_reports_require_a_supported_literal_call_in_the_confirmed_source() {
     let main = directory.path().join("main.tex");
     std::fs::write(&main, r"\verbatiminput{smaple.rs}").unwrap();
     for log in [
-        "[latex-lsp: middle of compiler output omitted]\nNo file smaple.rs.\n",
+        "[texquill: middle of compiler output omitted]\nNo file smaple.rs.\n",
         "(./unavailable.tex\nNo file smaple.rs.\n",
     ] {
         let items = build_log::parse(&main, log);
@@ -301,7 +301,7 @@ fn spelling_fixes_keep_full_names_stars_comments_and_document_versions() {
         let item = items[0].clone();
         std::fs::write(directory.path().join(right), r"\input{main}").unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 versioned_edits: true,
                 ..Default::default()
@@ -340,7 +340,7 @@ fn fixes_reject_tampered_metadata_shadowed_candidates_and_project_redefinitions(
     );
     let item = items[0].clone();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             versioned_edits: true,
             ..Default::default()
@@ -405,7 +405,7 @@ fn real_missing_verbatim_inputs_warn_without_failing_and_fixes_restore_code() {
             let main = uri(root, "main.tex");
             std::fs::write(&main_path, &source).unwrap();
             std::fs::write(root.join(right), "Expected code.\n").unwrap();
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable: engine.into(),
                 ..Default::default()
             };
@@ -424,7 +424,7 @@ fn real_missing_verbatim_inputs_warn_without_failing_and_fixes_restore_code() {
                 .unwrap();
             assert_eq!(item.severity, Some(DiagnosticSeverity::WARNING));
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     versioned_edits: true,
                     ..Default::default()

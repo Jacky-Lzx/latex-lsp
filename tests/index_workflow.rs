@@ -1,8 +1,4 @@
 #![cfg(unix)]
-use latex_lsp::{
-    compilation::build,
-    config::{BuildConfig, Config, IndexToolConfig},
-};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -10,6 +6,10 @@ use std::{
         Arc,
     },
     time::{Duration, Instant},
+};
+use texquill::{
+    compilation::build,
+    config::{BuildConfig, Config, IndexToolConfig},
 };
 
 fn script(directory: &Path, name: &str, body: &str) -> String {
@@ -89,7 +89,7 @@ impl Fixture {
             .unwrap()
             .file_name()
             .to_string_lossy()
-            .starts_with("latex-lsp-index-")));
+            .starts_with("texquill-index-")));
     }
 }
 

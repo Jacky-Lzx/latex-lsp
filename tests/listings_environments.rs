@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{path::Path, sync::atomic::AtomicBool};
+use texquill::{
     compilation::build,
     editing::{self, file_operations},
     language::{features, navigation, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::{path::Path, sync::atomic::AtomicBool};
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -216,7 +216,7 @@ fn header_markers_and_discarded_header_text_preserve_real_source_renames() {
             let source = format!("{before}{block}{tail}");
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -455,7 +455,7 @@ fn real_headers_and_body_markers_preserve_native_labels_after_versioned_renames(
             let source=format!("\\documentclass{{article}}\n\\usepackage{{listings}}\n\\begin{{document}}\n\\label{{kept}}\n\\begin{{lstlisting}}{header}\n{body}\n{prefix}\\end{{lstlisting}}\\ref{{kept}}\n\\end{{document}}\n");
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -500,7 +500,7 @@ fn real_headers_and_body_markers_preserve_native_labels_after_versioned_renames(
             std::fs::write(root.join("main.tex"), &updated).unwrap();
             let outcome = build::run(
                 &root.join("main.tex"),
-                &latex_lsp::config::BuildConfig {
+                &texquill::config::BuildConfig {
                     executable: engine.into(),
                     ..Default::default()
                 },
@@ -512,7 +512,7 @@ fn real_headers_and_body_markers_preserve_native_labels_after_versioned_renames(
                 outcome.output
             );
             assert!(!outcome.inputs.unwrap().contains(&fake));
-            let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+            let aux = std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
             assert!(aux.contains("newlabel{renamedlabel}"), "{aux}");
             for key in ["kept", "fake", "fakeinput"] {
                 assert!(!aux.contains(&format!("newlabel{{{key}}}")), "{aux}");

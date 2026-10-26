@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
 
 fn open(workspace: &mut Workspace, source: &str) -> Url {
     let uri = Url::parse("file:///color-commands/main.tex").unwrap();
@@ -75,7 +75,7 @@ fn color_command_snippets_and_hover_describe_their_model_and_required_arguments(
 #[test]
 fn middle_of_word_completion_preserves_existing_color_arguments_and_comment_continuations() {
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },

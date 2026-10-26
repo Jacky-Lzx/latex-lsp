@@ -1,125 +1,125 @@
-# biblatex 引用
+# biblatex citations
 
-[文档目录](README.md) · [文献资源加载](biblatex-resources.md) · [文献键与重命名](bibliography.md) · [编译诊断](diagnostics.md)
+[Documentation](README.md) · [Document Resource Loading](biblatex-resources.md) · [Document Key and Rename](bibliography.md) · [Build diagnostics](diagnostics.md)
 
-文献工具与 LaTeX 的重运行请求也会进入[编译结果分析](build-analysis.md#文献处理与重编译)。
+Rerun requests for documentation tools and LaTeX will also go into [Compilation Result Analysis](build-analysis.md#document-processing-and-recompilation).
 
-动态集合声明 `\defbibentryset{集合键}{成员列表}` 的独立键编辑见[文献集合](bibliography-sets.md)。
+See [Bibliography entry sets](bibliography-sets.md) for independent key editing of the dynamic collection declaration `\defbibentryset{set key}{members}`.
 
-文献键共用补全、悬停、导航、引用查找、高亮和跨文件重命名；字段、列表和条目类型提供各自的名称补全与悬停。以下命令还提供命令片段与参数提示。引用命令的普通缺失文献警告定位到键名，支持拼写修复；说明文字、同名标签、正文、注释和逐字文本会保留。
+Literature keys share completion, hover, navigation, citation lookup, highlighting, and cross-file renaming; fields, lists, and item types provide their own name completion and hover. The following commands also provide command snippets and signature help. Common missing literature warnings for quoting commands are located at the key name and support spelling repair; description text, tags with the same name, body text, comments, and verbatim text will be retained.
 
-- [字段、列表和姓名引用](#字段列表和姓名引用)
-- [条目数据上下文](#条目数据上下文)
-- [字段与列表访问](#字段与列表访问)
-- [字段与列表条件](#字段与列表条件)
-- [条目条件检查](#条目条件检查)
-- [单次引用](#单次引用)
-- [多组引用](#多组引用)
-- [卷号引用](#卷号引用)
+- [Fields, lists and name references](#fields-lists-and-name-references)
+- [Item Data Context](#entry-data-context)
+- [Field and List Access](#field-and-list-access)
+- [Field and list conditions](#field-and-list-conditions)
+- [Entry condition check](#entry-condition-check)
+- [Single citation](#single-reference)
+- [Multiple sets of references](#multiple-sets-of-references)
+- [Roll number reference](#volume-number-reference)
 
-## 字段、列表和姓名引用
+## Fields, lists and name references
 
-`citefield`、`citelist`、`citename` 分别打印文献条目的字段、字面列表和姓名列表。它们接受最多两个前置说明，之后是文献键列表、可选格式名和必选的字段或列表名：
+`citefield`, `citelist`, and `citename` print the fields, literal list, and name list of document entries respectively. They accept up to two prefixes, followed by a list of citation keys, an optional format name, and a required field or list name:
 
 ```tex
-\citefield[参见][12]{alpha,beta}[citefield]{title}
+\citefield[see][12]{alpha,beta}[citefield]{title}
 \citelist{alpha}{location}
 \citename{alpha}[citename]{author}
 ```
 
-文献键列表支持补全、悬停、导航、引用查找、高亮和跨文件重命名，包括跨行和未闭合列表；文献重命名保留格式名、字段名、列表名及说明中的同名文字。命令片段只插入两个必选参数，参数提示分别跟踪说明、键、格式和字段，也保留用户定义的命令签名。
+The citation key list supports completion, hover, navigation, reference search, highlighting and cross-file renaming, including cross-line and unclosed lists; document renaming retains the same text in the format name, field name, list name and description. The command snippet only inserts two required parameters, and signature help track descriptions, keys, formats, and fields respectively, and also retain user-defined command signatures.
 
-最后一个参数还提供字段或列表名称补全与悬停说明：`citefield` 建议 `title`、`year`、`doi` 等输出字段，`citelist` 建议 `publisher`、`location` 等字面列表，`citename` 建议 `author`、`editor`、`translator` 等姓名列表。候选采用默认数据模型中的常用输出名称，不列出 `date`、`sortname` 等仅供输入处理的名称，也不校验自定义模型。
+The last parameter also provides field or list name completion and hover instructions: `citefield` recommends `title`, `year`, `doi` and other output fields, `citelist` recommends `publisher`, `location` Literal list such as `citename` and `author`, `editor`, `translator` and other name lists are recommended. Candidates use common output names in the default data model. Names that are only for input processing such as `date` and `sortname` are not listed, and custom models are not verified.
 
-补全按 ASCII 忽略大小写筛选并插入标准小写名称，替换整个当前名称，保留说明、格式、注释及调用外文字；支持跨行和未完成参数。这些名称独立于文献键，即使数据库存在同名条目，也不会触发文献跳转或重命名。动态名称、多余说明、逐字文本和已被用户重定义的命令不提供内置选择器提示。
+Completion filters by ASCII ignoring case and inserts standard lowercase names, replacing the entire current name, retaining descriptions, formatting, comments and calling foreign text; supports cross-line and incomplete parameters. These names are independent of the citation key, and even if there are entries with the same name in the database, document jumps or renames will not be triggered. Dynamic names, redundant descriptions, verbatim text, and commands that have been redefined by the user do not provide built-in selector hints.
 
-编译器可能在读完格式和字段后，甚至读取下一条命令时才报告缺失文献键。诊断会核对完整调用范围，将警告和拼写修复定位到实际键名；结果分析继续按键去重。三个命令均不推断星号或首字母大写形式，不把多余说明或动态键猜测为静态文献键。
+The compiler may not report a missing citation key until after it has read the format and fields, or even after reading the next command. The diagnostics will check the complete call range and locate warnings and spelling fixes to the actual key names; the result analysis will continue with key deduplication. None of the three commands interpret asterisks or capitalization, and do not interpret redundant descriptions or dynamic keys as static citation keys.
 
-## 条目数据上下文
+## Entry data context
 
-`\entrydata{key}{code}` 和 `\entrydata*{key}{code}` 在指定条目的数据上下文中执行代码。首参数按单个静态文献键处理，支持补全、定义跳转、悬停、引用查找、高亮、语义 token、选择范围及跨文件重命名；第二参数中的普通文字保留，嵌套的已支持引用命令仍独立参与文献编辑。
+`\entrydata{key}{code}` and `\entrydata*{key}{code}` execute code in the data context of the specified entry. The first parameter is processed as a single static citation key and supports completion, definition jump, hover, reference search, highlighting, semantic token, selection range and cross-file renaming; the ordinary text in the second parameter is retained, and the nested supported citation commands still participate in document editing independently.
 
 ```tex
 \entrydata{alpha}{\printfield{title}}
 \entrydata*{beta}{\printnames{author}}
 ```
 
-参数提示区分 `{key}` 和 `{code}`，命令片段提供两个必选参数。支持星号前后的空白、注释及跨行键名，补全保留注释；已有参数时只补命令名。键允许 Unicode、引号及普通圆括号，不把逗号列表、语义空白、嵌套分组或宏展开猜测为单个键。此处不推断数据上下文的字段展开、引用跟踪或执行顺序，也不领取普通 `Citation … undefined` 警告的位置。
+The signature help distinguishes between `{key}` and `{code}`, and the command snippet provides two required parameters. Supports spaces before and after asterisks, comments, and cross-line key names. Completion retains comments; only command names are completed when there are parameters. Keys allow Unicode, quotes, and normal parentheses, and do not guess comma lists, semantic whitespace, nested grouping, or macro expansion as single keys. The data context's field expansion, reference tracking, or execution order is not inferred here, nor is the location of the ordinary `Citation … undefined` warning picked up.
 
-## 字段与列表访问
+## Field and list access
 
-`printfield`、`printlist` 和 `printnames` 提供命令片段与参数提示：字段输出接受可选格式，字面列表和姓名列表还接受可选的 `[start-stop]` 范围。可选参数在首个未受花括号保护的 `]` 处结束，字面 `[` 不增加嵌套。片段只插入必选字段或列表名，已有参数保持原样；这些名称不作为文献键处理。
+`printfield`, `printlist` and `printnames` provide command snippets and signature help: field output accepts optional formats, literal lists and name lists also accept the optional `[start-stop]` range. Optional parameters end at the first unprotected `]`, and the literal `[` does not increase nesting. The fragment inserts only the required field or list names, leaving existing parameters as they are; these names are not treated as citation keys.
 
-三种打印命令的最后一个参数共用上述字段、字面列表和姓名列表补全及悬停说明，格式与范围参数保持独立。
+The last parameter of the three print commands share the above fields, literal list and name list completion and hover instructions, and the format and range parameters remain independent.
 
-`\thefield{field}` 和 `\strfield{field}` 的字段读取也提供片段、参数提示、字段补全及悬停，不接受可选格式或星号。
+Field reads for `\thefield{field}` and `\strfield{field}` also provide snippets, signature help, field completion and hover, and do not accept optional formats or asterisks.
 
-## 字段与列表条件
+## Field and list conditions
 
-`\iffieldundef{field}{true}{false}`、`\iflistundef{literal list}{true}{false}` 和 `\ifnameundef{name list}{true}{false}` 的首参数分别建议对应类型的名称，两个分支的普通文字保持原样；参数提示分别跟踪名称与两个分支。这些命令不接受可选格式或星号。
+The first parameters of `\iffieldundef{field}{true}{false}`, `\iflistundef{literal list}{true}{false}` and `\ifnameundef{name list}{true}{false}` respectively suggest the names of the corresponding types. The ordinary text of the two branches remains the same; the signature help track the names and the two branches respectively. These commands do not accept optional formats or asterisks.
 
-字段比较也支持片段与参数提示：`\iffieldequalstr{field}{string}{true}{false}` 比较字段和字符串，`\iffieldequals{field}{command}{true}{false}` 比较字段和命令内容，`\iffieldsequal{field 1}{field 2}{true}{false}` 比较两个字段。前两者只在首参数提供字段名称补全，后者在两个字段参数均提供；比较字符串及两个分支中的普通文字不作为字段名。`\iflistequals{literal list}{command}{true}{false}` 和 `\ifnameequals{name list}{command}{true}{false}` 则分别建议字面列表和姓名列表。这些命令不接受星号或可选格式，也不执行比较或预测分支结果。
+Field comparison also supports snippets and signature help: `\iffieldequalstr{field}{string}{true}{false}` compares fields and strings, `\iffieldequals{field}{command}{true}{false}` compares fields and command content, and `\iffieldsequal{field 1}{field 2}{true}{false}` compares two fields. The former two only provide field name completion in the first parameter, while the latter provides it in both field parameters; comparison strings and ordinary text in the two branches are not used as field names. `\iflistequals{literal list}{command}{true}{false}` and `\ifnameequals{name list}{command}{true}{false}` suggest literal lists and name lists respectively. These commands do not accept asterisks or optional formats, and do not perform comparisons or predict branch results.
 
-三个 `equals` 命令的第二参数按宏名操作数处理：补全只插入命令名，不附加调用片段；被比较的 `\cite`、`\newcommand` 或逐字命令也不作为调用解析。分支中的真实命令保持独立。与其他命令名操作数相同，当前文件前文已显式重新定义比较命令时按普通调用处理；不会完整模拟跨文件重定义或分组恢复。
+The second parameters of the three `equals` commands are processed as macro name operands: completion only inserts the command name and does not append the calling fragment; the compared `\cite`, `\newcommand` or verbatim commands are not parsed as calls. The real commands in the branch remain independent. Like other command name operands, comparison commands that have been explicitly redefined in the current file are processed as ordinary calls; cross-file redefinition or group recovery will not be fully simulated.
 
-用户声明及其派生命令会撤下有冲突的内置选择器与参数提示，例如 `\newcounter{field}` 生成的 `\thefield` 或 `\newif\ifnameundef` 声明的条件命令；命令名补全也不再插入文献字段占位符，移除覆盖后恢复。其他独立项目中的声明不影响当前文档。
+User declarations and their derived commands will remove conflicting built-in selectors and signature help, such as `\thefield` generated by `\newcounter{field}` or conditional commands declared by `\newif\ifnameundef`; command name completion will no longer insert literature field placeholders, and will be restored after removing the override. Statements in other independent projects do not affect the current document.
 
-## 条目条件检查
+## Entry condition check
 
-`\ifentryexists{key}{true}{false}` 与 `\ifentryinbib{key}{true}{false}` 分别检查条目数据是否存在及条目是否列入文献列表。首参数支持单个静态文献键的导航、补全、悬停、引用查找、高亮、语义 token、选择范围和重命名；两个分支中的普通文字保留，嵌套引用独立索引。
+`\ifentryexists{key}{true}{false}` and `\ifentryinbib{key}{true}{false}` respectively check whether the entry data exists and whether the entry is included in the literature list. The first parameter supports navigation, completion, hovering, reference search, highlighting, semantic token, selection range and renaming of a single static citation key; ordinary text in the two branches is retained, and nested references are independently indexed.
 
-`\ifentrycategory{key}{category}{true}{false}` 检查指定条目的分类，首参数使用相同的单键编辑规则；第二参数属于独立的[分类名称](bibliography-categories.md)命名空间，保留两个代码分支中的普通文字。参数提示分别标明全部四个参数。
+`\ifentrycategory{key}{category}{true}{false}` checks the category of the specified entry. The first parameter uses the same single-key editing rules; the second parameter belongs to an independent [category name](bibliography-categories.md) namespace, retaining ordinary text in the two code branches. Signature help indicate all four parameters individually.
 
-参数提示区分键、成立代码和不成立代码，命令片段提供三个必选参数。键采用与 `entrydata` 相同的注释边界和静态校验，支持 Unicode、引号及圆括号，逗号列表和动态键不作推断。两个命令不接受星号和可选说明，不领取普通缺失文献引用警告；实际分支结果与执行顺序由 biblatex 决定。
+The signature help distinguishes between keys, establishment codes and failure codes. The command snippet provides three required parameters. Keys use the same comment boundaries and static validation as `entrydata`, support Unicode, quotes and parentheses, comma lists and dynamic keys are not inferred. The two commands do not accept asterisks and optional descriptions, and do not receive ordinary missing literature reference warnings; the actual branch results and execution order are determined by biblatex.
 
-`\ifentrytype{entry type}{true}{false}` 检查当前条目的输出类型。首参数提供常用 biblatex 输出类型的补全与悬停，例如 `article`、`book`、`online`、`report` 和 `thesis`，说明与 `.bib` 条目类型共用；补全只替换名称，保留注释、换行和两个分支，也支持未完成参数。片段插入三个必选参数，参数提示跟踪类型与两个分支。名称不作为文献键或字段名处理；星号、可选参数、动态名称和用户覆盖不提供内置类型提示。
+`\ifentrytype{entry type}{true}{false}` Check the output type of the current entry. The first parameter provides completion and hovering of commonly used biblatex output types, such as `article`, `book`, `online`, `report` and `thesis`, the description is the same as `.bib` Entry types are shared; completion only replaces the name, retains comments, newlines and two branches, and also supports uncompleted parameters. There are three required parameters for fragment insertion, and the parameters prompt the tracking type and two branches. Names are not treated as citation keys or field names; asterisks, optional parameters, dynamic names, and user overrides do not provide built-in type hints.
 
-类型候选采用默认数据模型中的常用输出名称，不列出 `comment`、`string`、`preamble`、仅供继承的 `xdata` 或 `conference`、`phdthesis` 等输入别名；不推断自定义数据模型及条目类型转换，也不预测条件结果。
+Type candidates adopt common output names from the default data model and do not list input aliases such as `comment`, `string`, `preamble`, inheritance-only `xdata`, or `conference`, `phdthesis`; custom data models and entry type conversions are not inferred, and conditional results are not predicted.
 
-## 单次引用
+## Single reference
 
-| 命令 | 首字母大写形式 | 用途 |
+| Command | Capitalized form | Purpose |
 | --- | --- | --- |
-| `cite` | `Cite` | 普通引用 |
-| `parencite` | `Parencite` | 括号引用 |
-| `footcite` | `Footcite` | 脚注引用 |
-| `footcitetext` | `Footcitetext` | 无脚注标记的脚注文字 |
-| `smartcite` | `Smartcite` | 按上下文使用正文或脚注引用 |
-| `supercite` | 无 | 上标引用，需要支持它的样式 |
-| `textcite` | `Textcite` | 叙述式引用 |
-| `autocite` | `Autocite` | 按配置选择引用形式 |
-| `citeauthor` | `Citeauthor` | 作者 |
-| `citeyear` | 无 | 年份 |
-| `citetitle` | `Citetitle` | 标题 |
-| `citedate` | 无 | 日期 |
-| `citeurl` | 无 | URL |
-| `notecite` | `Notecite` | 输出说明并记录文献键 |
-| `pnotecite` | `Pnotecite` | 括号内的说明引用 |
-| `fnotecite` | `Fnotecite` | 脚注内的说明引用 |
-| `fullcite` | 无 | 完整文献条目 |
-| `footfullcite` | 无 | 脚注内的完整条目 |
+| `cite` | `Cite` | General citation |
+| `parencite` | `Parencite` | Bracket reference |
+| `footcite` | `Footcite` | Footnote reference |
+| `footcitetext` | `Footcitetext` | Footnote text without footnote mark |
+| `smartcite` | `Smartcite` | Use text or footnote citations as appropriate |
+| `supercite` | None | Superscript reference, requires a style that supports it |
+| `textcite` | `Textcite` | Narrative Quote |
+| `autocite` | `Autocite` | Select citation form according to configuration |
+| `citeauthor` | `Citeauthor` | Author |
+| `citeyear` | None | Year |
+| `citetitle` | `Citetitle` | Title |
+| `citedate` | None | Date |
+| `citeurl` | None | URL |
+| `notecite` | `Notecite` | Output description and record citation key |
+| `pnotecite` | `Pnotecite` | Explanatory references in brackets |
+| `fnotecite` | `Fnotecite` | Explanatory citations in footnotes |
+| `fullcite` | None | Complete literature entry |
+| `footfullcite` | None | Full entry in footnote |
 
-表中命令均识别普通和星号形式；星号前后允许空白和注释。星号的排版含义由命令与样式决定；没有独立星号实现时，biblatex 沿用普通实现，例如 `fullcite*`、`footfullcite*`。`citetitle*` 使用完整标题，`citedate*` 包含日期消歧信息。大小写按实际命令识别，不推断 `Supercite`、`Citeurl` 或 `Citedate`。
+The commands in the table recognize both normal and asterisk forms; spaces and comments are allowed before and after the asterisk. The typesetting meaning of the asterisk is determined by the command and style; when there is no independent asterisk implementation, biblatex uses the common implementation, such as `fullcite*`, `footfullcite*`. `citetitle*` uses the full title, `citedate*` contains date disambiguation information. Case recognition is based on the actual command, `Supercite`, `Citeurl` or `Citedate` are not inferred.
 
-单次引用接受最多两个方括号说明和一个花括号文献键列表：
+A single citation accepts up to two square bracket descriptions and a curly braced citation key list:
 
 ```tex
-\Parencite[参见][12]{alpha,beta}
+\Parencite[see][12]{alpha,beta}
 \citetitle*{alpha}
 \citeurl{alpha}
-\notecite[另见][34]{beta}
+\notecite[see also][34]{beta}
 \fullcite*{alpha}
 ```
 
-说明与键即使同名，也只编辑键列表。补全支持跨行或尚未闭合的列表，只替换当前键；命令补全保留已有参数。参数提示区分前注、后注与键，用户定义的命令签名优先。
+Even if the description and key have the same name, only the key list will be edited. Completion supports spanning lines or unclosed lists, and only replaces the current key; command completion retains existing parameters. The signature help distinguishes pre-notes, post-notes and keys, and user-defined command signatures take precedence.
 
-`notecite` 系列不打印引用正文，但仍读取文献键、参与引用跟踪并报告缺失键，因此也参与导航和重命名。`supercite` 的具体行为依赖引用样式；`numeric` 等样式忽略可选说明并产生警告，这些警告会保留。
+The `notecite` series does not print citation text, but still reads citation keys, participates in citation tracking, and reports missing keys, and therefore also participates in navigation and renaming. The specific behavior of `supercite` depends on the reference style; styles such as `numeric` ignore optional specifications and generate warnings, which are retained.
 
-## 多组引用
+## Multiple sets of references
 
-支持以下标准命令及星号形式：
+The following standard commands and asterisk forms are supported:
 
-| 命令 | 首字母大写形式 |
+| Command | Capitalized form |
 | --- | --- |
 | `cites` | `Cites` |
 | `parencites` | `Parencites` |
@@ -128,27 +128,27 @@
 | `smartcites` | `Smartcites` |
 | `textcites` | `Textcites` |
 | `autocites` | `Autocites` |
-| `supercites` | 无 |
+| `supercites` | None |
 
-调用可先给出最多两个圆括号整体说明，再重复“最多两个方括号说明 + 花括号文献键列表”：
+The call can first give an overall description of up to two round brackets, and then repeat "up to two square bracket descriptions + curly bracket citation key list":
 
 ```tex
-\parencites(整体前注)(整体后注)
-  [参见][12]{alpha,beta}
+\parencites(global prenote)(global postnote)
+  [see][12]{alpha,beta}
   [34]{gamma}\relax
 ```
 
-每一组的键都参与导航、引用查找、补全、语义高亮和重命名。从后续组或 `.bib` 条目发起改名会更新所有确认的引用，保留整体说明、各组说明及其他键。补全也支持后续组中尚未闭合的键列表；参数提示分别标明整体说明和各组的当前参数。
+Each set of keys is involved in navigation, reference lookup, completion, semantic highlighting, and renaming. Initiating a name change from a subsequent group or `.bib` entry updates all confirmed references, preserving the overall description, individual group descriptions, and other keys. Completion also supports unclosed key lists in subsequent groups; signature help indicate the overall description and the current parameters of each group.
 
-圆括号和方括号说明在首个未受花括号保护的右括号处结束，同类左括号不增加嵌套。组间允许空白和注释；空段落、普通正文或 `\relax` 会结束引用序列。多余说明、未闭合说明和动态键不会被猜测为静态文献键。卷号形式见下节。
+Parentheses and square brackets end at the first unprotected right bracket, and similar left brackets do not increase nesting. White space and comments are allowed between groups; an empty paragraph, plain text, or `\relax` ends the citation sequence. Redundant descriptions, unclosed descriptions, and dynamic keys are not guessed as static citation keys. See the next section for roll number format.
 
-编译器可能在向前读取下一条命令后才报告缺失文献警告。诊断会核对整个调用及其向前读取的位置，将警告定位到匹配键；多个匹配位置分别提供诊断和拼写修复。
+The compiler may not report a missing documentation warning until it has read forward to the next command. Diagnostics checks the entire call and its read-forward position, locating warnings to matching keys; multiple matching positions provide diagnostics and spelling fixes respectively.
 
-## 卷号引用
+## Volume number reference
 
-以下 biblatex 命令区分卷号、页码和文献键，支持表中的大小写形式及星号：
+The following biblatex commands distinguish between volume numbers, page numbers, and citation keys, and support case and asterisks in tables:
 
-| 单次引用 | 重复引用 |
+| Single citation | Repeated citation |
 | --- | --- |
 | `volcite` / `Volcite` | `volcites` / `Volcites` |
 | `pvolcite` / `Pvolcite` | `pvolcites` / `Pvolcites` |
@@ -158,29 +158,29 @@
 | `tvolcite` / `Tvolcite` | `tvolcites` / `Tvolcites` |
 | `avolcite` / `Avolcite` | `avolcites` / `Avolcites` |
 
-每组按“可选前注、必选卷号、可选页码、必选文献键列表”读取：
+Each group reads according to "optional prenote, required volume number, optional page number, and required citation key list":
 
 ```tex
-\volcite[参见]{2}[12--16]{alpha}
-\volcites(整体前注)(整体后注)
-  [参见]{1}[12]{alpha,beta}
-  [另见]{2}[34]{gamma}\relax
+\volcite[see]{2}[12--16]{alpha}
+\volcites(global prenote)(global postnote)
+  [see]{1}[12]{alpha,beta}
+  [see also]{2}[34]{gamma}\relax
 ```
 
-卷号、页码和前注即使与键同名，也不会被文献重命名或拼写修复修改。各组的键支持导航、悬停、引用查找、补全、高亮和跨文件重命名；缺失文献警告精确定位到键，允许编译器报告下一条命令的行号。
+Volume numbers, page numbers, and prefixes, even if they have the same name as the key, will not be modified by document renaming or spelling repair. Each set of keys supports navigation, hover, reference lookup, completion, highlighting, and cross-file renaming; missing literature warnings are pinpointed to the key, allowing the compiler to report the line number of the next command.
 
-单次命令只读取一组；重复命令允许最多两个圆括号整体说明，后续组须以方括号前注或花括号卷号开始。也识别已开始组中的裸 ASCII 卷号或单个宏 token，例如 `\volcite2{alpha}` 和 `\volcites{1}{alpha}[另见]2{beta}`；不展开卷号宏。裸 Unicode、`^^` 转义及无法确认的 token 边界不作推断，文献键使用花括号分组。
+A single command only reads one group; repeated commands allow up to two parentheses for overall description, and subsequent groups must start with a square bracket prefix or a curly bracket volume number. Also recognizes bare ASCII volume numbers or single macro tokens in started groups, such as `\volcite2{alpha}` and `\volcites{1}{alpha}[see also]2{beta}`; volume number macros are not expanded. Naked Unicode, `^^` escapes, and unconfirmed token boundaries are not inferred, and citation keys are grouped using curly braces.
 
-补全片段只插入卷号和文献键两个必选参数，保留已有调用和可选说明。参数提示分别跟踪卷号、页码和各组键；填写说明或卷号后尚未输入必选参数时，继续提示下一个必选参数。普通多组引用也支持说明之后的等待提示。
+The completion fragment only inserts the two required parameters of volume number and citation key, and retains the existing call and optional description. The signature help track the volume number, page number and each group of keys respectively; if the required parameters have not been entered after filling in the description or volume number, the next required parameter will continue to be prompted. Ordinary multiple sets of references also support the wait prompt after the description.
 
 
 
-## 回调代码
+## Callback code
 
-常见的 `AtEveryBibitem`、`AtBeginBibliography`、`AtEveryCite`、`AtEveryCitekey`、`AtEveryMultiCite` 及下一次／当前引用回调提供代码片段和参数提示；代码中的静态标签、文献键和分类名称可正常补全、导航与改名，回调之后的调用保持独立。也支持参考文献分区、简写列表、驱动和卷号引用回调。
+Common `AtEveryBibitem`, `AtBeginBibliography`, `AtEveryCite`, `AtEveryCitekey`, `AtEveryMultiCite` and next/current reference callbacks provide code snippets and signature help; static labels, citation keys and category names in the code can be completed, navigated and renamed normally, and calls after the callbacks remain independent. Reference partitions, abbreviation lists, driver and volume reference callbacks are also supported.
 
-`AtDataInput[entry type]{code}` 的可选条目类型与 `AtBeginBiblist{bibliography list}{code}`／`AtEveryBiblistitem` 的首参数按选择器数据处理，其余参数作为代码。`AtEveryEntrykey{code}{success}{failure}` 的三个参数都保留代码语义；`AtUsedriver` 和 `AtVolcite` 的星号形式保留替换回调的原生行为。省略可选参数的补全不会改变默认值，已有调用的代码会原样保留。
+The optional entry type of `AtDataInput[entry type]{code}` and the first parameter of `AtBeginBiblist{bibliography list}{code}`/`AtEveryBiblistitem` are processed as selector data, and the remaining parameters are treated as codes. The three parameters of `AtEveryEntrykey{code}{success}{failure}` all preserve code semantics; the asterisk form of `AtUsedriver` and `AtVolcite` preserve the native behavior of the replacement callback. Completion that omits optional parameters will not change the default value, and the code that has already been called will remain intact.
 
-`AtDataInput` 的可选类型提供与 `ifentrytype` 相同的常用输出类型补全和悬浮说明。补全替换完整名称，支持未完成头部、注释、CRLF 和 UTF-16，保留后续代码；静态命名和纯转发调用同样适用。参数数据、字面内容、未知捕获副本、用户覆盖和共享消费者含义不一致时不提供内置类型候选。项目索引不完整或累计分析超过 32 MiB、200000 个命令、8192 个声明时跳过。
+The optional type of `AtDataInput` provides the same common output type completion and suspension instructions as `ifentrytype`. Completion replaces the full name, supports uncompleted headers, comments, CRLF and UTF-16, preserving subsequent code; the same applies to static naming and pure forwarding calls. Built-in type candidates are not provided when parameter data, literal content, unknown capture copies, user overrides, and shared consumers have inconsistent meanings. Skip when the project index is incomplete or the cumulative analysis exceeds 32 MiB, 200000 commands, and 8192 statements.
 
-静态命名调用与唯一纯转发别名使用相同的签名；用户重定义、传给其他宏的参数数据和共享消费者歧义继续受项目编辑保护。不模拟回调的执行次数、顺序或动态展开，不通过源码预测当前条目的数据。
+Static named calls use the same signature as unique pure forwarding aliases; user redefinitions, argument data passed to other macros, and shared consumer ambiguities continue to be protected by project editors. It does not simulate the execution number, sequence or dynamic expansion of callbacks, and does not predict the data of the current entry through the source code.

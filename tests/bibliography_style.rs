@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::build,
     editing::file_operations,
     language::{features, navigation},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 const STYLE: &str = r#"ENTRY { title } {} {}
 FUNCTION {book} { "\bibitem{" write$ cite$ write$ "}" write$ newline$ title write$ newline$ }
@@ -112,7 +112,7 @@ fn bibtex_style_syntax_is_not_misreported_as_latex_and_bibtex_errors_keep_style_
     assert!(workspace.diagnostics(&style).is_empty());
     workspace.open(style.clone(), "\\sec".into(), 1);
     assert!(features::completion(&workspace, &style, Position::new(0, 4)).is_empty());
-    let diagnostics = latex_lsp::compilation::build_log::parse_bibliography(
+    let diagnostics = texquill::compilation::build_log::parse_bibliography(
         &root.join("main.tex"),
         "unknownFunction is an unknown function---line 2 of file local.bst\n",
     );

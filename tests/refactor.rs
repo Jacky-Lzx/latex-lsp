@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     editing,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 fn setup(marked: &str, only: CodeActionKind) -> (Workspace, Url, Range, CodeActionContext) {
     let start = marked.find('¦').unwrap();
     let marked = marked.replacen('¦', "", 1);
@@ -13,7 +13,7 @@ fn setup(marked: &str, only: CodeActionKind) -> (Workspace, Url, Range, CodeActi
     let text = Text::new(source.clone());
     let range = text.range(start, end);
     let mut ws = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             versioned_edits: true,
             ..Default::default()
@@ -207,7 +207,7 @@ fn refactor_parameter_context_follows_related_unsaved_definitions_and_ambiguity(
     std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
     std::fs::write(macros.to_file_path().unwrap(), "\\newcommand{\\take}[1]{}").unwrap();
     let mut ws = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },

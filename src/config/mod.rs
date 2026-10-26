@@ -10,7 +10,7 @@ use std::{
 mod latexmk;
 mod latexmk_native;
 
-const DEFAULT_OUTPUT_DIRECTORY: &str = "build/latex-lsp";
+const DEFAULT_OUTPUT_DIRECTORY: &str = "build/texquill";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -1029,11 +1029,11 @@ mod tests {
                 .contains(&"-jobname=论文 draft.v2".into()));
             assert_eq!(
                 config.artifact_path(root, "pdf").unwrap(),
-                Path::new("/tmp/project/build/latex-lsp/论文 draft.v2.pdf")
+                Path::new("/tmp/project/build/texquill/论文 draft.v2.pdf")
             );
             assert_eq!(
                 config.artifact_path(root, "synctex.gz").unwrap(),
-                Path::new("/tmp/project/build/latex-lsp/论文 draft.v2.synctex.gz")
+                Path::new("/tmp/project/build/texquill/论文 draft.v2.synctex.gz")
             );
         }
         for name in [
@@ -1065,7 +1065,7 @@ mod tests {
         assert_eq!(
             custom.expanded_arguments(root).unwrap(),
             vec![
-                "--output=/tmp/project/build/latex-lsp/draft.pdf",
+                "--output=/tmp/project/build/texquill/draft.pdf",
                 "/tmp/project/main.tex"
             ]
         );
@@ -1113,7 +1113,7 @@ mod tests {
             .arguments()
             .contains(&"-nobibfudge".into()));
         let config = BuildConfig {
-            output_directory: Some(".latex-lsp".into()),
+            output_directory: Some(".texquill".into()),
             ..Default::default()
         };
         assert!(config.arguments().contains(&"-bibfudge".into()));

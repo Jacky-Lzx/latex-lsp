@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeMap, path::Path};
+use texquill::{
     compilation::build,
     language::{features, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::{collections::BTreeMap, path::Path};
 
 fn project(root: &Path, files: &[(&str, &str)]) -> Workspace {
     for (name, source) in files {
@@ -144,7 +144,7 @@ fn futurelet_rejects_braced_dynamic_and_unexpanded_csname_targets() {
         r"\expandafter\futurelet\csname look\dynamic\endcsname\inspect A",
         "% \\futurelet\\lookahead\\inspect A\n\\verb|\\futurelet\\lookahead\\inspect A|",
     ] {
-        let parsed = latex_lsp::parser::syntax::Syntax::latex(&Text::new(source.into()));
+        let parsed = texquill::parser::syntax::Syntax::latex(&Text::new(source.into()));
         assert!(
             parsed
                 .definitions
@@ -222,7 +222,7 @@ fn real_futurelet_renames_preserve_lookahead_and_execute_the_continuation() {
             let compiler = root.join("compiler");
             std::fs::write(&compiler, format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
             std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable: compiler.to_string_lossy().into(),
                 arguments: Some(
                     [

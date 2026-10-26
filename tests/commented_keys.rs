@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, semantic},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 const CALLS: &[(&str, bool)] = &[
     ("cite", true),
@@ -205,7 +205,7 @@ fn commented_list_warning_ranges_and_fixes_preserve_all_comment_text() {
         let diagnostics = build_log::parse(&main, &log);
         assert_eq!(diagnostics[&uri].len(), 2, "{command}: {diagnostics:?}");
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -280,12 +280,12 @@ fn real_commented_citations_complete_and_rename_without_changing_comments_or_aux
     assert_eq!(fixed, source.replace("betBAD", "beta"));
     std::fs::write(&main, &fixed).unwrap();
     workspace.open(main_uri.clone(), fixed.clone(), 8);
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
     let compile = || {
-        let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+        let result = texquill::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(result.status, "success", "{}", result.output);
         result
     };

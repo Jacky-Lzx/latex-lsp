@@ -1,7 +1,7 @@
-use latex_lsp::compilation::build_log::{compilation_analysis, parse};
 use lsp_types::*;
 use serde_json::json;
 use std::collections::BTreeMap;
+use texquill::compilation::build_log::{compilation_analysis, parse};
 
 fn warning(message: impl Into<String>) -> Diagnostic {
     Diagnostic {
@@ -12,7 +12,7 @@ fn warning(message: impl Into<String>) -> Diagnostic {
 }
 fn diagnostics(messages: Vec<Diagnostic>) -> BTreeMap<Url, Vec<Diagnostic>> {
     BTreeMap::from([(
-        Url::parse("file:///tmp/latex-lsp-analysis/main.tex").unwrap(),
+        Url::parse("file:///tmp/texquill-analysis/main.tex").unwrap(),
         messages,
     )])
 }
@@ -33,7 +33,7 @@ fn summary_keeps_distinct_literal_keys_without_counting_repeated_uses() {
         unresolved(true, "章😀"),
     ]);
     items.insert(
-        Url::parse("file:///tmp/latex-lsp-analysis/child.tex").unwrap(),
+        Url::parse("file:///tmp/texquill-analysis/child.tex").unwrap(),
         vec![unresolved(false, "章😀"), unresolved(true, "beta")],
     );
     let mut ignored = unresolved(false, "not-a-warning");
@@ -284,7 +284,7 @@ fn parenthesized_wrapped_keys_preserve_identity_and_diagnostic_ranges() {
                     let items = &parsed[&Url::from_file_path(&root).unwrap()];
                     assert_eq!(items.len(), 1, "{wrapped}");
                     assert_eq!(items[0].message, message, "{wrapped}");
-                    let text = latex_lsp::text::Text::new(source.clone());
+                    let text = texquill::text::Text::new(source.clone());
                     assert_eq!(
                         &source[text.offset(items[0].range.start).unwrap()
                             ..text.offset(items[0].range.end).unwrap()],
@@ -359,7 +359,7 @@ fn incomplete_wrapped_references_preserve_real_file_and_message_boundaries() {
             .find(|item| item.message.contains(expected_key))
             .unwrap();
         let source = std::fs::read_to_string(expected_file).unwrap();
-        let text = latex_lsp::text::Text::new(source.clone());
+        let text = texquill::text::Text::new(source.clone());
         assert_eq!(
             &source[text.offset(complete.range.start).unwrap()
                 ..text.offset(complete.range.end).unwrap()],
@@ -429,7 +429,7 @@ fn pdf_destination_summary_decodes_and_deduplicates_names_across_files_and_backe
         unresolved(true, "emoji😀"),
     ]);
     items.insert(
-        Url::parse("file:///tmp/latex-lsp-analysis/child.tex").unwrap(),
+        Url::parse("file:///tmp/texquill-analysis/child.tex").unwrap(),
         vec![
             warning("pdfTeX warning (dest): name{dest\\(old\\)} has been referenced but does not exist, replaced by a fixed one"),
             destination_warning(false, "emoji😀"),
@@ -618,7 +618,7 @@ fn duplicate_label_summary_preserves_literal_names_and_keeps_other_key_categorie
         destination_warning(true, "dup"),
     ]);
     items.insert(
-        Url::parse("file:///tmp/latex-lsp-analysis/child.tex").unwrap(),
+        Url::parse("file:///tmp/texquill-analysis/child.tex").unwrap(),
         vec![label_warning("O'Connor"), label_warning("章😀")],
     );
     assert_eq!(
@@ -976,7 +976,7 @@ fn missing_character_summary_combines_fonts_files_and_highest_severity() {
         missing_glyph('中', "font-b", DiagnosticSeverity::WARNING),
     ]);
     items.insert(
-        Url::parse("file:///tmp/latex-lsp-analysis/child.tex").unwrap(),
+        Url::parse("file:///tmp/texquill-analysis/child.tex").unwrap(),
         vec![missing_glyph('中', "font-a", DiagnosticSeverity::ERROR)],
     );
     let result = compilation_analysis(&items, false);

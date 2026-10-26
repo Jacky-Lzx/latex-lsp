@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, signature},
     parser::syntax::Syntax,
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
 
 fn workspace(source: &str) -> (tempfile::TempDir, Workspace, Url) {
     let directory = tempfile::tempdir().unwrap();
@@ -332,8 +332,8 @@ fn string_literal_files_stay_out_of_project_dependencies_and_rename_results() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_string_tests_keep_branches_tokens_and_cross_file_rename_results_in_three_engines() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let original = concat!(
         "\\documentclass{article}\\usepackage{etoolbox}\\input{definitions}\n",
@@ -468,7 +468,7 @@ fn real_string_tests_keep_branches_tokens_and_cross_file_rename_results_in_three
             Text::new(broken.clone()).range(start, start + 7)
         );
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -483,7 +483,7 @@ fn real_string_tests_keep_branches_tokens_and_cross_file_rename_results_in_three
             .project
             .build_diagnostic_sources
             .insert(uri.clone(), failed.diagnostic_sources);
-        let actions = latex_lsp::editing::code_actions(
+        let actions = texquill::editing::code_actions(
             &workspace,
             &uri,
             error.range,

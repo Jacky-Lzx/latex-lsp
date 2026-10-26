@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     editing::file_operations,
     language::{features, navigation, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
 
 fn setup(source: &str, filename: &str) -> (tempfile::TempDir, Workspace, Url, Url) {
     let dir = tempfile::tempdir().unwrap();

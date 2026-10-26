@@ -1,78 +1,78 @@
-# 特殊字符诊断与修复
+# Special character diagnostics and fixes
 
-[返回文档目录](README.md) · [编译诊断](diagnostics.md)
+[Back to documentation](README.md) · [Compilation diagnostics](diagnostics.md)
 
-编译器报告正文中的裸 `&`、`#`、`_`、`^` 或多余的对齐分隔符时，服务器会核对日志的源码回显，精确标出出错字符，并提供转义快速修复。
+When the compiler reports bare `&`, `#`, `_`, `^` or redundant alignment delimiters in the text, the server will check the source code echo of the log, accurately mark the error characters, and provide escape quick fixes.
 
-多余 `}` 的删除操作见[多余右花括号](extra-braces.md)。
+For the deletion operation of redundant `}`, see [redundant right curly bracket](extra-braces.md).
 
-数学模式中的 `Double subscript.` / `Double superscript.` 使用独立的[重复上下标](math-scripts.md)诊断和修复。
+`Double subscript.` / `Double superscript.` in math mode diagnosed and repaired using independent [repeat superscript and subscript](math-scripts.md).
 
-## 使用
+## use
 
-保存文件并执行 `latex.build`，在错误位置请求编辑器的代码操作：
+Save the file and execute `latex.build`, requesting the editor's code operation at the wrong location:
 
-| 编译错误 | 快速修复 | 修改结果 |
+| Compilation errors | Quick fixes | Modify results |
 | --- | --- | --- |
 | `Misplaced alignment tab character &.` | `Escape '&' as '\&'` | `&` → `\&` |
 | `Extra alignment tab has been changed to \cr.` | `Escape '&' as '\&'` | `&` → `\&` |
-| `You can't use` 后接 `macro parameter character #` 的模式错误 | `Escape '#' as '\#'` | `#` → `\#` |
-| `Missing $ inserted.`，回显确认 `_` | `Escape '_' as '\_'` | `_` → `\_` |
-| `Missing $ inserted.`，回显确认 `^` | `Escape '^' as '\textasciicircum{}'` | `^` → `\textasciicircum{}` |
+| `You can't use` followed by `macro parameter character #` mode error | `Escape '#' as '\#'` | `#` → `\#` |
+| `Missing $ inserted.`, echo confirmation `_` | `Escape '_' as '\_'` | `_` → `\_` |
+| `Missing $ inserted.`, echo confirmation `^` | `Escape '^' as '\textasciicircum{}'` | `^` → `\textasciicircum{}` |
 
-支持 `#` 在水平、垂直、数学、受限水平和内部垂直模式中的上述错误。例如：
+Support for `#` above bug in horizontal, vertical, math, restricted horizontal and internal vertical modes. For example:
 
 ```tex
 Before & and & after.
 Before # after.
 ```
 
-每个出错字符分别产生诊断和修复。逐项应用后变为：
+Each errored character generates separate diagnostics and repairs. After applying item by item it becomes:
 
 ```tex
 Before \& and \& after.
 Before \# after.
 ```
 
-再次保存并编译，已解决的诊断会清除。修复只替换选中的一个字符，保留同一行的其他内容；表格中的合法 `&` 不会产生这类修复。
+Save and compile again and the resolved diagnostics will be cleared. The fix replaces only the selected character, preserving the rest of the same row; the legal `&` in the table will not produce this kind of fix.
 
-## 多余的对齐分隔符
+## Extraneous alignment separators
 
-表格或数组中的 `&` 多于列格式所允许的数量时，TeX 报告 `Extra alignment tab has been changed to \cr.`。服务器核对内部 `\endtemplate` 读取帧或以该命令结尾的 `<template>` 帧，再将错误定位到实际分隔符；支持普通与展开的错误上下文、`tabular`、数学 `array` 和原始 `\halign`。
+TeX reports `Extra alignment tab has been changed to \cr.` when there are more `&` in a table or array than the column format allows. The server checks the internal `\endtemplate` read frame or the `<template>` frame ending with this command before locating the error to the actual delimiter; supports normal and expanded error contexts, `tabular`, math `array`, and raw `\halign`.
 
-精确诊断使用 `extra-alignment-tab` 代码，仍通过 `data.character` 和 `data.sourceContext` 保存字符与回显。只有源码能确认时才提供转义操作。
+Accurate diagnostics uses the `extra-alignment-tab` code, and still saves characters and echoes through `data.character` and `data.sourceContext`. Escape operations are provided only when the source code can be confirmed.
 
-如果这里需要显示字面 `&`，可以将：
+If you need to display the literal `&` here, you can change:
 
 ```tex
 \begin{tabular}{ll}A & B & C\\\end{tabular}
 ```
 
-修复为：
+Fixed to:
 
 ```tex
 \begin{tabular}{ll}A & B \& C\\\end{tabular}
 ```
 
-如果这里本来就需要第三列，应调整列格式（例如改为 `{lll}`）。转义操作会把选中的分隔符改为当前单元格内的字面字符，需根据内容选择。
+If a third column is required here, the column format should be adjusted (for example, to `{lll}`). The escaping operation will change the selected delimiter to the literal character in the current cell, which needs to be selected according to the content.
 
-不匹配的内部帧、额外用户宏展开帧、重复的缩短回显，以及已加载项目来源中可识别的宏参数保持整行诊断。正常的无参数排版命令后仍可定位分隔符，例如 `\hfil&`。跨文件裸参数、分隔参数和来源边界见[宏来源说明](literal-macro-scopes.md)。
+Unmatched inner frames, extra user macro expansion frames, duplicate shortened echoes, and recognized macro parameters in loaded project sources maintain full line diagnostics. Delimiters can still be positioned after normal typesetting commands without parameters, such as `\hfil&`. For cross-file bare parameters, separated parameters and source boundaries, see [Macro Source Description](literal-macro-scopes.md).
 
-## 文本中的下划线与脱字符
+## Underscores and carets in text
 
-`Missing $ inserted.` 的原因可能是遗漏数学定界符，也可能是在普通文本中输入了 `_` / `^`。如果目标是公式，应补上正确的数学定界符；转义操作适用于确实需要显示字面字符的情况，例如将 `file_name` 改为 `file\_name`。
+`Missing $ inserted.` may be caused by missing math delimiters or by entering `_` / `^` in normal text. If the target is a formula, the correct mathematical delimiter should be added; the escaping operation is suitable for situations where literal characters really need to be displayed, such as changing `file_name` to `file\_name`.
 
-脱字符使用 `\textasciicircum{}` 输出；`\^` 是重音命令，会把后面的字符作为重音对象，因此不作为本操作的替换文本。已有的数学上下标（例如 `$x_1^2$`）保持原样。
+The caret is output using `\textasciicircum{}`; `\^` is an accent command and will treat the following characters as accent objects, so it will not be used as the replacement text for this operation. Existing mathematical superscripts and subscripts (e.g. `$x_1^2$`) remain intact.
 
-只有日志包含准确的 `<inserted text>` / `$` 恢复帧，且紧随其后的源码回显以实际出错的 `_` 或 `^` 结束时，才提供精确诊断和转义操作。TeX 恢复期间在 `\par`、段落结束或 `\end{document}` 产生的连带错误继续保留原诊断；应用修复后重新编译，会清除相应的连带错误。命令实参中的展开栈、其他缺少数学模式的原因和不明确的错误位置不提供此操作。
+Precise diagnostics and escape operations are only provided if the log contains the exact `<inserted text>` / `$` recovery frame and the source code echo that follows ends with the actual errored `_` or `^`. Collateral errors generated at `\par`, end of paragraph, or `\end{document}` during TeX recovery will continue to retain the original diagnostics; recompiling after applying the fix will clear the corresponding collateral errors. Unwinding the stack in command arguments, other reasons for missing math mode, and unclear error locations do not provide this operation.
 
-## 定位与编辑校验
+## Positioning and editing verification
 
-- 支持传统 `!` 日志和“文件名:行号:错误”格式；子文件错误定位到实际来源，位置按 LSP 的 UTF-16 单位计算。
-- 完整的 `l.N` 回显须与源码前缀一致；被 TeX 缩短为 `...` 的回显须能在整行中唯一匹配。
-- 正文特殊字符的精确诊断使用 `unescaped-special-character` 代码，多余对齐分隔符使用 `extra-alignment-tab`；`data.character` 保存字符，`data.sourceContext` 保存用于核对的源码回显。
-- 支持版本化 Code Action 编辑，以及旧客户端的 `latex.applyQuickFix` 命令。请求修复时重新核对编译诊断、当前源码和宏参数；执行旧客户端命令时还会重新核对文档版本。跨文件宏变化后的处理见[修复重校验](literal-macro-scopes.md#修复重校验)。
+- Support traditional `!` log and "filename:linenumber:error" format; subfile errors are located to the actual source, and the position is calculated in UTF-16 units of LSP.
+- The complete `l.N` echo must be consistent with the source code prefix; the echo shortened to `...` by TeX must be uniquely matched in the entire line.
+- The `unescaped-special-character` code is used for accurate diagnostics of special characters in the text, and `extra-alignment-tab` is used for redundant alignment delimiters; `data.character` saves the characters, and `data.sourceContext` saves the source code echo for verification.
+- Supports versioned Code Action editing, and the `latex.applyQuickFix` command for legacy clients. Compilation diagnostics, current source code, and macro parameters are rechecked when a fix is requested; documentation versions are also rechecked when old client commands are executed. For the processing of cross-file macro changes, see [Repair and Recheck](literal-macro-scopes.md#fix-revalidation).
 
-宏展开栈、无法确认的来源、无效行号、源码变化或不唯一的回显保留原诊断，不提供转义编辑。注释、逐字内容、宏定义体和已转义字符也不参与修复。此功能依据已发生的编译错误提供建议，不把所有出现的 `&` / `#` / `_` / `^` 都当成错误。
+Macro expansion stacks, unconfirmed sources, invalid line numbers, source code changes, or non-unique echoes retain the original diagnostics and do not provide escape editing. Comments, verbatim content, macro definition bodies, and escaped characters are also not included in the repair. This function provides suggestions based on the compilation errors that have occurred, and does not treat all occurrences of `&` / `#` / `_` / `^` as errors.
 
-真实引擎的验证方式见[真实工具回归](testing.md)。
+For the verification method of the real engine, see [Real Tool Regression](testing.md).

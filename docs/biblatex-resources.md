@@ -1,8 +1,8 @@
-# biblatex 文献资源
+# biblatex resources
 
-[文档目录](README.md) · [引用命令](biblatex.md) · [文献键与重命名](bibliography.md) · [编译输入检查](build-inputs.md)
+[Documentation](README.md) · [Quote Command](biblatex.md) · [Document Key and Rename](bibliography.md) · [Compile Input Check](build-inputs.md)
 
-## 加载与编辑
+## Loading and editing
 
 ```tex
 \usepackage{biblatex}
@@ -10,59 +10,59 @@
 \addglobalbib[bibencoding=utf8,label={Shared references}]{shared.bib}
 ```
 
-`addbibresource` 添加默认文献资源；`addglobalbib` 添加 biblatex 各个 `refsection` 都使用的全局资源。两者支持路径补全、文件链接、定义跳转、文件或目录移动后的路径更新，以及所加载文献键的导航和跨文件重命名。命令片段保留完整 `.bib` 文件名，参数提示使用 `[options]{file}`。
+`addbibresource` adds default literature resources; `addglobalbib` adds biblatex global resources used by each `refsection`. Both support path completion, file linking, definition jumps, path updates after file or directory moves, as well as navigation of loaded citation keys and cross-file renaming. The command snippet retains the complete `.bib` file name, and the signature help usess `[options]{file}`.
 
-每次调用只读取一个完整文件名，包括扩展名。`{refs}` 只查找名为 `refs` 的文件，不会选择 `refs.bib`；`{refs,part.bib}` 是一个带逗号的文件名。直接调用的资源参数中，`%` 按字面文件名字符处理，不会吞掉后面的引用；路径补全和文件移动保留这些字符及完整扩展名。
+Only a complete filename, including extension, is read per call. `{refs}` only searches for files named `refs` and does not select `refs.bib`; `{refs,part.bib}` is a file name with a comma. Among the resource parameters directly called, `%` is processed according to the literal file name characters and will not swallow subsequent references; path completion and file movement retain these characters and the complete extension.
 
-动态文件名由实际 Biber 日志确认后，也会加入文献依赖并按数据库角色索引，支持非标准扩展名或无扩展名文件。具体规则见[文献编译诊断](bibliography-diagnostics.md#数据库角色与特殊后缀)。
+After dynamic file names are confirmed by actual Biber logs, document dependencies will also be added and indexed by database roles, supporting non-standard extensions or files without extensions. For specific rules, see [Document Compilation and Diagnostics](bibliography-diagnostics.md#database-roles-and-special-suffixes).
 
-共享文献库的键重命名覆盖关联主文档，保留独立项目中的同名条目，并遵循现有的歧义和版本检查。资源作为 BibTeX 数据索引，不导入其中看似 TeX 宏的文字。
+Key renaming of shared libraries overrides the associated root document, retains entries of the same name in standalone projects, and respects existing ambiguities and version checks. Resources are indexed as BibTeX data, and text within them that looks like TeX macros is not imported.
 
-## 静态支持范围
+## Static support range
 
-默认按本地 BibTeX 数据处理，也识别以下可选参数：
+By default, native BibTeX data is processed, and the following optional parameters are also recognized:
 
 - `type=file`、`datatype=bibtex`、`location=local`、`glob=false`。
-- 字面的 `bibencoding`，以及资源标签 `label`；标签按原文保存，宏文字不会被展开为可认证的静态标签。
+- The literal `bibencoding`, and the resource label `label`; the labels are saved as original text, and the macro text will not be expanded into certifiable static labels.
 
-允许选项值外的一层花括号及受分组保护的逗号。远程资源、其他数据格式、通配符展开、未知选项或决定文件选择的动态值不推断为本地依赖。含注释或参数占位符的选项、宏展开文件名，以及前后空白、连续空格、换行等无法确认的路径也不作推断。
+One curly brace and grouping-protected commas outside option values are allowed. Remote resources, other data formats, wildcard expansions, unknown options, or dynamic values that determine file selection are not inferred as local dependencies. Options containing comments or parameter placeholders, macro-expanded file names, and unconfirmed paths such as leading and trailing spaces, consecutive spaces, and newlines will not be inferred.
 
-静态 `\csuse{addglobalbib}`、`\csname addbibresource\endcsname` 和可确认的纯别名共用资源分析；不执行任意宏展开，也不完整模拟自定义命令中的字符类别变化。被其他宏作为数据消费、逐字展示或已重定义的调用不会误提供文件编辑；未执行宏体中的资源不作为确定的缺失文件条件。
+Static `\csuse{addglobalbib}`, `\csname addbibresource\endcsname` and confirmable pure aliases share resource analysis; does not perform arbitrary macro expansion and does not fully emulate character class changes in custom commands. Calls that are consumed as data, displayed verbatim, or have been redefined by other macros will not mistakenly provide file editing; resources in the unexecuted macro body will not be used as determined missing file conditions.
 
-`addsectionbib` 只注册供之后选择的资源，单独出现时不会加入依赖。可确认的 `refsection` 选择替换默认资源并保留全局资源，空列表恢复默认资源；引用键补全、跳转、悬浮、缺失及重复诊断遵循实际分区资源。无法确认的执行路径或消费者分歧保持保护，静态数据库键的引用查找、高亮和安全改名按完整声明身份处理，准备改名和两种工作区编辑格式均检查全部消费者与新名称捕获。
+`addsectionbib` only registers resources for later selection, and will not add dependencies when they appear alone. Confirmable `refsection` selects to replace the default resources and retain global resources, and the empty list restores the default resources; reference key completion, jump, suspension, missing and duplicate diagnostics follow the actual partition resources. Unconfirmed execution paths or consumer disagreements remain protected, reference lookups, highlighting, and safe renames of static database keys are handled as fully declared identities, and all consumers are checked against new name capture in preparation for renames and both workspace edit formats.
 
-前言中可确认的静态资源标签支持分区选择补全、定义跳转、悬浮、查找引用、高亮和改名。最后一个 `label` 选项生效；注册标签优先于字面文件名，`chosen.bib.alias` 也可作为标签使用。改名检查共享消费者以及新名称是否捕获既有标签或文件名选择，无法保证完整性时拒绝编辑；动态标签不提供这些符号编辑。
+The static resource tags that can be confirmed in the preface support partition selection completion, definition jump, hover, search for references, highlighting and renaming. The last `label` option takes effect; registered labels take precedence over literal file names, and `chosen.bib.alias` can also be used as a label. The rename checks the shared consumer and whether the new name captures the existing tag or filename selection, and rejects edits when integrity cannot be guaranteed; dynamic tags do not provide these symbol edits.
 
-## 编译保护
+## Compile protection
 
-静态本地资源在首次编译前就参与未保存内容检查。编译期间补回缺失文献库会使本次结果过期，避免继续发布旧的缺失资源诊断；详细规则见[编译输入与过期结果](build-inputs.md)。
+Static local resources participate in unsaved content checking before first compilation. Completing the missing literature library during compilation will cause the results to expire, preventing the continued release of old missing resource diagnoses; for detailed rules, see [Compilation Input and Expired Results](build-inputs.md).
 
-Biber / BibTeX 报告缺失本地资源时，服务器会定位可确认的资源参数，提供最多 5 个文件名拼写修复；保留完整扩展名及调用选项。具体规则见[文献编译诊断](bibliography-diagnostics.md#缺失文献库)。
-
-
-Biber 的 IDS 别名缓存跨数字分区共享：先前分区加载的别名可以在后续没有本地 IDS 声明、甚至没有本地主键的资源分配中导入原始条目。当前静态资源模型对这种导入保留未知状态，不猜测缺失引用，不返回部分引用图或部分改名。认证同时覆盖 TeX 请求、源码集合成员及数据库关系；独立标签和资源标签继续使用各自的命名空间。
-
-同名 IDS 在不同库中声明时，单独改一个所属主键会使全局映射不一致，因此拒绝该主键编辑；先分别改成独立别名并更新引用后，可以继续认证主键改名。别名的新名称必须检查同一编译项目的全部相关分区，防止捕获原本未定义的引用或关系。未保存的数据库变化会立即撤销或恢复认证。
-
-普通主键及耦合源码主键的新名称也不能占用其他分区的 IDS 名称：Biber 读取同名真实条目时会删除此前的全局别名映射，导致更后面的引用发生变化。不同分区中互不冲突的普通主键仍保留各自身份。
+When Biber/BibTeX reports missing local resources, the server locates the identifiable resource parameters and provides up to 5 filename spelling fixes; retaining full extensions and calling options. For specific rules, see [Document Build diagnostics](bibliography-diagnostics.md#missing-library).
 
 
-IDS 的所属条目还受资源首次加载顺序影响：Biber 按数字分区顺序处理请求，同一数据库仅首次读取时更新全局条目缓存。重新选择默认资源会新建一个数字分区；结束当前分区回到分区 0，则仍在先处理的分区 0 中。没有请求的分区不预加载数据库。
+Biber's IDS alias cache is shared across digital partitions: aliases loaded by previous partitions can import original entries in subsequent resource allocations without local IDS claims, or even local primary keys. The current static resource model retains an unknown state for such imports, does not guess missing references, does not return partial reference maps or partial renames. Authentication also covers TeX requests, source code collection members, and database relationships; independent tags and resource tags continue to use their own namespaces.
 
-返回以前读取的数据库时，缓存别名可能取得另一库的同名主键数据；未引用的真实条目也可能覆盖缓存或删除同名别名。服务器保留各数字分区的实际请求及资源首次加载状态，对这些无法证明本地所属条目的请求、关系与补全保持未知，并拒绝依赖它们的部分引用或编辑。共存主键造成的提供者歧义会继续传递到之后的缓存请求；标签和资源标签仍独立解析。
+When IDSs with the same name are declared in different libraries, changing one of the primary keys alone will cause global mapping inconsistency, so editing of the primary key is rejected. After first changing them to independent aliases and updating the references, you can continue to authenticate the primary key name change. The new name of the alias must check all related partitions of the same compiled project to prevent the capture of references or relationships that were not originally defined. Unsaved database changes immediately revoke or restore certification.
 
-同名 IDS 的所属主键可以在不同数字分区有独立的书籍或源码集合身份。静态读取现在逐资源分配认证导航、悬浮、完整引用和候选，避免把互不共存的同名主键误判为同一条目；全部请求仍受全局别名映射和缓存加载顺序约束。若同一物理引用在不同执行中含义不同，继续拒绝歧义结果。改名仍额外要求跨资源的完整所属关系认证。
+The new names of ordinary primary keys and coupled source code primary keys cannot occupy the IDS names of other partitions: when Biber reads real entries with the same name, it will delete the previous global alias mapping, causing subsequent references to change. Ordinary primary keys that do not conflict with each other in different partitions still retain their respective identities.
 
-跨分区的静态 IDS 别名可独立改名：编辑完整更新本分区内的别名声明、TeX 引用及数据库关系，保留其他分区的同名别名和所有所属主键拼写。新名称必须通过全项目的分区引用、源码集合、关系及 IDS 名称捕获检查；外来缓存导入、共享调用歧义和未保存消费者导致认证不完整时拒绝编辑。源码所属主键的独立改名仍要求全局映射一致。
 
-主键的新名称还会影响全局条目缓存：把 IDS 所属主键改成另一库的普通主键，或者把普通主键改成另一库的 IDS 所属主键，都可能让后续别名取得错误数据。服务器按拟议的新拼写重新认证实际数字分区及首次加载顺序，拒绝改变所属数据来源的编辑；后加载所属库等可证明安全的同名改名继续允许。此检查同时覆盖源码集合与原始主键的耦合编辑，并随未保存数据库更新。
+The belonging entries of an IDS are also affected by the order in which resources are first loaded: Biber processes requests in numerical partition order, and the global entry cache is only updated on the first read from the same database. Reselecting the default resource will create a new digital partition; ending the current partition and returning to partition 0 will still be in the previously processed partition 0. No database is preloaded for partitions that are not requested.
 
-普通资源分区中的 `defcitealias`、`entrydata`、`addtocategory` 保留完整文献键引用，可参与精确导航、查找引用和安全改名，也支持静态命名调用。它们不会向 Biber 发送引用请求，因此不会使数据库提前加载；相关 IDS 查询仍检查实际缓存来源。条件查询及源码集合路径继续单独认证，无法证明完整执行时不返回部分编辑。
+When returning to a previously read database, the cache alias may obtain the primary key data of another database with the same name; the unreferenced real entry may also overwrite the cache or delete the alias with the same name. The server retains the actual request and resource first load status of each digital partition, keeps unknown requests, relationships, and completions that cannot prove local ownership of entries, and rejects partial references or edits that rely on them. Provider ambiguities caused by coexisting primary keys continue to be passed to subsequent cache requests; tags and resource tags are still resolved independently.
 
-IDS 别名名称与静态源码集合同名时，若没有指向该名称的数据库关系、未认证的关系字符串／拼接和通配加载，可按实际请求顺序提供导航、悬浮和完整引用：先请求别名会锁定数据库身份，先声明集合再请求则采用集合身份。多个同名所属主键／别名集合及另一个别名请求也分别认证。涉及关系、通配符、共享物理引用含义冲突或未保存消费者时，无法证明的结果保持未知；此扩展继续拒绝相交名称的改名，候选仍使用独立的严格认证。
+The primary key of an IDS with the same name can have independent book or source code collection identities in different digital partitions. Static reads now allocate authenticated navigation, suspension, complete references and candidates on a resource-by-resource basis to avoid misjudgment of non-coexisting primary keys with the same name as the same entry; all requests are still subject to global alias mapping and cache load order. If the same physical reference has different meanings in different executions, continue to reject ambiguous results. Renaming still additionally requires full ownership authentication across resources.
 
-普通资源分区中，若多个原始条目共享 IDS 名称并保持同一所属主键拼写，主键改名会找全通过任意别名关联的所属条目，一起更新所有主键及其完整引用，保留 IDS 拼写和独立的读取身份。新名称须在整个相关资源范围内空闲；未保存消费者、歧义共享调用、不同所属拼写、预算超限及涉及源码集合的耦合仍拒绝编辑。输出统一校验全部文件版本、重复和重叠编辑。
+Cross-partition static IDS aliases can be renamed independently: the editor will completely update the alias declaration, TeX reference and database relationship in this partition, and retain the same-name aliases and all primary key spellings of other partitions. New names must pass project-wide partition references, source code collections, relationships, and IDS name capture checks; edits are rejected when authentication is incomplete due to foreign cache imports, shared call ambiguities, and unsaved consumers. The independent renaming of the primary key to which the source code belongs still requires consistent global mapping.
 
-手写 `\bibitem` 属于经典文献命名空间，不能定义 biblatex 后台的引用键。已认证的原生条目及静态命名调用不会与数据库定义合并，也不参与数据库主键的改名；仅手写存在的键仍报告缺失。普通项目和数字分区遵循同样规则，源码集合共存、动态键、重定义和未认证转发继续保护。
+The new name of the primary key will also affect the global entry cache: changing the primary key belonging to the IDS to the ordinary primary key of another database, or changing the ordinary primary key to the primary key belonging to the IDS of another database, may cause subsequent aliases to obtain incorrect data. The server re-authenticates the actual number partition and first load sequence according to the proposed new spelling, and rejects edits that change the source of the data; renames with the same name that can be proven safe, such as later loading of the library, continue to be allowed. This check also covers coupled edits of source collections and original primary keys, and is updated with unsaved databases.
 
-普通资源图支持静态 `\ifentryinbib{key}{文本}{文本}` 和 `\ifentrycategory{key}{category}{文本}{文本}` 的键导航、引用与完整改名，两个分支可以为空或含普通文字及注释。这些查询不向 Biber 请求数据，不提前加载数据库；拟议新主键仍检查查询键捕获。分支含命令、参数或特殊 TeX 语法，以及动态键、谓词重定义或源码集合共存时，保持完整图保护。
+`defcitealias`, `entrydata`, and `addtocategory` in the ordinary resource partition retain complete citation key references, which can participate in precise navigation, search for references, and safe renaming, and also support static naming calls. They do not send referral requests to Biber and therefore do not cause the database to be loaded early; related IDS queries still check the actual cached origin. Conditional queries and source code collection paths continue to be authenticated separately, and partial edits will not be returned when complete execution cannot be proven.
+
+When an IDS alias name has the same name as a static source code collection, if there is no database relationship pointing to the name, unauthenticated relationship strings/splicing, and wildcard loading, navigation, hovering, and full references can be provided in the actual request order: requesting the alias first will lock the database identity, and declaring the collection first and then requesting it will adopt the collection identity. Multiple primary key/alias sets belonging to the same name and another alias request are also authenticated separately. Unprovable results remain unknown when relationships, wildcards, shared physical reference meaning conflicts, or unsaved consumers are involved; this extension continues to reject renames of intersecting names, and candidates still use independent strict authentication.
+
+In a common resource partition, if multiple original entries share an IDS name and maintain the same primary key spelling, the primary key rename will find all the associated entries through any aliases, update all primary keys and their complete references together, and preserve the IDS spelling and independent read identity. The new name must be free within the entire scope of the relevant resource; unsaved consumers, ambiguous shared calls, different ownership spellings, budget overruns, and couplings involving source code collections are still rejected for editing. The output uniformly verifies all file versions, duplicates and overlapping edits.
+
+The handwritten `\bibitem` belongs to the classic document namespace and cannot define the reference key of the biblatex background. Authenticated native entries and static naming calls will not be merged with the database definition, nor will they participate in the renaming of the database primary key; keys that only exist by hand are still reported as missing. Ordinary projects and digital partitions follow the same rules, and source collection coexistence, dynamic keys, redefinition, and unauthenticated forwarding continue to be protected.
+
+The ordinary resource map supports key navigation, reference and complete renaming of static `\ifentryinbib{key}{text}{text}` and `\ifentrycategory{key}{category}{text}{text}`. The two branches can be empty or contain ordinary text and comments. These queries do not request data from Biber and do not load the database ahead of time; proposed new primary keys still check for query key capture. Maintain full graph protection when branches containing commands, parameters, or special TeX syntax, as well as dynamic keys, predicate redefinitions, or source code collections coexist.

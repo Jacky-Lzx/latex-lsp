@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeMap, path::Path};
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, semantic},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::{collections::BTreeMap, path::Path};
 
 fn project(root: &Path, bibliography: &str) -> (Workspace, Url, Url) {
     let main = Url::from_file_path(root.join("main.tex")).unwrap();
@@ -14,7 +14,7 @@ fn project(root: &Path, bibliography: &str) -> (Workspace, Url, Url) {
     std::fs::write(root.join("main.tex"),"\\documentclass{article}\n\\addbibresource{refs.bib}\n😀 \\cite{legacy😀,main,other} \\citefield{legacy😀}{title}\n").unwrap();
     std::fs::write(root.join("refs.bib"), bibliography).unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },

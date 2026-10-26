@@ -1,10 +1,10 @@
-# 格式化
+# Formatting
 
-[返回文档目录](README.md) · [编辑功能](editing.md)
+[Back to documentation](README.md) · [Editing features](editing.md)
 
-支持标准 `textDocument/formatting` 全文格式化，默认调用 `tex-fmt`，也可选择 `latexindent`。请将所选工具安装到服务器的 `PATH`，或配置可执行文件的绝对路径。Neovim 可调用 `vim.lsp.buf.format()`。
+Supports standard `textDocument/formatting` document formatting, calling `tex-fmt` by default, and `latexindent` can also be selected. Please install the selected tool to `PATH` of the server, or configure the absolute path to the executable file. Neovim can call `vim.lsp.buf.format()`.
 
-使用 `initializationOptions`（Neovim 的 `init_options`）或 `workspace/didChangeConfiguration` 设置：
+Set using `initializationOptions` (`init_options` for Neovim) or `workspace/didChangeConfiguration`:
 
 ```json
 {
@@ -18,13 +18,13 @@
 }
 ```
 
-- `formatter`：`tex-fmt`（默认）或 `latexindent`。
-- `onType`：默认 `true`，启用下述内置输入时缩进；设为 `false` 可单独关闭。
-- `executable`：默认采用所选工具的名称；可指定完整路径。
-- `arguments`：`null` 使用下述默认参数；数组会完整替换默认参数。自定义时必须保留工具的标准输入模式，`tex-fmt` 使用 `--stdin`，`latexindent` 使用 `-`。参数直接传给进程，不经过 shell。
-- `timeoutSeconds`：默认 10 秒，允许 1–3600 秒。
+- `formatter`: `tex-fmt` (default) or `latexindent`.
+- `onType`: Default is `true`, indent when the following built-in input is enabled; set to `false` to turn it off individually.
+- `executable`: The name of the selected tool is used by default; the full path can be specified.
+- `arguments`: `null` uses the default parameters listed below; the array completely replaces the default parameters. The standard input mode of the tool must be retained when customizing. `tex-fmt` uses `--stdin`, and `latexindent` uses `-`. Parameters are passed directly to the process without going through the shell.
+- `timeoutSeconds`: Default 10 seconds, allow 1–3600 seconds.
 
-切换到 latexindent，例如：
+Switch to latexindent, for example:
 
 ```lua
 init_options = {
@@ -32,43 +32,43 @@ init_options = {
 }
 ```
 
-默认 `tex-fmt` 参数为 `--stdin --tabsize N`；客户端请求制表符缩进时增加 `--usetabs`。工作目录为当前文档所在目录，让工具按自身规则读取项目配置。尚未保存的非文件缓冲区使用工作区目录，没有工作区时继承服务器目录。
+The default `tex-fmt` parameter is `--stdin --tabsize N`; `--usetabs` is added when the client requests tab indentation. The working directory is the directory where the current document is located, allowing the tool to read the project configuration according to its own rules. Non-file buffers that have not yet been saved use the workspace directory, and inherit the server directory when there is no workspace.
 
-默认 `latexindent` 参数包括 `-l '-y=defaultIndent: "缩进"' -`，并通过 `-c` / `-g` 将辅助文件和日志放入独立临时目录，任务结束后删除。`-l` 加载工具支持的本地设置，`defaultIndent` 采用客户端的 `tabSize` 和 `insertSpaces`。使用自定义参数时，缩进、日志和本地配置均由这份参数决定。
+The default `latexindent` parameters include `-l '-y=defaultIndent: "indentation"' -`, and `-c` / `-g` will put auxiliary files and logs into independent temporary directories, which will be deleted after the task is completed. `-l` loads the local settings supported by the tool, and `defaultIndent` adopts the client's `tabSize` and `insertSpaces`. When using custom parameters, indentation, logging, and local configuration are determined by this parameter.
 
-服务器将当前 LaTeX 缓冲区文本写入工具的标准输入，以标准输出生成一个排除相同前后缀的 UTF-16 文本编辑；不覆盖源文件。保持原文档的 LF / CRLF，内容未变化时返回空编辑列表。未保存的缓冲区同样支持；BibTeX 使用下述内置格式化器，`.bst` 暂不格式化。
+The server writes the current LaTeX buffer text to the tool's standard input and produces a UTF-16 text edit on standard output excluding the same suffixes; the source file is not overwritten. Keep the LF/CRLF of the original document, and return an empty edit list if the content has not changed. Unsaved buffers are also supported; BibTeX uses the following built-in formatters, `.bst` is not formatted yet.
 
-## 范围格式化
+## Range formatting
 
-支持标准 `textDocument/rangeFormatting`。使用与全文格式化相同的工具、配置和完整缓冲区输入，因此选中的条目仍使用外层环境的缩进，逐字代码也保留完整上下文。服务器按行内容对齐格式化前后的文本，只返回完全位于请求范围内的修改，选区外内容保持原样。跨越选区边界的换行、合并或其他不可拆分修改会被跳过；可扩大选区或使用全文格式化。需要整理整行缩进时，请从该行第 0 列开始选择。
+Support standard `textDocument/rangeFormatting`. Uses the same tools, configuration, and full buffer input as document formatting, so selected entries still use the indentation of the outer environment, and verbatim code retains full context. The server aligns the text before and after formatting by line content, and only returns modifications that are completely within the requested range, leaving content outside the selection unchanged. Wrapping, merging, or other non-split modifications across selection boundaries are skipped; the selection can be enlarged or document formatting used. When you need to indent the entire line, please start selecting from column 0 of the line.
 
-返回的多个编辑互不重叠，使用原始文档的 UTF-16 坐标。超出行长的列号按 LSP 规则收敛到行尾；归一化后为空的范围返回空编辑列表。逆序、不存在的行或切开 UTF-16 代理对的范围返回 `InvalidParams`。行对齐限制中间匹配表的大小，超过预算的连续改写按一个整体处理，避免大文件消耗无界内存。取消、超时、文档或配置变更与全文格式化采用相同保护。
+Multiple edits are returned non-overlapping, using the UTF-16 coordinates of the original document. Column numbers that exceed the line length are converged to the end of the line according to LSP rules; ranges that are empty after normalization return an empty edit list. Reverse order, non-existent rows, or range slicing of UTF-16 surrogate pairs returns `InvalidParams`. Row alignment limits the size of the intermediate matching table, and consecutive overwrites that exceed the budget are processed as a whole to avoid large files consuming unbounded memory. Cancellations, timeouts, document or configuration changes are subject to the same protections as document formatting.
 
-## 输入时缩进
+## Indent when typing
 
-支持标准 `textDocument/onTypeFormatting`，触发字符为换行和 `}`，需要客户端启用输入时格式化。使用内置局部缩进器，不依赖 `tex-fmt` / `latexindent`，也不读取它们的配置。`formatting.onType: false` 可关闭；目录配置同样生效。
+Supports standard `textDocument/onTypeFormatting`. The trigger characters are line feed and `}`. The client needs to enable input formatting. Uses the built-in local indenter, does not rely on `tex-fmt` / `latexindent`, nor reads their configuration. `formatting.onType: false` can be closed; directory configuration also takes effect.
 
-换行时，以前一行的缩进为基础，根据该行未抵消的环境和花括号分组增加或减少一级；支持 `\\begingroup` / `\\endgroup`、`\\bgroup` / `\\egroup`，`document` 环境不增加一级。当前行开头的 `}` 或 `\\end{环境}` 会减少一级；输入闭合的 `}` 时也会调整该行。前一行开头的关闭符已反映在其缩进中，不会重复减少。
+When wrapping a new line, the indentation of the previous line is used as the basis, and one level is increased or decreased according to the unoffset environment and brace grouping of the line; `\\begingroup` / `\\endgroup`, `\\bgroup` / `\\egroup` are supported, and the `document` environment is not increased by one level. A `}` or `\\end{environment}` at the beginning of the current line is reduced by one level; entering a closing `}` also adjusts the line. The closing character at the beginning of the previous line is already reflected in its indentation and is not reduced repeatedly.
 
-只替换当前行行首的空格和制表符，沿用客户端 `tabSize` / `insertSpaces`；不修改文字、命令、注释或换行。支持未保存缓冲区、UTF-16 和 CRLF。注释中的括号、转义花括号、逐字内容及已知 token 操作数不计入结构；逐字块内部不格式化。已完成宏定义中的环境和分组命令不会影响定义后的缩进，定义正文的花括号仍可提供缩进。BibTeX 和 `.bst` 暂无输入时格式化。
+Only replace the spaces and tabs at the beginning of the current line and use the client `tabSize` / `insertSpaces`; do not modify the text, commands, comments or line breaks. Supports unsaved buffers, UTF-16 and CRLF. Parentheses, escaped braces, verbatim content, and known token operands in comments are not included in the structure; verbatim blocks are not formatted internally. Environment and grouping commands in a completed macro definition do not affect the indentation after the definition, and the curly braces in the definition body still provide indentation. BibTeX and `.bst` are currently formatting without input.
 
-环境和分组命令复用项目级参数分析：用户宏参数中的命令不增减环境缩进，参数自身的花括号仍用于编辑分组内容。支持静态 `csuse` / `csname` 调用、可确认的纯转发别名和跨文件未保存定义；原语被重定义时按用户宏的参数语法处理。`noexpand` 仅抑制一个控制 token，静态命名调用后的空白和分组遵循相同的单 token 规则。
+Environment and group command reuse project-level parameter analysis: commands in user macro parameters do not increase or decrease the environment indentation, and the curly braces of the parameters themselves are still used to edit group content. Supports static `csuse` / `csname` calls, confirmable pure forwarding aliases and cross-file unsaved definitions; primitives are processed according to the parameter syntax of user macros when they are redefined. `noexpand` suppresses only one control token, whitespace and grouping after static naming calls follow the same single-token rules.
 
-这是相邻行的缩进辅助，不执行任意宏展开，也不会重排整个文档。跨行或动态环境名、超过 64 KiB 的行、超过 4096 列的缩进，以及项目分析范围超过 2 MiB 源码、1024 个定义或 32768 个命令时会跳过；项目索引不完整时同样不猜测参数上下文。在正文中间的换行请求和普通命令参数结束处输入 `}` 不会触发整行重排。可用全文或范围格式化统一已有文档的布局。
+This is an indentation aid for adjacent lines without performing any macro expansion or reflowing the entire document. Cross-line or dynamic environment names, lines exceeding 64 KiB, indentations exceeding 4096 columns, and project analysis scope exceeding 2 MiB of source code, 1024 definitions, or 32768 commands are skipped; parameter context is also not guessed when the project index is incomplete. Entering `}` at the end of a line break request in the middle of the text and an ordinary command parameter will not trigger the entire line to be reflowed. You can unify the layout of existing documents with full-text or range formatting.
 
-## BibTeX 格式化
+## BibTeX formatting
 
-BibTeX / biblatex 文献缓冲区支持全文与范围格式化，无需安装外部工具。服务器复用文献条目及表达式解析，只调整完整普通条目的字段外部空白：每个字段换行并缩进，`=` 两侧各保留一个空格，关闭定界符另起一行。缩进采用请求的 `tabSize` / `insertSpaces`；不添加或删除逗号。
+BibTeX / biblatex bibliographic buffer supports full-text and range formatting without the need to install external tools. The server reuses document entries and expression parsing, and only adjusts the external white space of the fields of complete ordinary entries: each field is newlined and indented, leaving a space on both sides of `=`, closing the delimiter and starting a new line. Indentation takes the requested `tabSize`/`insertSpaces`; no commas are added or removed.
 
-字段值及其内部换行、花括号保护、大小写、字符串拼接、键名、字段和条目顺序保持原样。注释及维持注释边界的空白保持原样，因此含注释的部分可能保留原有布局。新换行沿用文档的 LF / CRLF，原有混合换行不会被统一。不完整条目、无效赋值、无字段条目以及 `@string`、`@preamble`、`@comment` 保持原样。
+Field values and their internal wrapping, brace protection, case, string concatenation, key names, field and entry order remain intact. Comments and the whitespace that maintains comment boundaries remain intact, so sections containing comments may retain their original layout. New line breaks follow the LF / CRLF of the document, and the original mixed line breaks will not be unified. Incomplete entries, invalid assignments, no-field entries, and `@string`, `@preamble`, `@comment` remain as is.
 
-范围请求直接筛选位于选区内的空白修改，支持相邻单行条目和未命名文献缓冲区。LaTeX 的 `formatter`、`executable` 和 `arguments` 不用于文献格式化。任务在后台运行，共用并发上限、取消及过期结果校验；输出同样限制为 16 MiB。服务器只返回编辑，不写入文献数据库。
+Range requests filter directly for blank modifications located within the selection, supporting adjacent single-line entries and unnamed document buffers. LaTeX's `formatter`, `executable` and `arguments` are not used for document formatting. The tasks run in the background and share the concurrency upper limit, cancellation and expiration result verification; the output is also limited to 16 MiB. The server only returns edits and does not write to the literature database.
 
-格式化在后台执行，期间仍可编辑和发送其他请求。文档内容、版本、语言类型或格式化配置变化后，返回 `ContentModified`，请重新请求格式化。最多同时运行 4 个格式化任务。取消请求、超时、shutdown 和连接断开会终止任务；Unix 同时终止子进程组。
+Formatting is performed in the background, while editing and other requests can still be sent. After the document content, version, language type or formatting configuration changes, `ContentModified` is returned. Please request formatting again. Run up to 4 formatting tasks simultaneously. Cancellation of requests, timeouts, shutdowns, and disconnections terminate tasks; Unix also terminates child process groups.
 
-工具缺失、非零退出、无效 UTF-8、非空文档对应空输出或标准输出超过 16 MiB 时返回错误，不生成编辑。实际排版及逐字环境处理遵循所选工具的规则。
+An error is returned when the tool is missing, non-zero exit, invalid UTF-8, empty output for a non-empty document, or stdout exceeds 16 MiB, and no edits are generated. The actual typesetting and verbatim environment processing follows the rules of the chosen tool.
 
-验证：
+verify:
 
 ```sh
 cargo test --locked --lib formatting
@@ -83,4 +83,4 @@ cargo test --locked --test protocol formatting_with_real_tex_fmt -- --ignored
 cargo test --locked --test protocol formatting_with_real_latexindent -- --ignored
 ```
 
-最后两项分别需要真实 `tex-fmt` / `latexindent`，验证四空格缩进、逐字内容、CRLF、UTF-16、重复格式化及不写入源文件。默认测试使用独立工具夹具验证两种后端的参数、缓冲区输入、配置更新、错误、超时、取消、过期结果和进程清理。
+The last two items require true `tex-fmt` / `latexindent` respectively, verify four-space indentation, verbatim content, CRLF, UTF-16, repeated formatting and not writing the source file. The default test uses independent tool fixtures to verify parameters, buffer inputs, configuration updates, errors, timeouts, cancellations, expired results, and process cleanup for both backends.

@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::sync::atomic::AtomicBool;
+use texquill::{
     compilation::{build, build_log},
     config::BuildConfig,
     editing,
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::sync::atomic::AtomicBool;
 
 const PNG: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0,
@@ -236,7 +236,7 @@ fn real_shortened_path_contexts_reject_wrong_repairs_and_preserve_unique_repairs
                 let mut expected = source.clone();
                 expected.replace_range(start..start + name.len(), &correct);
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         code_action_literals: true,
                         ..Default::default()
@@ -271,7 +271,7 @@ fn real_shortened_path_contexts_reject_wrong_repairs_and_preserve_unique_repairs
                     "{engine}/{command}/{ambiguous}: {}",
                     after.output
                 );
-                assert!(directory.path().join("build/latex-lsp/main.pdf").is_file());
+                assert!(directory.path().join("build/texquill/main.pdf").is_file());
             }
         }
     }

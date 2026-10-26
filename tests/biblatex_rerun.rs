@@ -1,5 +1,5 @@
-use latex_lsp::compilation::build_log::{compilation_analysis, parse};
 use serde_json::json;
+use texquill::compilation::build_log::{compilation_analysis, parse};
 
 #[test]
 fn biblatex_backend_requests_report_the_tool_and_required_latex_pass() {
@@ -159,7 +159,7 @@ fn continuation_sentences_are_kept_without_crossing_log_boundaries() {
         "\n",
         "LaTeX Warning: Another warning.\n",
         "! Undefined control sequence.\nl.1 \\bad\n",
-        "[latex-lsp: middle of compiler output omitted]\n",
+        "[texquill: middle of compiler output omitted]\n",
         ")\n(./main.tex\n",
     ] {
         let log =

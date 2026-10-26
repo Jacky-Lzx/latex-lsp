@@ -1,15 +1,15 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn project(root: &Path, bibliography: &str) -> (Workspace, Url, Url) {
     std::fs::write(root.join("main.tex"), r"\documentclass{article}\begin{document}中文😀 \cite{alpha}\bibliography{refs}\end{document}").unwrap();
     std::fs::write(root.join("refs.bib"), bibliography).unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },

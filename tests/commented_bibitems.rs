@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, semantic},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///commented-bibitems/{name}")).unwrap();
@@ -228,12 +228,12 @@ fn real_bibitem_note_boundaries_keep_prose_and_actual_auxiliary_keys_intact() {
         std::fs::write(path, source).unwrap();
         workspace.open(Url::from_file_path(path).unwrap(), source.into(), 7);
     }
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
     let compile = || {
-        let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+        let result = texquill::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(result.status, "success", "{}", result.output);
         result
     };
@@ -338,7 +338,7 @@ fn commented_bibitems_supply_static_candidates_for_precise_missing_citation_repa
         Range::new(Position::new(4, 0), Position::new(4, 6))
     );
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -395,12 +395,12 @@ fn real_commented_bibitem_rename_updates_aliases_and_keeps_same_named_labels_ind
         std::fs::write(path, source).unwrap();
         workspace.open(Url::from_file_path(path).unwrap(), source.into(), 7);
     }
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
     let compile = || {
-        let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+        let result = texquill::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(result.status, "success", "{}", result.output);
         result
     };

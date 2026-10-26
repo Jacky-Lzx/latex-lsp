@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::sync::atomic::AtomicBool;
+use texquill::{
     compilation::{build, build_log},
     config::BuildConfig,
     editing,
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::sync::atomic::AtomicBool;
 
 fn parse(source: &str, context: &str, numbered: bool) -> Diagnostic {
     let directory = tempfile::tempdir().unwrap();
@@ -273,7 +273,7 @@ fn named_argument_errors_reuse_versioned_macro_spelling_repairs() {
     let diagnostics = build_log::parse(&main, &format!("(./main.tex\n./main.tex:1: Undefined control sequence.\n<argument> \\keynme\nl.1 {source}\n)\n"));
     let diagnostic = diagnostics[&uri][0].clone();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             code_action_literals: true,
             ..Default::default()
@@ -335,7 +335,7 @@ fn real_named_argument_macro_fixes_restore_successful_compilation() {
                 before.output
             );
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     code_action_literals: true,
                     ..Default::default()
@@ -353,7 +353,7 @@ fn real_named_argument_macro_fixes_restore_successful_compilation() {
             assert!(main
                 .parent()
                 .unwrap()
-                .join("build/latex-lsp/main.pdf")
+                .join("build/texquill/main.pdf")
                 .is_file());
         }
     }
@@ -397,7 +397,7 @@ fn real_multiple_name_operand_repairs_restore_successful_compilation() {
                     )
                 });
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     code_action_literals: true,
                     ..Default::default()
@@ -415,7 +415,7 @@ fn real_multiple_name_operand_repairs_restore_successful_compilation() {
             assert!(main
                 .parent()
                 .unwrap()
-                .join("build/latex-lsp/main.pdf")
+                .join("build/texquill/main.pdf")
                 .is_file());
         }
     }

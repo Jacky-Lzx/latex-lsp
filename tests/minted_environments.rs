@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::build_log,
     editing::{self, file_operations},
     language::{features, navigation, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -75,7 +75,7 @@ fn header_markers_mixed_end_lines_and_closing_suffixes_remain_literal() {
             let source = format!("{before}{block}{after}");
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -372,7 +372,7 @@ fn real_minted_environment_boundaries_and_versioned_renames_match_both_reader_mo
             let body = "\\end{other}\\end{minted}\\label{falseend}\n\\label{kept}\\label{phantom} % MINTEDBODY\n";
             let source = format!("\\documentclass{{article}}\n\\usepackage[{options}]{{minted}}\n\\begin{{document}}\n\\label{{kept}}\n\\begin{{minted}}[label={{\\detokenize{{\\end{{minted}}}}}}]\n{{latex}}\n{body}\\end{{minted}}{tail}\nReal.\\ref{{kept}}\n\\end{{document}}\n");
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },

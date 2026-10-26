@@ -273,7 +273,7 @@ fn diagnostics_for(
             Some(Diagnostic {
                 range,
                 severity: Some(DiagnosticSeverity::WARNING),
-                source: Some("latex-lsp".into()),
+                source: Some("texquill".into()),
                 code: Some(NumberOrString::String(format!("undefined-{kind}"))),
                 message: format!("Undefined {kind} `{name}`"),
                 data: Some(serde_json::json!({"key":name,"citation":citation})),

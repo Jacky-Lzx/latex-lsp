@@ -1,6 +1,6 @@
-# 项目配置与作用域
+# Project settings and scope
 
-编辑器初始化选项和 `workspace/didChangeConfiguration` 设置默认值。项目可以通过工作区目录下的 `.latex-lsp.json` 覆盖编译、格式化和诊断选项；子目录配置继承上级配置，距离文档最近的文件优先。仅查找文档所在工作区文件夹内的祖先目录；未配置工作区时只读取文档目录。
+Editor initialization options and `workspace/didChangeConfiguration` set default values. The project can override the compilation, formatting and diagnostic options through `.texquill.json` in the workspace directory; the subdirectory configuration inherits the upper-level configuration, and the file closest to the document takes precedence. Only the ancestor directories in the workspace folder where the document is located are searched; when the workspace is not configured, only the documentation is read.
 
 ```json
 {
@@ -17,10 +17,10 @@
 }
 ```
 
-`projects` 的键是相对于该配置文件目录的主文档路径，值是部分配置。选中主文档后才应用对应覆盖项；同一主文档的子文件使用该覆盖项。每层先应用普通配置，再应用匹配的主文档配置。`build.rootFile` 相对于声明它的配置目录解析；其他编译路径仍遵守编译指南。
+The key of `projects` is the main document path relative to the configuration file directory, and the value is the partial configuration. The corresponding override is applied only after the main document is selected; subfiles in the same main document use the override. Each layer applies the normal configuration first, and then applies the matching main document configuration. `build.rootFile` is resolved relative to the configuration directory in which it is declared; other compilation paths still adhere to the compilation guidelines.
 
-同一工作区内的独立主文档各自限定符号范围，尚未写入磁盘、但已声明 `documentclass` 或 `begin{document}` 的主文档也保持独立。没有所属主文档的缓冲区可共享所在工作区文件夹的符号；不同工作区文件夹之间隔离。当前文件通过静态加载命令显式引用的源码与文献仍保留在作用域内，即使这些依赖位于工作区目录外。
+Independent root documents in the same workspace each have their own symbol ranges, as do root documents that have not yet been written to disk but have declared `documentclass` or `begin{document}`. Buffers that do not belong to the main document can share symbols of the workspace folder in which they are located; different workspace folders are isolated. Source code and documents explicitly referenced by the current file through the static load command remain in scope, even if these dependencies are located outside the workspace directory.
 
-服务器缓存配置文件的解析结果，文件元数据变化或文件监听事件会刷新缓存。错误配置会在文档开头产生 `project-configuration` 警告，该层配置被忽略。文件最大 1 MiB，最多向上检查 32 层。
+The server caches the parsing results of the configuration file. Changes in file metadata or file listening events will refresh the cache. Incorrect configuration will produce a `project-configuration` warning at the beginning of the document, and the layer configuration is ignored. File size is up to 1 MiB and checks up to 32 layers upward.
 
-`distribution` 和 `indexing` 属于服务器级设置，请在编辑器初始化选项或配置通知中设置。
+`distribution` and `indexing` are server-level settings, please set them in the editor initialization options or configuration notifications.

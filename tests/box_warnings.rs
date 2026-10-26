@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
+use texquill::{compilation::build_log, text::Text};
 
 fn wrap(message: &str, width: usize, newline: &str) -> String {
     message
@@ -154,7 +154,7 @@ fn incomplete_box_headers_do_not_consume_source_switches_other_diagnostics_or_tr
     for boundary in [
         "(./child.tex\n./child.tex:2: Child error.\n)\n",
         ")\n(./child.tex\n./child.tex:2: Child error.\n)\n",
-        "[latex-lsp: middle of compiler output omitted]\n(./child.tex\n./child.tex:2: Child error.\n)\n",
+        "[texquill: middle of compiler output omitted]\n(./child.tex\n./child.tex:2: Child error.\n)\n",
         "./child.tex:2: Child error.\n",
         "! Other error.\nl.3 Third.\n",
         "Package audit Warning: Independent warning on input line 3.\n",

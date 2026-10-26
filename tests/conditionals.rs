@@ -1,8 +1,6 @@
-use latex_lsp::{
-    compilation::build, language::features, project::workspace::Workspace, text::Text,
-};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path, sync::atomic::AtomicBool};
+use texquill::{compilation::build, language::features, project::workspace::Workspace, text::Text};
 
 fn setup(root: &Path, files: &[(&str, &str)]) -> Workspace {
     for (name, source) in files {
@@ -216,7 +214,7 @@ fn real_conditional_renames_preserve_true_false_and_local_group_behavior() {
         &[("main.tex", source), ("definitions.tex", definitions)],
     );
     let main = root.join("main.tex");
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -456,7 +454,7 @@ fn boolean_operations_provide_signatures_without_confusing_expressions_with_name
         let source = marked.replace('¦', "");
         let workspace = setup(directory.path(), &[("main.tex", &source)]);
         let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
-        let help = latex_lsp::language::signature::help(
+        let help = texquill::language::signature::help(
             &workspace,
             &uri,
             Text::new(source).position(marked.find('¦').unwrap()),
@@ -482,7 +480,7 @@ fn real_ifthen_and_etoolbox_boolean_renames_preserve_values_and_group_scoping() 
         let source = format!("\\documentclass{{article}}\\usepackage{{{package}}}\\input{{definitions}}\n\\begin{{document}}\n{operations}Text.\\end{{document}}\n");
         let workspace = setup(root, &[("main.tex", &source), ("definitions.tex", &definitions)]);
         let main = root.join("main.tex");
-        let config = latex_lsp::config::BuildConfig { executable: "pdflatex".into(), ..Default::default() };
+        let config = texquill::config::BuildConfig { executable: "pdflatex".into(), ..Default::default() };
         let before = build::run(&main, &config, &AtomicBool::new(false));
         assert_eq!(before.status, "success", "{}", before.output);
         let uri = Url::from_file_path(root.join("definitions.tex")).unwrap();
@@ -615,7 +613,7 @@ fn real_boolean_expression_renames_preserve_nested_tests_expandable_tests_and_fi
         &[("main.tex", source), ("definitions.tex", definitions)],
     );
     let main = root.join("main.tex");
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         timeout_seconds: 5,
         ..Default::default()

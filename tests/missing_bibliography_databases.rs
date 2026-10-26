@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::path::Path;
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -173,7 +173,7 @@ fn database_fixes_preserve_other_items_comments_directories_suffixes_and_legacy_
             );
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     apply_edits: true,
                     versioned_edits: true,
@@ -258,7 +258,7 @@ fn database_candidates_are_bounded_and_cannot_introduce_commas_spaces_or_wrong_e
     std::fs::write(root.join("main.tex"), source).unwrap();
     let main = uri(root, "main.tex");
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             versioned_edits: true,
             ..Default::default()
@@ -304,19 +304,19 @@ fn default_latexmk_preserves_prebuilt_bibliographies_and_reports_missing_databas
         for suffix in ["", ".bib"] {
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path();
-            let output = root.join("build/latex-lsp");
+            let output = root.join("build/texquill");
             std::fs::create_dir_all(&output).unwrap();
             let source = format!("\\documentclass{{article}}\n\\begin{{document}}\n\\cite{{one}}\\bibliographystyle{{plain}}\\bibliography{{reffs{suffix}}}\n\\end{{document}}\n");
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let bbl =
                 "\\begin{thebibliography}{1}\n\\bibitem{one}Expected.\n\\end{thebibliography}\n";
             std::fs::write(output.join("main.bbl"), bbl).unwrap();
-            let config = latex_lsp::config::BuildConfig {
-                engine: latex_lsp::config::Engine::from_program(engine),
+            let config = texquill::config::BuildConfig {
+                engine: texquill::config::Engine::from_program(engine),
                 ..Default::default()
             };
             let run = || {
-                latex_lsp::compilation::build::run(
+                texquill::compilation::build::run(
                     &root.join("main.tex"),
                     &config,
                     &Default::default(),

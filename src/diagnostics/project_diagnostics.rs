@@ -125,7 +125,7 @@ pub(crate) fn duplicates(
             range: Range::new(start, end),
             severity: Some(DiagnosticSeverity::WARNING),
             code: Some(NumberOrString::String("duplicate-definition".into())),
-            source: Some("latex-lsp".into()),
+            source: Some("texquill".into()),
             message: format!("Duplicate {kind} `{name}` across project files"),
             related_information: Some(
                 related

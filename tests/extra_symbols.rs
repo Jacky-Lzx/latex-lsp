@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace, text::Text};
 fn edits(source: &str, changes: &[TextEdit]) -> String {
     let mut changes = changes.to_vec();
     changes.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));

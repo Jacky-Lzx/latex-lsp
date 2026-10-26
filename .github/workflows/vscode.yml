@@ -27,5 +27,5 @@ jobs:
         working-directory: editors/vscode
       - uses: actions/upload-artifact@v4
         with:
-          name: latex-lsp-vscode
-          path: editors/vscode/latex-lsp.vsix
+          name: texquill-vscode
+          path: editors/vscode/texquill.vsix

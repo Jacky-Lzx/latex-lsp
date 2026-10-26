@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "invalid-bibliography-xdata";
 fn uri(root: &Path, name: &str) -> Url {
@@ -144,7 +144,7 @@ fn xdata_sources_require_complete_prior_inputs_and_case_sensitive_unique_normali
         format!("{}{}{record}", found("refs.data"), found("missing.data")),
         format!("{}ERROR - Earlier failure\n{record}", found("refs.data")),
         format!(
-            "{}[latex-lsp: middle of compiler output omitted]\n{record}",
+            "{}[texquill: middle of compiler output omitted]\n{record}",
             found("refs.data")
         ),
         format!("{}{}{record}", found("refs.data"), found("duplicate.data")),
@@ -325,7 +325,7 @@ fn xdata_ranges_refresh_after_saved_edits_without_guessed_repairs() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },

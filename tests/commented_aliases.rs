@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, semantic},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///commented-aliases/{name}")).unwrap();
@@ -246,12 +246,12 @@ fn real_alias_completion_and_three_file_citation_rename_keep_the_alias_working()
     assert_eq!(completed, alias_source.replace("\n alBAD %", "\nalpha%"));
     std::fs::write(&aliases, &completed).unwrap();
     workspace.open(alias_uri.clone(), completed.clone(), 8);
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
     let compile = || {
-        let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+        let result = texquill::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(result.status, "success", "{}", result.output);
         result
     };

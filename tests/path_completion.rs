@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn apply_completion(workspace: &mut Workspace, uri: &Url, marked: &str, label: &str) -> String {
     let offset = marked.find('|').unwrap();
@@ -122,7 +122,7 @@ fn input_completions_keep_non_tex_extensions_and_links_do_not_infer_them() {
     workspace
         .documents
         .insert(uri.clone(), Document::new(&uri, source.into(), Some(1)));
-    let links = latex_lsp::language::navigation::document_links(&workspace, &uri);
+    let links = texquill::language::navigation::document_links(&workspace, &uri);
     assert_eq!(links.len(), 8);
     assert_eq!(links[0].range.start.line, 1);
     assert_eq!(links[1].range.start.line, 3);
@@ -180,7 +180,7 @@ fn support_source_input_completions_preserve_native_suffix_priority() {
             let completed = apply_completion(&mut workspace, &main, &marked, chosen);
             workspace.open(main.clone(), completed, 2);
             assert_eq!(
-                latex_lsp::language::navigation::document_links(&workspace, &main)[0].target,
+                texquill::language::navigation::document_links(&workspace, &main)[0].target,
                 Some(Url::from_file_path(root.join(chosen)).unwrap())
             );
         }
@@ -507,7 +507,7 @@ fn package_and_database_completions_match_compacted_names_and_replace_raw_utf16_
             assert!(item.filter_text.as_ref().unwrap().starts_with(typed));
             workspace.open(uri.clone(), completed, 2);
             assert_eq!(
-                latex_lsp::language::navigation::document_links(&workspace, &uri)[0].target,
+                texquill::language::navigation::document_links(&workspace, &uri)[0].target,
                 Some(Url::from_file_path(root.join(format!("mydir/文献.{ext}"))).unwrap())
             );
         }
@@ -659,9 +659,9 @@ fn completed_multiline_package_paths_load_the_suggested_file_in_real_compilers()
         assert!(completed.contains(r"\usepackage{mylibs/localpkg}"));
         std::fs::write(&main, &completed).unwrap();
         workspace.open(uri.clone(), completed, 2);
-        let outcome = latex_lsp::compilation::build::run(
+        let outcome = texquill::compilation::build::run(
             &main,
-            &latex_lsp::config::BuildConfig {
+            &texquill::config::BuildConfig {
                 executable: engine.into(),
                 ..Default::default()
             },
@@ -674,7 +674,7 @@ fn completed_multiline_package_paths_load_the_suggested_file_in_real_compilers()
             outcome.output
         );
         assert_eq!(
-            latex_lsp::language::navigation::document_links(&workspace, &uri)[0].target,
+            texquill::language::navigation::document_links(&workspace, &uri)[0].target,
             Some(Url::from_file_path(root.join("mylibs/localpkg.sty")).unwrap())
         );
     }
@@ -707,9 +707,9 @@ fn unicode_input_completions_read_the_suggested_file_in_real_compilers() {
             let completed = apply_completion(&mut workspace, &uri, &marked, "目录/");
             std::fs::write(&main, &completed).unwrap();
             workspace.open(uri.clone(), completed, 2);
-            let outcome = latex_lsp::compilation::build::run(
+            let outcome = texquill::compilation::build::run(
                 &main,
-                &latex_lsp::config::BuildConfig {
+                &texquill::config::BuildConfig {
                     executable: engine.into(),
                     ..Default::default()
                 },
@@ -727,7 +727,7 @@ fn unicode_input_completions_read_the_suggested_file_in_real_compilers() {
             );
             assert!(outcome.inputs.unwrap().contains(&target));
             assert_eq!(
-                latex_lsp::language::navigation::document_links(&workspace, &uri)[0].target,
+                texquill::language::navigation::document_links(&workspace, &uri)[0].target,
                 Some(target.clone())
             );
         }

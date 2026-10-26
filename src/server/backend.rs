@@ -759,7 +759,7 @@ impl Backend {
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
-                name: "latex-lsp".into(),
+                name: "texquill".into(),
                 version: Some(env!("CARGO_PKG_VERSION").into()),
             }),
         })
@@ -785,13 +785,13 @@ impl Backend {
                 .collect::<Vec<_>>()
                 .join(",");
             let registration = Registration {
-                id: "latex-lsp-watch-files".into(),
+                id: "texquill-watch-files".into(),
                 method: "workspace/didChangeWatchedFiles".into(),
                 register_options: Some(serde_json::json!({
                     "watchers": [
                         {"globPattern": format!("**/*.{{{}}}",workspace::SOURCE_EXTENSIONS.join(",")), "kind": 7},
                         {"globPattern": format!("**/*.{{{binary_inputs}}}"), "kind": 7},
-                        {"globPattern": "**/{.latexmkrc,latexmkrc,.latex-lsp.json}", "kind": 7},
+                        {"globPattern": "**/{.latexmkrc,latexmkrc,.texquill.json}", "kind": 7},
                         {"globPattern": "**/*", "kind": 5}
                     ]
                 })),
@@ -806,7 +806,7 @@ impl Backend {
             }
         }
         self.client
-            .log_message(MessageType::INFO, "latex-lsp ready")
+            .log_message(MessageType::INFO, "texquill ready")
             .await;
     }
 

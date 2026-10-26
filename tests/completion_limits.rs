@@ -1,8 +1,8 @@
-use latex_lsp::{
+use lsp_types::{CompletionItem, Url};
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
 };
-use lsp_types::{CompletionItem, Url};
 
 fn complete(source: &str, kind: &str, prefix: &str, limit: usize) -> Vec<CompletionItem> {
     let uri = Url::parse(&format!("file:///completion-limits/main.{kind}")).unwrap();

@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::build,
     editing::file_operations,
     language::{features, navigation},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 const STYLE: &str = r#"ENTRY { title } {} {}
 FUNCTION {book} { "\bibitem{" write$ cite$ write$ "}" write$ newline$ title write$ newline$ }
@@ -239,8 +239,8 @@ fn commented_comma_style_names_keep_real_bibtex_inputs_after_file_and_directory_
         .unwrap();
         let mut source = "\\documentclass{article}\r\n\\begin{document}\r\n\\cite{example}\r\n\\bibliographystyle{% keep styles/phantom\r\n  styles/local,part% tail\r\n  }\r\n\\bibliography{references}\r\n\\end{document}\r\n".to_string();
         let main = uri(root, "main.tex");
-        let config = latex_lsp::config::BuildConfig {
-            engine: latex_lsp::config::Engine::from_program(engine),
+        let config = texquill::config::BuildConfig {
+            engine: texquill::config::Engine::from_program(engine),
             ..Default::default()
         };
         let mut workspace = Workspace::default();

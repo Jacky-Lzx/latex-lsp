@@ -1,4 +1,4 @@
-use latex_lsp::project::workspace::Workspace;
+use texquill::project::workspace::Workspace;
 
 #[test]
 fn index_limits_report_truncation_and_exclude_build_directories() {

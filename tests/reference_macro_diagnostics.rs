@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::sync::atomic::AtomicBool;
+use texquill::{
     compilation::{build, build_log},
     config::BuildConfig,
     editing,
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::sync::atomic::AtomicBool;
 
 fn parse(source: &str, context: &str, numbered: bool) -> Diagnostic {
     let directory = tempfile::tempdir().unwrap();
@@ -177,7 +177,7 @@ fn key_macro_diagnostics_reuse_versioned_command_spelling_fixes() {
         let diagnostics = build_log::parse(&main, &format!("(./main.tex\n./main.tex:1: Undefined control sequence.\n<argument> \\keynme\nl.1 {source}\n)\n"));
         let diagnostic = diagnostics[&uri][0].clone();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 versioned_edits: true,
                 code_action_literals: true,
                 ..Default::default()
@@ -232,7 +232,7 @@ fn real_key_macro_repairs_restore_successful_compilation() {
                     )
                 });
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     code_action_literals: true,
                     ..Default::default()
@@ -250,7 +250,7 @@ fn real_key_macro_repairs_restore_successful_compilation() {
             assert!(main
                 .parent()
                 .unwrap()
-                .join("build/latex-lsp/main.pdf")
+                .join("build/texquill/main.pdf")
                 .is_file());
         }
     }
@@ -353,7 +353,7 @@ fn real_additional_key_macro_repairs_restore_successful_compilation() {
                     )
                 });
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     code_action_literals: true,
                     ..Default::default()
@@ -371,7 +371,7 @@ fn real_additional_key_macro_repairs_restore_successful_compilation() {
             assert!(main
                 .parent()
                 .unwrap()
-                .join("build/latex-lsp/main.pdf")
+                .join("build/texquill/main.pdf")
                 .is_file());
         }
     }
@@ -484,7 +484,7 @@ fn real_remaining_direct_key_macro_repairs_restore_successful_compilation() {
                     )
                 });
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     code_action_literals: true,
                     ..Default::default()
@@ -502,7 +502,7 @@ fn real_remaining_direct_key_macro_repairs_restore_successful_compilation() {
             assert!(main
                 .parent()
                 .unwrap()
-                .join("build/latex-lsp/main.pdf")
+                .join("build/texquill/main.pdf")
                 .is_file());
         }
     }
@@ -628,7 +628,7 @@ fn real_prefixed_key_macro_repairs_restore_successful_compilation() {
                     )
                 });
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     code_action_literals: true,
                     ..Default::default()
@@ -646,7 +646,7 @@ fn real_prefixed_key_macro_repairs_restore_successful_compilation() {
             assert!(main
                 .parent()
                 .unwrap()
-                .join("build/latex-lsp/main.pdf")
+                .join("build/texquill/main.pdf")
                 .is_file());
         }
     }
@@ -905,7 +905,7 @@ fn real_refcount_key_macro_repairs_restore_successful_compilation() {
                     )
                 });
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     code_action_literals: true,
                     ..Default::default()
@@ -923,7 +923,7 @@ fn real_refcount_key_macro_repairs_restore_successful_compilation() {
             assert!(main
                 .parent()
                 .unwrap()
-                .join("build/latex-lsp/main.pdf")
+                .join("build/texquill/main.pdf")
                 .is_file());
         }
     }

@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build,
     language::{colors, features, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn document(source: &str) -> Document {
     Document::new(
@@ -234,7 +234,7 @@ fn malformed_framed_calls_and_ignored_text_do_not_create_literal_colors() {
 fn framed_box_completion_and_hover_preserve_existing_optional_models_and_body() {
     let uri = Url::parse("file:///framed-colors/main.tex").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },
@@ -357,7 +357,7 @@ fn real_framed_gray_conversions_preserve_the_other_driver_color() {
             let final_source = pick(&document(&updated), 1 - first, color(0.0, 0.0, 1.0));
             for (index, source) in [updated, final_source].into_iter().enumerate() {
                 std::fs::write(&main, source).unwrap();
-                let config = latex_lsp::config::BuildConfig {
+                let config = texquill::config::BuildConfig {
                     executable: engine.into(),
                     ..Default::default()
                 };
@@ -403,7 +403,7 @@ fn real_shared_cmyk_picker_edits_preserve_the_other_driver_separation() {
                 assert!(source.contains("\\fcolorbox[cmyk]"));
                 assert!(!source.contains("[rgb]"));
                 std::fs::write(&main, source).unwrap();
-                let config = latex_lsp::config::BuildConfig {
+                let config = texquill::config::BuildConfig {
                     executable: engine.into(),
                     ..Default::default()
                 };

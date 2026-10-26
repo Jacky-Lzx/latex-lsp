@@ -1,17 +1,17 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeSet, sync::atomic::AtomicBool};
+use texquill::{
     compilation::build,
     config::BuildConfig,
     language::features,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::{collections::BTreeSet, sync::atomic::AtomicBool};
 
 fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///saved-name-commands/main.tex").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },
@@ -255,7 +255,7 @@ fn name_data_does_not_create_latex_declarations_labels_or_dependencies() {
     assert!(workspace.dependencies(&uri).is_empty());
     assert!(doc.syntax.environments.is_empty());
     assert_eq!(doc.syntax.commands.len(), 1);
-    let symbols = latex_lsp::language::navigation::workspace_symbols(&workspace, "");
+    let symbols = texquill::language::navigation::workspace_symbols(&workspace, "");
     assert!(symbols.is_empty());
 }
 
@@ -379,7 +379,7 @@ fn real_macro_renames_in_expanded_names_preserve_successful_compilation() {
                     "{engine}/{form}: {}",
                     outcome.output
                 );
-                assert!(root.join("build/latex-lsp/main.pdf").is_file());
+                assert!(root.join("build/texquill/main.pdf").is_file());
             }
         }
     }
@@ -643,7 +643,7 @@ fn real_owning_symbol_renames_keep_expanded_saved_names_working() {
                     "{engine}/{body}: {}",
                     outcome.output
                 );
-                assert!(root.join("build/latex-lsp/main.pdf").is_file());
+                assert!(root.join("build/texquill/main.pdf").is_file());
             }
         }
     }
@@ -887,7 +887,7 @@ fn real_counter_format_operand_renames_keep_saved_names_and_bare_arguments_worki
                         "{engine}/{body}: {}",
                         outcome.output
                     );
-                    assert!(root.join("build/latex-lsp/main.pdf").is_file());
+                    assert!(root.join("build/texquill/main.pdf").is_file());
                 }
             }
         }

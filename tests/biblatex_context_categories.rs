@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     editing,
     language::{features, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
 
 fn setup(body: &str) -> (Workspace, Url) {
     let uri = Url::parse("untitled:context-categories.tex").unwrap();

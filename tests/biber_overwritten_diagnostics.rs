@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "overwritten-bibliography-field";
 fn uri(root: &Path, name: &str) -> Url {
@@ -174,7 +174,7 @@ fn overwrite_sources_require_complete_prior_history_and_unique_normalized_keys()
         format!("{}{}{record}", found("refs.data"), found("missing.data")),
         format!("{}ERROR - Earlier failure\n{record}", found("refs.data")),
         format!(
-            "{}[latex-lsp: middle of compiler output omitted]\n{record}",
+            "{}[texquill: middle of compiler output omitted]\n{record}",
             found("refs.data")
         ),
         format!("{}{}{record}", found("refs.data"), found("duplicate.data")),
@@ -281,7 +281,7 @@ fn overwrite_diagnostics_refresh_without_choosing_a_field_to_delete_or_rewrite()
         warning("café😀", "year")
     );
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },

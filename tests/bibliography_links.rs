@@ -1,8 +1,8 @@
-use latex_lsp::{
+use lsp_types::{DocumentLink, Position, Url};
+use texquill::{
     language::navigation,
     project::workspace::{Document, Workspace},
 };
-use lsp_types::{DocumentLink, Position, Url};
 
 fn links(source: &str) -> (Document, Vec<DocumentLink>) {
     let uri = Url::parse("file:///bibliography-links/refs.bib").unwrap();

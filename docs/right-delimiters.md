@@ -1,46 +1,46 @@
-# 多余的右定界符
+# Extra right delimiters
 
-[返回文档目录](README.md) · [编译诊断](diagnostics.md) · [缺失的右定界符](missing-right-delimiters.md)
+[Back to documentation](README.md) · [Compile Diagnostics](diagnostics.md) · [Missing right delimiter](missing-right-delimiters.md)
 
-TeX 报告 `Extra \right.` 时，当前数学分组中没有与该命令配对的 `\left`。服务器核对日志源码回显，将诊断定位到实际的 `\right`，并提供 `Remove unmatched '\right'` 快速修复。
+When TeX reports `Extra \right.`, there is no `\left` paired with this command in the current math group. The server checks the log source code echo, locates the diagnostics to the actual `\right`, and provides `Remove unmatched '\right'` quick repair.
 
-## 使用
+## use
 
-修复移除所选的 `\right`，保留其后的普通定界符。例如：
+Fix to remove selected `\right`, keeping the normal delimiter after it. For example:
 
 ```latex
-$a\right)$                    % 修复后：$a)$
-$a\left(b\right)\right]$      % 修复后：$a\left(b\right)]$
-$a\right\rangle$              % 修复后：$a\rangle$
+$a\right)$                    % after the fix：$a)$
+$a\left(b\right)\right]$      % after the fix：$a\left(b\right)]$
+$a\right\rangle$              % after the fix：$a\rangle$
 ```
 
-这会取消该处的自动尺寸配对。若原本希望整个表达式使用自动尺寸，应按公式含义补上相应的 `\left`；服务器不会猜测开定界符的位置。
+This cancels automatic size matching there. If you originally want the entire expression to use automatic size, you should add the corresponding `\left` according to the meaning of the formula; the server will not guess the position of the delimiter.
 
-不可见定界符 `\right.` 单独处理：将 `\right` 替换为 `{}`，同时移除这个点，避免生成可见句点或拼接相邻控制词。例如 `$\alpha\right.b$` 变为 `$\alpha{}b$`。
+The invisible delimiter `\right.` is processed separately: replace `\right` with `{}`, and remove this point to avoid generating visible periods or splicing adjacent control words. For example, `$\alpha\right.b$` becomes `$\alpha{}b$`.
 
-支持 `\right` 与定界符之间的空白、跨行和注释。修复只编辑命令及必要的不可见点，保留注释和换行；同一行的多个错误分别定位。已配对的 `\left...\right` 不会因为旁边存在错误而被修改。
+Supports whitespace, line crossings and comments between `\right` and delimiters. Repair only edits commands and necessary invisible points, retaining comments and line breaks; multiple errors on the same line are located separately. The paired `\left...\right` will not be modified due to the presence of an error next to it.
 
-## 已确认的定界符
+## Confirmed delimiter
 
-支持字面 `(`、`)`、`[`、`]`、`/`、`|`、`.`。对于标准命名定界符，还核对该定界符自己的 `\delimiter` 展开帧与源码中的名称一致：
+Supports literals `(`, `)`, `[`, `]`, `/`, `|`, `.`. For standard naming delimiters, also check that the delimiter's own `\delimiter` expansion frame is consistent with the name in the source code:
 
 - `langle` / `rangle`、`lbrace` / `rbrace`。
 - `lfloor` / `rfloor`、`lceil` / `rceil`。
 - `vert` / `Vert`、`backslash`。
-- `uparrow` / `downarrow` / `updownarrow` 及其首字母大写形式。
+- `uparrow` / `downarrow` / `updownarrow` and their first letters in capital letters.
 - `lgroup` / `rgroup`、`lmoustache` / `rmoustache`。
 
-普通希腊字母、常见数学符号、大型算符及 `sin`、`lim` 等无参数算符不会吞掉后续的 `\right`；项目内的用户重定义仍按其实际参数处理。
+Ordinary Greek letters, common mathematical symbols, large operators, and parameterless operators such as `sin` and `lim` will not swallow up subsequent `\right`; user redefinitions within the project are still processed according to their actual parameters.
 
-## 来源与旧操作
+## Sources and old operations
 
-诊断代码为 `unmatched-right-delimiter`。`data.delimiter` 保留源码定界符，`sourceContext` 保存源码回显，`sourceLine` 是从零开始的回显行号；跨行调用中，该行可与被标出的命令行不同。命名定界符的 `delimiterFrame` 保存已确认的展开名称。
+The diagnostic code is `unmatched-right-delimiter`. `data.delimiter` retains the source code delimiter, `sourceContext` saves the source code echo, and `sourceLine` is the echo line number starting from zero; in cross-line calls, this line can be different from the marked command line. Naming delimiter `delimiterFrame` holds the confirmed expansion name.
 
-支持传统 `!` 日志、文件行号格式、子文件、CRLF 和 UTF-16 范围。完整回显须匹配源码前缀；缩短回显须在整行中唯一匹配。不完整或不匹配的回显、未知来源、用户宏展开栈、定义正文、注释、逐字文本及未支持的动态定界符保留原诊断，不提供编辑。命名定界符缺少对应标准展开帧时也不作推断。
+Supports legacy `!` logs, file line number format, subfiles, CRLF and UTF-16 ranges. The full echo must match the source code prefix; the shortened echo must match uniquely in the entire line. Incomplete or unmatched echoes, unknown sources, user macro expansion stacks, definition bodies, comments, verbatim text, and unsupported dynamic delimiters retain the original diagnostics and do not provide editing. Name delimiters that lack corresponding standard expansion frames are not inferred.
 
-修复沿用编译时已加载来源中的参数语法，排除被宏消费的命令；`right` 或相应命名定界符被重定义时不提供此修复。请求操作及执行旧客户端命令时重新校验源码、文档版本和宏来源；依赖中的参数定义变化后，旧修复失效。来源分析规则见[宏来源说明](literal-macro-scopes.md)。
+Fix to inherit parameter syntax from sources loaded at compile time, excluding commands consumed by macros; this fix is not provided when `right` or the corresponding naming delimiter is redefined. Re-verify the source code, document version and macro source when requesting operations and executing old client commands; after the parameter definition in the dependency changes, the old fix becomes invalid. For source analysis rules, see [Macro Source Description](literal-macro-scopes.md).
 
-## 验证
+## verify
 
 ```sh
 cargo test --locked --test right_delimiters
@@ -48,4 +48,4 @@ cargo test --locked --test right_delimiters -- --include-ignored
 cargo test --locked --test protocol right_delimiter
 ```
 
-真实回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX，在 60 / 79 列及两种错误格式中修复跨文件正文，核对字面定界符、全部上述命名定界符、不可见点和注释，再实际生成一页 PDF 并确认错误清除。
+Real regression requires pdfLaTeX, XeLaTeX and LuaLaTeX, fixing cross-file text in 60 / 79 columns and two error formats, checking literal delimiters, all the above named delimiters, invisible points and comments, before actually generating a page of PDF and confirming error clearance.

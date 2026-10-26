@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 const COMMANDS: &[&str] = &["crefrange", "Crefrange", "cpagerefrange", "Cpagerefrange"];
 
@@ -124,7 +124,7 @@ fn range_completions_replace_only_the_active_endpoint_even_across_lines() {
 #[test]
 fn signatures_and_command_snippets_match_two_required_labels_and_keep_existing_arguments() {
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },
@@ -262,7 +262,7 @@ fn multiline_warnings_locate_and_offer_spelling_fixes_for_each_endpoint() {
             let diagnostics = build_log::parse(&main, &log);
             assert_eq!(diagnostics[&uri].len(), 2);
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     ..Default::default()
                 },

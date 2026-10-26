@@ -408,7 +408,7 @@ pub(crate) fn directories_in(workspace: &Workspace, uri: &Url, root: &Url) -> Ve
 }
 
 pub fn resolve(directory: &std::path::Path, name: &str, extension: &str) -> Option<Url> {
-    let origin = Url::from_file_path(directory.join("__latex_lsp_graphics__.tex")).ok()?;
+    let origin = Url::from_file_path(directory.join("__texquill_graphics__.tex")).ok()?;
     resolve_path(&origin, &unquote(name)?, extension)
 }
 

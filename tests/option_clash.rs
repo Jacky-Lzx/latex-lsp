@@ -1,8 +1,8 @@
-use latex_lsp::{
+use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
+use texquill::{
     compilation::{build, build_log},
     text::Text,
 };
-use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 
 const HELP: &str = "\nSee the LaTeX manual or LaTeX Companion for explanation.\nType  H <return>  for immediate help.\n ...                                              \n                                                  \n";
 
@@ -182,7 +182,7 @@ fn real_option_clashes_point_to_the_conflicting_package_in_main_and_package_sour
             }
             let outcome = build::run(
                 &main,
-                &latex_lsp::config::BuildConfig {
+                &texquill::config::BuildConfig {
                     executable: engine.into(),
                     ..Default::default()
                 },

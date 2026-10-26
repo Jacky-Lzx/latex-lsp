@@ -80,7 +80,7 @@ pub(crate) fn load(ws: &Workspace, uri: &Url, project: Option<&Url>) -> (Config,
     let mut value = serde_json::to_value(&ws.config).unwrap();
     let mut errors = Vec::new();
     for directory in directories {
-        let file = directory.join(".latex-lsp.json");
+        let file = directory.join(".texquill.json");
         let Some(raw) = read(&file) else {
             continue;
         };

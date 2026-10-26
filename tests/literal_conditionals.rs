@@ -1,8 +1,6 @@
-use latex_lsp::{
-    compilation::build, language::features, project::workspace::Workspace, text::Text,
-};
 use lsp_types::*;
 use std::{path::Path, sync::atomic::AtomicBool};
+use texquill::{compilation::build, language::features, project::workspace::Workspace, text::Text};
 
 fn setup(root: &Path, source: &str) -> (Workspace, Url) {
     let path = root.join("main.tex");
@@ -138,7 +136,7 @@ fn real_literal_conditional_renames_preserve_values_with_unicode_and_hyphen_name
         let root = directory.path();
         let source = format!("\\documentclass{{article}}\n\\expandafter\\newif\\csname if{name}\\endcsname\n\\begin{{document}}\n\\csname {name}true\\endcsname\\csname if{name}\\endcsname\\typeout{{LITERAL-SWITCH:true}}\\fi\n\\csname {name}false\\endcsname\\csname if{name}\\endcsname Wrong.\\else\\typeout{{LITERAL-SWITCH:false}}\\fi Text.\n\\end{{document}}\n");
         let (workspace, uri) = setup(root, &source);
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: "pdflatex".into(),
             ..Default::default()
         };

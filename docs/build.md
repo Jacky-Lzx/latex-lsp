@@ -1,26 +1,26 @@
-# 编译
+# Builds
 
-[返回 README](../README.md)
+[Back to README](../README.md)
 
-后台编译命令、配置、状态和产物一致性检查。错误与警告的具体定位规则见[编译诊断](diagnostics.md)，源码与 PDF 查询见[SyncTeX](synctex.md)。
+Background compilation command, configuration, status and product consistency check. See [Build diagnostics](diagnostics.md) for specific location rules for errors and warnings, and see [SyncTeX](synctex.md) for source code and PDF query.
 
-- [工具与编译入口](#工具与编译入口)
-- [命令、状态与通知](#命令状态与通知)
-- [从诊断重新编译](#从诊断重新编译)
-- [结果分析](#结果分析)
-- [编译配置](#编译配置)
-- [保存、取消与输入快照](#保存取消与输入快照)
-- [日志大小与分析预算](#日志大小与分析预算)
+- [Tools and Compilation Entry](#tools-and-compilation-entrance)
+- [Commands, Status and Notifications](#commands-status-and-notifications)
+- [Recompile from Diagnostics](#recompile-from-diagnostics)
+- [Result Analysis](#result-analysis)
+- [Compile configuration](#compile-configuration)
+- [Save, Cancel and Import Snapshot](#save-cancel-and-import-snapshots)
+- [Log size and analysis budget](#log-size-and-analysis-budget)
 
-## 工具与编译入口
+## Tools and compilation entrance
 
-- 后台编译：支持 latexmk、pdfLaTeX、XeLaTeX、LuaLaTeX、Tectonic 和自定义工具；根文件识别、取消、超时、状态查询、编辑器原生进度显示和可选的保存后编译。
+- Background compilation: supports latexmk, pdfLaTeX, XeLaTeX, LuaLaTeX, Tectonic and custom tools; root file identification, cancellation, timeout, status query, editor native progress display and optional post-save compilation.
 
-- 文档内编译入口：支持标准 CodeLens，在主文件或已关联的章节、包等 TeX 来源中直接编译项目。遵守根文件配置和 `% !TeX root` 指令；共享来源可分别选择各主文档，多工作区文件夹中的同名主文件用完整路径区分。每次请求重新核对根文件，最多返回 32 个入口；未保存的独立文档、无所属项目的片段和不可用的显式根不提供入口。
+- In-document compilation entry: supports standard CodeLens, and compiles projects directly in the main file or associated chapters, packages and other TeX sources. Comply with the root file configuration and `% !TeX root` directive; the sharing source can select each main document separately, and the main files with the same name in the multi-workspace folder are distinguished by full paths. Each request to recheck the root file returns up to 32 entries; unsaved standalone documents, fragments that do not belong to a project, and unavailable explicit roots do not provide entries.
 
-编辑功能不依赖 TeX；编译需要相应工具在语言服务器的 `PATH` 中。默认使用 `latexmk`，引擎依次采用显式 `build.engine`、主文件 program 指令和项目 rc 中可静态识别的 `$pdf_mode`，否则使用 pdfLaTeX。输出目录优先采用根文档旁 `.latexmkrc`（或 `latexmkrc`）中可静态识别的 `$out_dir`，否则使用 `build/latex-lsp/`；显式的 `build.outputDirectory` 优先。识别范围见[编译配置](build-configuration.md)。编译前先保存项目文件，服务器会拒绝编译含未保存内容的依赖，避免诊断与编辑器内容不一致。
+The editing function does not depend on TeX; compilation requires the corresponding tools in `PATH` of the language server. `latexmk` is used by default, and the engine sequentially uses explicit `build.engine`, the main file program directive, and the statically recognized `$pdf_mode` in the project rc, otherwise pdfLaTeX is used. The output directory preferentially uses `$out_dir` that can be statically identified in `.latexmkrc` (or `latexmkrc`) next to the root document, otherwise `build/texquill/` is used; the explicit `build.outputDirectory` takes precedence. For the recognition range, see [Compile Configuration](build-configuration.md). Save the project file before compiling. The server will refuse to compile dependencies with unsaved content to avoid inconsistency between diagnostics and editor content.
 
-Neovim 中可这样触发编译：
+Compilation can be triggered in Neovim like this:
 
 ```lua
 vim.lsp.buf_request(0, 'workspace/executeCommand', {
@@ -38,54 +38,54 @@ vim.lsp.handlers['latex/buildFinished'] = function(_, result)
 end
 ```
 
-## 命令、状态与通知
+## Commands, status and notifications
 
-通过 `workspace/executeCommand` 调用以下命令，第一个参数为当前文档 URI（也可使用 `{ "uri": "file:///..." }`）：
+Call the following command via `workspace/executeCommand`, with the first parameter being the current document URI (`{ "uri": "file:///..." }` can also be used):
 
-- `latex.build`：立即返回 `{status: "started", buildId, rootUri}`，编译在后台运行。同一根文件已有任务时返回 `running` 和原任务 ID。
+- `latex.build`: Return `{status: "started", buildId, rootUri}` immediately, compilation runs in the background. When the same root file already has a task, `running` and the original task ID are returned.
 
-- `latex.rebuild`：强制重新编译；默认 latexmk 增加 `-g`，直接 TeX 引擎和 Tectonic 每次直接运行。用于恢复被修改的产物或需要跳过 latexmk 增量判断的情况。同一根文件正在编译时，将重复请求合并为一次后续强制编译，即使 `onSave` 为 `false` 也会执行；保存事件保留已排队的强制请求，后续任务使用最新配置和已保存内容。取消、相关文件事件和关闭服务器会清除队列。
+- `latex.rebuild`: Force recompile; default latexmk adds `-g`, direct TeX engine and Tectonic run directly every time. Used to restore modified products or when latexmk incremental judgment needs to be skipped. When the same root file is being compiled, duplicate requests are merged into one subsequent forced compilation, which will be executed even if `onSave` is `false`; the save event retains the queued forced requests, and subsequent tasks use the latest configuration and saved content. Cancellations, related file events, and server shutdown clear the queue.
 
-- `latex.cancelBuild`：取消该文档对应的编译；省略参数时取消全部编译。Unix 上同时终止 latexmk 启动的子进程。
+- `latex.cancelBuild`: Cancel the compilation corresponding to this document; cancel all compilation when the parameter is omitted. Also terminate child processes started by latexmk on Unix.
 
-- `latex.buildStatus`：查询当前任务或最近一次编译结果，未编译时返回 `idle`；运行中的 `queued` 表示是否还有后续编译，`queuedRebuild` 表示后续任务是否为强制编译。启动响应、运行状态及开始/完成通知的 `rebuild` 表示当前任务是否为强制编译。
+- `latex.buildStatus`: Query the current task or the latest compilation result. If it is not compiled, `idle` is returned; `queued` in operation indicates whether there is subsequent compilation, and `queuedRebuild` indicates whether the subsequent task is forced compilation. `rebuild` in startup response, running status and start/completion notification indicates whether the current task is forced compilation.
 
-任务在编译工作线程启动前已被取消时，不会调用编译器、创建输出目录或替换旧日志，已有 PDF、日志和辅助文件会保留。取消结果不把这些旧文件作为本次编译产物返回。
+When a task is canceled before the compilation worker thread is started, the compiler is not invoked, the output directory is created, or old logs are replaced, and existing PDFs, logs, and auxiliary files are retained. The cancellation result will not return these old files as the products of this compilation.
 
-服务器发出 `latex/buildStarted` 和 `latex/buildFinished` 通知，两者都包含实际 `executable` 和可推断的 `engine`（使用自定义参数或无法识别的工具时为 `null`）。完成通知还包含 `status`（`success` / `error` / `cancelled` / `timeout`）、`buildId`、`rootUri`、`pdfUri`、`logUri`、`exitCode`、`diagnosticsCount`、`errorsCount`、`warningsCount`、`dependenciesCount`（包含根文件的来源数量）、`durationMs`、`message` 和有长度限制的 `output` 摘要。成功结果的 [`pages`](build-analysis.md#pdf-页数) 为最终 TeX 日志报告的页数（未知时为 `null`），`pdfSize` 为实际 PDF 的字节数；失败结果两者为 `null`。`latex.buildStatus` 保留相同摘要。若文档或已知输入选择在编译中变化，`stale` 为 `true`，不会发布这次编译的旧诊断，并清除该项目上一次编译的诊断，避免旧错误继续留在编辑器中。失败编译不把可能不完整的 PDF 标记为成功结果。
+The server issues `latex/buildStarted` and `latex/buildFinished` notifications, both containing the actual `executable` and the inferred `engine` (`null` when using custom parameters or an unrecognized tool). The completion notice also contains `status` (`success`/`error`/`cancelled`/ `timeout`), `buildId`, `rootUri`, `pdfUri`, `logUri`, `exitCode`, `diagnosticsCount`, `errorsCount`, `warningsCount`, `dependenciesCount` (number of sources including root files), `durationMs`, `message` and length-limited `output` abstract. [`pages`](build-analysis.md#pdf-pages) of the successful result is the page number of the final TeX log report (`null` when unknown), `pdfSize` is the number of bytes of the actual PDF; both of the failed results are `null`. `latex.buildStatus` retains the same digest. If the document or known input selection changes during compilation, `stale` becomes `true`, the old diagnostics for this compilation will not be released, and the diagnostics for the last compilation of the project will be cleared to prevent old errors from remaining in the editor. Failed compilation does not mark potentially incomplete PDFs as successful results.
 
-## 从诊断重新编译
+## Recompile from diagnostics
 
-编译器明确要求再次编译时，可在对应警告处请求快速修复，选择 `Rebuild …`。支持 LaTeX 交叉引用、[末页变更](last-page.md)、natbib 文献、biblatex 的 LaTeX 重运行提示、longtable 表格列宽、hyperref 页标签和 rerunfilecheck 文件变更警告；未定义引用本身不会产生这个操作。
+When the compiler explicitly requires compilation again, you can request a quick fix at the corresponding warning and select `Rebuild …`. Supports LaTeX cross-references, [last page changed](last-page.md), natbib documents, biblatex's LaTeX rerun prompt, longtable table column width, hyperref page tags and rerunfilecheck file change warning; undefined references themselves will not generate this operation.
 
-标准请求的单词折行、第一句后的续行及 natbib 简短提示见[折行的重编译警告](build-analysis.md#折行的重编译警告)。
+See [Recompilation Warning for Line Wrapping](build-analysis.md#recompilation-warning-for-line-breaks) for the standard request for word wrapping, continuation lines after the first sentence, and natbib brief prompts.
 
-rerunfilecheck 的请求格式、hyperref 反向文献引用、文件名折行及重编译标记清除规则见[文件变更与重编译](build-analysis.md#文件变更与重编译)。
+For the request format of rerunfilecheck, hyperref reverse literature reference, file name wrapping and recompilation mark removal rules, see [File Changes and Recompilation](build-analysis.md#file-changes-and-recompilation).
 
-biblatex 明确要求先运行 BibTeX 或 Biber 时，默认参数的 latexmk 也提供该操作，由 latexmk 调度文献处理与后续 LaTeX 编译。直接 TeX 引擎或自定义流程可配置 [`build.bibliographyTool`](bibliography-processing.md)；后端和根任务名称匹配时也提供操作，否则保留提示和工具摘要。切换为无法处理所请求文献的配置后，旧菜单操作会失效。
+When biblatex explicitly requires running BibTeX or Biber first, latexmk with default parameters also provides this operation, and latexmk schedules document processing and subsequent LaTeX compilation. Direct TeX engine or custom process configurable [`build.bibliographyTool`](bibliography-processing.md); also provides action when backend and root task names match, otherwise retains prompts and tool summary. Old menu operations will no longer work after switching to a configuration that cannot handle the requested document.
 
-索引与术语表的明确 makeindex 请求提供[所需工具摘要](index-processing.md)，并标记后续需要运行 LaTeX；可以配置 `build.indexTools` 让编译任务执行工具及后续 LaTeX 遍次。警告的输入名称、类型与当前根配置任务匹配时，也提供上述菜单操作；执行时重新核对配置。
+Explicit makeindex requests for indexes and glossaries provide a [Summary of required tools](index-processing.md) and mark the need for subsequent runs of LaTeX; `build.indexTools` can be configured to allow the compilation task to perform tool and subsequent LaTeX passes. When the input name and type of the warning match the current root configuration task, the above menu operations are also provided; the configuration is rechecked during execution.
 
-该操作调用 `latex.rebuild`，同一主文档的多条警告合并为一个入口。共享文件分别列出产生诊断的主文档，避免从共享来源猜测编译根；仅匹配当前保存的编译诊断与请求范围。诊断清除后不再提供入口，根文件缺失、根配置已改变为其他项目或自定义工具尚未配置 `rebuildArguments` 时也不提供。
+This operation calls `latex.rebuild`, and multiple warnings in the same main document are merged into one entry. Shared files list the main document that generated the diagnostic separately, avoiding guessing the compilation root from the shared source; only matching currently saved compilation diagnostics and request scopes. The entry is no longer provided after diagnostic clearing, nor is it provided when the root file is missing, the root configuration has been changed to another project, or the custom tool has not been configured `rebuildArguments`.
 
-支持标准 CodeAction 和旧客户端的 Command 响应，不要求客户端支持工作区编辑。执行时沿用现有编译的保存检查、排队、取消和超时规则。
+Supports standard CodeAction and Command responses for legacy clients and does not require the client to support workspace editing. Execution inherits existing compiled save checking, queuing, cancellation and timeout rules.
 
-菜单操作在执行时重新核对原主文档、来源版本和当前诊断。菜单生成后修改根文件配置、编辑来源或清除对应警告，旧操作会报错并要求重新请求菜单，不会转而编译其他项目。已经接受的排队编译也保留原项目归属；后续根选择改变时取消该后续任务。手动调用 `latex.rebuild` 的 URI 或 `{uri}` 形式继续按当前配置选择根文件。
+Menu operations recheck the original root document, source version, and current diagnostics when executed. After the menu is generated, if you modify the root file configuration, edit the source, or clear the corresponding warning, the old operation will report an error and require you to re-request the menu, and will not switch to compiling other projects. The queued compilation that has been accepted also retains the original project ownership; when the subsequent root selection changes, the subsequent task will be canceled. Manually call the URI of `latex.rebuild` or the form of `{uri}` to continue selecting the root file according to the current configuration.
 
-## 结果分析
+## Result analysis
 
-最终日志的重编译请求、未解析引用、文献工具及排版、字体和字符摘要，见[编译结果分析](build-analysis.md)。
+For the recompilation request, unresolved references, documentation tools and typesetting, fonts and character summaries of the final log, see [Compilation Result Analysis](build-analysis.md).
 
-## 编译配置
+## Compile configuration
 
-编译器、引擎、根文件、输出目录、参数模板及保存后编译等设置，见[编译配置](build-configuration.md)。
+For settings such as compiler, engine, root file, output directory, parameter template, and compilation after saving, see [Compilation Configuration](build-configuration.md).
 
-## 保存、取消与输入快照
+## Save, cancel and import snapshots
 
-编译前请保存项目依赖。编译期间输入发生变化时，结果会标为 `stale`，服务器丢弃旧诊断；开启 `onSave` 后会合并保存事件并安排后续编译。
+Please save project dependencies before compiling. When the input changes during compilation, the result will be marked as `stale`, and the server discards the old diagnostics; after turning on `onSave`, the saved events will be merged and subsequent compilation will be scheduled.
 
-保存检查、取消、recorder、文献资源、文件监听以及 PDF / SyncTeX 的有效性规则见[编译输入与过期结果](build-inputs.md)。
+See [Compilation Input and Expiration Results](build-inputs.md) for the validation rules for save checking, cancellation, recorder, document resources, file monitoring, and PDF / SyncTeX.
 
-## 日志大小与分析预算
+## Log size and analysis budget
 
-编译管道输出超过 4 MiB、日志超过 8 MiB 时，分析缓冲区保留开头和结尾，省略中间部分；完整日志仍保留在磁盘。省略后清除文件栈，显式文件位置和新出现的文件上下文仍可定位，其他诊断回退到主文档。完成通知的 `diagnosticsTruncated` 标明 TeX 或文献诊断使用了省略后的内容，此时诊断数量仅统计已分析部分。部分 recorder 或文献依赖列表不会替换上一次完整记录。
+When the compile pipeline output exceeds 4 MiB and the log exceeds 8 MiB, the analysis buffer retains the beginning and end and omits the middle; the full log remains on disk. When omitted, the file stack is cleared, explicit file locations and newly emerged file contexts can still be located, and other diagnostics fall back to the main document. `diagnosticsTruncated` of the completion notification indicates that TeX or literature diagnostics uses the omitted content. At this time, the number of diagnoses only counts the analyzed part. A partial recorder or document dependency list will not replace the last complete record.

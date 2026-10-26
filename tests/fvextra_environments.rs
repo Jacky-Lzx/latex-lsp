@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     editing::{self, file_operations},
     language::{features, navigation, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 const ENVIRONMENTS: [&str; 2] = ["VerbatimWrite", "VerbatimBuffer"];
 
@@ -52,7 +52,7 @@ fn writer_and_buffer_bodies_keep_symbols_paths_and_edits_literal() {
                 let source = format!("{before}{literal}{newline}{after}");
                 std::fs::write(root.join("main.tex"), &source).unwrap();
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         ..Default::default()
                     },
@@ -206,8 +206,8 @@ fn environment_completion_and_option_hints_share_header_boundaries() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, and fvextra"]
 fn real_writes_and_buffers_preserve_body_after_label_rename() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
     for engine in ["pdflatex", "xelatex"] {
         for environment in ENVIRONMENTS {
             let directory = tempfile::tempdir().unwrap();
@@ -230,7 +230,7 @@ fn real_writes_and_buffers_preserve_body_after_label_rename() {
             };
             let source = format!("\\documentclass{{article}}\n\\usepackage{{fvextra}}\n\\newwrite\\codefile\n\\begin{{document}}\n\\label{{kept}}{setup}\n\\begin{{{environment}}}{options}\n{body}\n\\end{{{environment}}}\n{finish}\nText.\\ref{{kept}}\\label{{real}}\n\\end{{document}}\n");
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -264,7 +264,7 @@ fn real_writes_and_buffers_preserve_body_after_label_rename() {
                     "{engine}/{environment}: {}",
                     outcome.output
                 );
-                let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                let aux = std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                 assert!(
                     aux.contains(&format!("newlabel{{{kept}}}")) && aux.contains("newlabel{real}"),
                     "{aux}"
@@ -274,11 +274,11 @@ fn real_writes_and_buffers_preserve_body_after_label_rename() {
                         && !aux.contains(&format!("newlabel{{{absent}}}")),
                     "{aux}"
                 );
-                let fls = std::fs::read_to_string(root.join("build/latex-lsp/main.fls")).unwrap();
+                let fls = std::fs::read_to_string(root.join("build/texquill/main.fls")).unwrap();
                 assert!(!fls.contains("fake.tex"));
                 if environment == "VerbatimWrite" {
                     assert_eq!(
-                        std::fs::read_to_string(root.join("build/latex-lsp/code.txt"))
+                        std::fs::read_to_string(root.join("build/texquill/code.txt"))
                             .unwrap()
                             .trim_end(),
                         body

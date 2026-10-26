@@ -1,51 +1,51 @@
-# 参数提示
+# Signature help
 
-[返回文档目录](README.md) · [编辑功能](editing.md) · [补全](completion.md)
+[Back to documentation](README.md) · [Editing features](editing.md) · [Complete](completion.md)
 
-常用命令、环境及跨文件用户宏/环境提供参数签名，区分必选和可选参数，跟踪嵌套调用中的当前参数。编辑器可通过标准 `textDocument/signatureHelp` 请求提示，Neovim 可调用 `vim.lsp.buf.signature_help()`。
+Provide parameter signatures for common commands, environments, and cross-file user macros/environments, distinguish between required and optional parameters, and track current parameters in nested calls. Editors can request prompts via the standard `textDocument/signatureHelp`, which Neovim can call `vim.lsp.buf.signature_help()`.
 
-唯一用户宏或环境声明前的连续说明注释也显示在参数提示中，保留声明类型、定义文件与行号，以及原有签名和当前参数。支持直接调用、静态 `csuse` / `csname` 调用和跨文件未保存修改；可推断签名的纯转发别名使用别名自身的说明。同名宏和环境分别解析，重复声明时不选择某一份说明。注释按纯文本展示，提取规则与预算见[用户声明文档](command-documentation.md)。
+Continuous explanation comments before unique user macro or environment declarations are also displayed in the signature help, retaining the declaration type, definition file and line number, as well as the original signature and current parameters. Supports direct calls, static `csuse` / `csname` calls, and cross-file unsaved modifications; pure forwarding aliases that can infer signatures use the description of the alias itself. Macros and environments with the same name are parsed separately, and a certain description is not selected when making repeated declarations. Comments are displayed as plain text. For extraction rules and budgets, see [User Statement Document](command-documentation.md).
 
-## 声明与可选参数
+## Declaration and optional parameters
 
-传统 `newcommand` / `renewcommand` / `providecommand`、`DeclareRobustCommand` 和 etoolbox 的 robust 变体，以及 `newenvironment` / `renewenvironment` 的声明本身也提示名称、参数数量、默认值及定义正文，识别星号和两种宏名称分组形式；补全保留已有的控制词名称。
+Traditional `newcommand` / `renewcommand` / `providecommand`, `DeclareRobustCommand` and robust variants of etoolbox, as well as `newenvironment` / `renewenvironment` The declaration itself also prompts the name, number of parameters, default values and definition text, recognizes asterisks and two macro name grouping forms; completion retains existing control word names.
 
-章节及图表标题的短标题、`sqrt` 的根式次数遵循首个未受花括号保护的 `]` 边界；其中的字面量 `[` 不会吞掉后续标题或表达式的参数提示，调用结束后停止提示。星号章节命令直接提示标题，不接受短标题参数，也不会将后续正文当作标题。
+The short title of the chapter and figure title and the radical degree of `sqrt` follow the boundary of the first `]` that is not protected by curly braces; the literal `[` will not swallow the signature help of subsequent titles or expressions, and the prompt will stop after the call is completed. The asterisk chapter command directly prompts for the title, does not accept the short title parameter, and does not treat the subsequent text as the title.
 
-`item` 的可选标签与 `printbibliography` 的选项同样使用这个右方括号边界，支持直接、静态命名和纯转发调用；选项后的正文不再显示这些命令的参数提示。
+The optional label of `item` uses the same right bracket boundary as the option of `printbibliography`, supporting direct, static naming and pure forwarding calls; the text after the option no longer displays the signature help of these commands.
 
-标准脚注命令支持 `\footnote[number]{text}`、`\footnotetext[number]{text}` 和 `\footnotemark[number]`，包括未完成参数、静态命名和纯转发调用。命令补全提供脚注正文片段，保留已有编号和正文。`footnotemark` 不读取必选参数，紧随其后的花括号是独立执行的分组，其中的标签保留导航、引用及完整改名。项目内的用户重定义优先于内置参数规则。
+Standard footer commands support `\footnote[number]{text}`, `\footnotetext[number]{text}`, and `\footnotemark[number]`, including unfinished parameters, static naming, and pure forward calls. Command completion provides footnote body fragments, retaining existing numbering and text. `footnotemark` does not read the required parameters. The curly braces that follow are groupings that are executed independently, and the labels in them retain navigation, references, and complete renaming. User redefinition within the project takes precedence over built-in parameter rules.
 
-`\begin{minted}[options]{language}` 的头部也提供参数提示，支持未完成的参数、注释续行及 Unicode 位置；代码正文和关闭行尾部继续按逐字内容处理。重定义与项目作用域规则见 [minted 代码](minted.md)。
+The header of `\begin{minted}[options]{language}` also provides signature help, supporting unfinished parameters, comment continuation lines and Unicode positions; the code body and the end of the closing line continue to be processed verbatim. See [minted code](minted.md) for redefinition and project scope rules.
 
-FancyVerb 的 `Verbatim`、`LVerbatim`、`BVerbatim` 及其星号形式提示 `[options]`；`SaveVerbatim` 另提示 `{name}`，`VerbatimOut` 另提示 `{file}`。未完成参数与注释续行同样支持。普通换行会结束无选项的头部查找，下一行的方括号或花括号属于逐字内容；带选项的保存名称及文件名可跨普通换行读取。完整参数、头部被丢弃的尾部及代码正文不继续提示。项目内重定义、取消定义和 FancyVerb 环境定制会抑制相应内置签名，未保存设置变化立即生效。
+FancyVerb's `Verbatim`, `LVerbatim`, `BVerbatim` and their asterisk forms prompt `[options]`; `SaveVerbatim` also prompts `{name}`, and `VerbatimOut` also prompts `{file}`. Unfinished parameters and comment continuations are also supported. An ordinary newline will end the header search without options, and the square brackets or curly braces on the next line are verbatim; the save name and file name with options can be read across ordinary newlines. Complete parameters, headers, discarded tails, and code text will not be prompted. In-project redefinition, undefinition, and FancyVerb environment customization will suppress the corresponding built-in signatures, and unsaved setting changes will take effect immediately.
 
-`\begin{lstlisting}[options]` 同样支持头部提示，包含未完成选项、花括号保护的右方括号、注释续行和 Unicode。选项结束后停止提示，普通换行后的方括号保持逐字内容；关闭标记后正常执行的 LaTeX 命令保留各自的签名。项目内重定义、取消定义和 `lstnewenvironment` 声明会抑制相应内置提示，未保存的设置修改立即生效。
+`\begin{lstlisting}[options]` also supports header hints, including unfinished options, brace-protected closing brackets, comment continuation lines, and Unicode. The prompt is stopped after the option ends, square brackets after ordinary line breaks retain verbatim content; LaTeX commands executed normally after closing the markup retain their respective signatures. Redefinition, undefinition and `lstnewenvironment` declaration within the project will suppress the corresponding built-in prompts, and unsaved setting modifications will take effect immediately.
 
-`\lstinline[options]` 提示行内代码的头部选项，支持未完成选项、注释续行及首个未受花括号保护的右方括号；代码正文保持逐字范围。命令补全提供 `\lstinline|code|` 片段，已有代码时只补全命令名称，保留原来的花括号或分隔符。
+`\lstinline[options]` prompts header options for inline code, supports unfinished options, comment continuation lines, and the first right square bracket not protected by curly braces; the code body remains verbatim. Command completion provides the `\lstinline|code|` fragment. When the code already exists, only the command name is completed, and the original curly braces or delimiters are retained.
 
-## 参数数量中的注释
+## Comments in number of parameters
 
-参数数量按 TeX 注释规则读取，支持注释续行、CRLF 和被注释拆开的数字。例如：
+The number of parameters is read according to TeX comment rules, supporting comment continuation lines, CRLF and numbers separated by comments. For example:
 
 ```tex
-\newcommand{\pair}[2% 两个参数
+\newcommand{\pair}[2% two arguments
 ][DEF]{#1:#2}
 \pair{Body}
 ```
 
-调用签名为 `\pair[#1=DEF]{#2}`；命令补全只为必选的第二个参数插入占位符，保留第一个参数的默认值。宏在项目的其他文件中声明时也适用。
+The call signature is `\pair[#1=DEF]{#2}`; command completion only inserts a placeholder for the required second parameter, leaving the first parameter at its default value. The macro also works when declared in other files of the project.
 
-传统宏和环境的参数数量限制为 0–9；`DeclarePairedDelimiterX` 与 `DeclarePairedDelimiterXPP` 限制为 1–9。普通数字间空格不会被注释处理删除，例如 `1 2` 不会变成 `12`。动态计数、转义 token、非法内容、溢出和越界数量不推断签名，不执行宏展开。
+The number of arguments is limited to 0–9 for legacy macros and environments; to 1–9 for `DeclarePairedDelimiterX` and `DeclarePairedDelimiterXPP`. Spaces between ordinary numbers will not be removed by annotation processing, for example, `1 2` will not become `12`. Dynamic counting, escape tokens, illegal content, overflow and out-of-bounds quantities do not infer signatures and do not perform macro expansion.
 
-宏参数消费分析使用相同的数量规则；颜色重命名等功能继续排除作为其他宏实参传入的命令，避免把数据中的名称当作实际调用修改。符号与重命名的其余规则见[符号与重命名](symbols.md)。
+Macro parameter consumption analysis uses the same quantity rules; functions such as color renaming continue to exclude commands passed in as other macro arguments to avoid modifying the names in the data as actual calls. See [Symbols and Renaming](symbols.md) for the remaining rules for symbols and renaming.
 
-字符串测试命令作为用户宏的控制词参数时，提示外层宏的已知签名；控制词内部、文件末尾与参数结束后的光标边界见[宏参数中的字符串命令](string-test-operands.md#参数提示)。
+When the string test command is used as the control word parameter of a user macro, it prompts for the known signature of the outer macro; for the cursor boundaries inside the control word, at the end of the file, and after the end of the parameter, see [String commands in macro parameters](string-test-operands.md#signature-help).
 
-## 默认值预览
+## Default value preview
 
-参数提示和命令补全详情中的默认值按 TeX 注释规则显示。例如 `DE% 注释` 续行后的 `F` 显示为 `DEF`；支持 CRLF、连续注释行和 Unicode。适用于传统宏/环境，以及 xparse 的 `O`、`D`、`R` 默认值。
+Default values in signature help and command completion details are displayed according to TeX comment rules. For example, `F` after the continuation line of `DE% comment` is displayed as `DEF`; CRLF, continuous comment lines and Unicode are supported. Applies to legacy macros/environments, as well as xparse's `O`, `D`, `R` defaults.
 
-预览保留 `\%` 等转义 token、显式控制空格 `\ `，并在需要时保留控制词与后续字母之间的分隔，避免把 `\relax` 与后面的 `DEF` 拼成另一个命令名。普通空白压缩，预览最多显示 80 个字符；注释先消除，再截取预览。
+The preview retains escape tokens such as `\%`, explicit control spaces `\ `, and retains the separation between control words and subsequent letters when necessary to avoid spelling `\relax` and the following `DEF` into another command name. Normal blank compression, the preview can display up to 80 characters; comments are eliminated first, and then the preview is intercepted.
 
-默认值预览不执行宏展开。补全继续省略可选参数，只插入必选参数占位符，使用声明中的默认行为。
+The default preview does not perform macro expansion. Completion continues by omitting optional parameters and inserting only required parameter placeholders, using the default behavior in the declaration.

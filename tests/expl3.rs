@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 fn changed(source: &str, mut edits: Vec<TextEdit>) -> String {
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
     Text::new(source.into())

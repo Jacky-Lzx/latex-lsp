@@ -1,16 +1,16 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
 
 fn fixture(marked: &str) -> (Workspace, Url, Position) {
     let at = marked.find('¦').unwrap();
     let source = marked.replace('¦', "");
     let main = Url::parse("file:///fancy-completion/main.tex").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },
@@ -130,8 +130,8 @@ fn saved_name_hints_follow_ordinary_tokens_and_the_first_unbraced_option_end() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, and fvextra"]
 fn real_completed_inline_templates_preserve_saved_text_and_literal_commands() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
     let mut calls = Vec::new();
     for name in [
         "fvset",
@@ -186,7 +186,7 @@ fn real_completed_inline_templates_preserve_saved_text_and_literal_commands() {
             &AtomicBool::new(false),
         );
         assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
-        let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+        let aux = std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
         assert!(aux.contains("newlabel{real}"), "{aux}");
         assert!(!aux.contains("newlabel{phantom}"), "{aux}");
     }

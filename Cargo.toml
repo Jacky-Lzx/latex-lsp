@@ -1,8 +1,8 @@
 [package]
-name = "latex-lsp"
+name = "texquill"
 version = "0.1.0"
 edition = "2021"
-description = "A lightweight LaTeX language server"
+description = "A LaTeX language server written in Rust"
 license = "MIT"
 
 [dependencies]

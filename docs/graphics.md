@@ -1,59 +1,59 @@
-# 图片解析与移动
+# Graphics resolution and moves
 
-[返回文档目录](README.md) · [项目与路径解析](projects.md)
+[Back to documentation](README.md) · [Project and path analysis](projects.md)
 
-文件名中的引号、空白及相关编辑规则见[图片文件名](graphics-filenames.md)。
+Please refer to [Picture File Name](graphics-filenames.md) for quotation marks, blank spaces and related editing rules in file names.
 
-## 搜索目录与文件移动
+## Search directories and move files
 
-`\includegraphics` 还会搜索当前项目中 `\graphicspath{{figures/}{plots/}}` 声明的目录，支持图片跳转、子目录补全和文件重命名。移动图片目录或主文档时会同步更新目录声明，并尽量保留图片的简短名称和省略的扩展名。路径以当前编译主文档目录为基准，共享包里的声明也遵守这一规则。允许空格和中文，识别以 `/` 结尾的静态目录；移动主文档时也会重算尚不存在的目录。如果共享声明在不同项目中需要不同的替换路径，会拒绝该次文件移动编辑。目录值不展开任意宏；静态声明的覆盖和作用域规则如下。
+`\includegraphics` will also search the directory declared by `\graphicspath{{figures/}{plots/}}` in the current project, supporting image jump, subdirectory completion and file renaming. When you move an image directory or main document, the directory declaration is updated simultaneously, trying to preserve the short names and omitted extensions of images. The path is based on the current compilation main documentation, and declarations in shared packages also follow this rule. Allow spaces and Chinese, recognize static directories ending with `/`; directories that do not yet exist will also be recalculated when moving the main document. If the shared declaration requires different replacement paths in different projects, the file move edit will be rejected. Directory values do not expand arbitrary macros; coverage and scoping rules for static declarations are as follows.
 
-未声明扩展名顺序时，图片省略扩展名会按默认顺序逐个搜索编译根目录及声明目录；支持的显式扩展名先按原名查找。例如根目录有 `plot.png`、`figures/` 有 `plot.pdf` 时，`\includegraphics{plot}` 选中 PDF，显式 `plot.png` 选中 PNG。子文件所在目录不会提前覆盖这些图片；以子文件自身为根时才使用它的目录。跳转、补全、输入跟踪及文件重命名共用这一搜索基准。
+When the order of extensions is not declared, if extensions are omitted from the image, the compilation root directory and declaration directory will be searched one by one in the default order; supported explicit extensions are first searched by their original names. For example, when the root directory has `plot.png` and `figures/` has `plot.pdf`, `\includegraphics{plot}` selects PDF, and `plot.png` explicitly selects PNG. The directory where the subfile is located will not overwrite these pictures in advance; only the directory of the subfile itself is used as the root. Jumps, completions, input tracking, and file renaming share this search base.
 
-图片重命名会检查整批文件移动后的搜索结果，保留仍指向原图片的简写；简写将选中其他图片时，改用相对于新编译根目录的路径和实际扩展名。同批移动其他文件造成的同名遮蔽也会触发引用更新；无法安全保持目标时拒绝编辑，避免编译成功却使用了另一张图片。
+Image renaming will check the search results after the entire batch of files has been moved, and keep the abbreviation that still points to the original image; the abbreviation will use the path and actual extension relative to the new compilation root directory when other images are selected. Occlusion of the same name caused by moving other files in the same batch will also trigger reference updates; editing is refused when the target cannot be safely maintained to avoid using another image despite successful compilation.
 
-## 目录覆盖与作用域
+## Directory coverage and scope
 
-服务器按源码顺序跟踪每处 `\includegraphics` 的有效目录。后一次 `\graphicspath` 替换此前列表，空声明 `\graphicspath{}` 清除额外目录；花括号、分组原语和环境中的局部设置在分组结束后恢复：
+The server tracks the valid directories of each `\includegraphics` in source code order. The last `\graphicspath` replaces the previous list, and the empty declaration `\graphicspath{}` clears the extra directory; curly braces, grouping primitives, and local settings in the environment are restored after the grouping ends:
 
 ```tex
 \graphicspath{{figures/}}
-{\graphicspath{{drafts/}}\includegraphics{plot}} % 使用 drafts/
-\includegraphics{plot} % 恢复 figures/
+{\graphicspath{{drafts/}}\includegraphics{plot}} % uses drafts/
+\includegraphics{plot} % restores figures/
 \graphicspath{{final/}}
-\includegraphics{plot} % 使用 final/，不再搜索 figures/
+\includegraphics{plot} % uses final/，no longer searches figures/
 ```
 
-静态输入文件可重复执行，本地宏包和文档类只加载一次；共享源码在不同执行位置需要不同目录时，不提供单一图片目标。目录设置与扩展名设置分别保存和恢复，均遵循下面的全局赋值规则。跳转、补全、拼写建议、重命名和编译候选检查使用对应调用位置的设置，已被覆盖的目录不会参与后续图片的候选检查。
+Static input files can be executed repeatedly, and local packages and document classes are only loaded once; when shared source code requires different directories at different execution locations, a single image target is not provided. Directory settings and extension settings are saved and restored separately and follow the following global assignment rules. Jump, completion, spelling suggestions, renaming and compilation candidate checks use the settings corresponding to the calling location. Overwritten directories will not participate in candidate checks for subsequent images.
 
-## 扩展名声明
+## Extension declaration
 
-`\DeclareGraphicsExtensions{.png,.pdf}` 按声明顺序搜索省略扩展名的图片。每个扩展名都先搜索编译根目录，再搜索 `\graphicspath` 的目录，然后才尝试下一个扩展名。例如同时存在 `plot.pdf` 和 `plot.png` 时，这项声明使 `\includegraphics{plot}` 选中 PNG。
+`\DeclareGraphicsExtensions{.png,.pdf}` Searches for images with extensions omitted in declaration order. Each extension searches the compilation root directory first, then the directory for `\graphicspath`, before trying the next extension. For example, when `plot.pdf` and `plot.png` exist at the same time, this statement causes `\includegraphics{plot}` to select PNG.
 
-显式扩展名使用独立的图片格式规则：即使只声明 `.png`，`\includegraphics{plot.pdf}` 仍优先读取存在的 `plot.pdf`，不会因同时存在 `plot.pdf.png` 而换图。空声明 `\DeclareGraphicsExtensions{}` 关闭扩展名推断，显式文件名继续可用。
+Explicit extensions use independent image format rules: even if only `.png` is declared, `\includegraphics{plot.pdf}` will still read the existing `plot.pdf` first, and will not change the image due to the simultaneous existence of `plot.pdf.png`. Empty declaration `\DeclareGraphicsExtensions{}` turns off extension inference, explicit filenames continue to be available.
 
-声明支持注释、空白、重复设置，以及普通花括号、`begingroup` / `endgroup` 和环境中的局部设置。服务器按源码顺序跟踪静态输入文件和本地宏包、文档类的设置；包和类仅加载一次，普通输入可重复执行。局部分组结束后恢复此前顺序。相同源码位置在不同执行上下文中需要不同扩展名顺序时，不提供单一图片目标。
+Declarations support comments, whitespace, repeated settings, as well as normal curly braces, `begingroup` / `endgroup` and local settings in the environment. The server tracks the settings of static input files and local packages and document classes in source code order; packages and classes are only loaded once, and ordinary input can be executed repeatedly. After the partial grouping ends, the previous order is restored. A single image target is not provided when the same source code location requires different extension orders in different execution contexts.
 
-## 静态别名与命名调用
+## Static aliases and named calls
 
-图片调用、目录声明和扩展名声明支持无参数纯别名、别名链，以及静态 `\csuse` / `\csname` 调用。调用位置的搜索设置用于补全、跳转、文件移动和缺图修复；示例与支持边界见[图片命令的静态别名](graphics-calls.md)。
+Image calls, directory declarations, and extension declarations support parameterless pure aliases, alias chains, and static `\csuse` / `\csname` calls. The search settings at the calling location are used for completion, jump, file movement and missing image repair; for examples and support boundaries, see [Static aliases for image commands](graphics-calls.md).
 
-## 全局设置与恢复
+## Global settings and recovery
 
-`\global\graphicspath{{figures/}}` 和 `\global\DeclareGraphicsExtensions{.png}` 的设置保留到分组外。`\globaldefs` 为正数时，目录和扩展名声明自动全局生效；为负数时，显式 `\global` 也按局部赋值处理；为零时遵循前缀。全局赋值会更新外层分组应恢复的值，后续局部修改结束后恢复最近的全局设置。
+The settings of `\global\graphicspath{{figures/}}` and `\global\DeclareGraphicsExtensions{.png}` are retained outside the group. When `\globaldefs` is a positive number, directory and extension declarations automatically take effect globally; when it is a negative number, explicit `\global` is also processed as local assignment; when it is zero, the prefix is followed. Global assignment will update the value that the outer group should restore, and the most recent global settings will be restored after subsequent local modifications.
 
 ```tex
 \DeclareGraphicsExtensions{.pdf}
 {\global\DeclareGraphicsExtensions{.png}}
-\includegraphics{plot} % 优先 PNG
+\includegraphics{plot} % prefers PNG
 {\globaldefs=-1 \global\DeclareGraphicsExtensions{.pdf}}
-\includegraphics{plot} % 仍优先 PNG
+\includegraphics{plot} % still prefers PNG
 ```
 
-`\globaldefs` 自身的赋值按赋值前的作用域规则保存和恢复。前缀可跨静态输入文件传递；前缀和 `\globaldefs` 可通过已证明的无参数纯别名及静态 `\csuse` / `\csname` 调用。支持十进制、八进制、十六进制、ASCII 字符代码及多重正负号形式的字面整数。条件中的赋值、动态整数、可能继续展开为数字的宏，以及重定义的前缀或调用原语，会停止相关推断。
+`\globaldefs`'s own assignment is saved and restored according to the scope rules before assignment. Prefixes can be passed across static input files; prefixes and `\globaldefs` can be called via proven parameterless pure aliases and static `\csuse` / `\csname`. Literal integers in decimal, octal, hexadecimal, ASCII character codes, and multi-signed forms are supported. Assignments in conditions, dynamic integers, macros that may expand to numbers, and redefined prefixes or calling primitives stop inference.
 
-## 编译检查与支持边界
+## Compilation checks and support boundaries
 
-跳转、图片依赖、文件移动时的目标校验和缺失图片拼写修复共用上述顺序。编译输入检查只观察选中图片及优先于它的候选：选中 PNG 后，新建低优先级 PDF 不会使结果过期；删除 PNG 或新增更早的候选会使结果过期。
+Jumps, image dependencies, target verification when moving files, and missing image spelling repairs share the above order. The compile input check only looks at the selected image and its priority candidates: when a PNG is selected, creating a new low-priority PDF will not expire the results; deleting the PNG or adding an earlier candidate will expire the results.
 
-不执行任意宏展开。动态或重定义的设置、自定义 `\DeclareGraphicsRule`、无法确定的条件分支和选章配置会跳过相关静态推断；循环输入或超过分析上限时也停止推断。编译器的 recorder 记录继续用于跟踪实际读取的文件。文件移动的客户端调用顺序见[文件操作](file-operations.md)。
+No arbitrary macro expansion is performed. Dynamic or redefined settings, custom `\DeclareGraphicsRule`, undetermined conditional branches and chapter selection configurations will skip related static inference; inference will also stop when looping input or exceeding the analysis upper limit. The compiler's recorder continues to be used to track which files were actually read. For the client calling sequence of file movement, see [File Operation](file-operations.md).

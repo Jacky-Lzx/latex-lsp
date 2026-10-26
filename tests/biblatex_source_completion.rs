@@ -1,7 +1,7 @@
 #[path = "support/completion.rs"]
 mod completion;
-use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace};
 fn setup(preamble: &str, body: &str) -> (tempfile::TempDir, Workspace, Url) {
     let dir = tempfile::tempdir().unwrap();
     let source = format!(
@@ -172,7 +172,7 @@ fn apply(source: &str, item: &CompletionItem) -> String {
     let mut edits = item.additional_text_edits.clone().unwrap_or_default();
     edits.push(edit.clone());
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
-    latex_lsp::text::Text::new(source.into())
+    texquill::text::Text::new(source.into())
         .changed(
             edits
                 .into_iter()

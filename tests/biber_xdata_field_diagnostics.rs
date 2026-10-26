@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "invalid-bibliography-xdata";
 fn uri(root: &Path, name: &str) -> Url {
@@ -190,7 +190,7 @@ fn granular_sources_require_prior_complete_history_and_unique_normalized_owners(
         format!("{}{}{record}", found("refs.data"), found("missing.data")),
         format!("{}ERROR - Earlier failure\n{record}", found("refs.data")),
         format!(
-            "{}[latex-lsp: middle of compiler output omitted]\n{record}",
+            "{}[texquill: middle of compiler output omitted]\n{record}",
             found("refs.data")
         ),
         format!("{}{}{record}", found("refs.data"), found("duplicate.data")),
@@ -277,7 +277,7 @@ fn granular_diagnostics_move_with_whole_values_and_do_not_guess_xdata_repairs() 
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },

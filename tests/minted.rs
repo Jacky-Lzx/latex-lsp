@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, navigation, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn uri() -> Url {
     Url::parse("file:///minted-tests/main.tex").unwrap()
@@ -289,7 +289,7 @@ fn incomplete_code_stays_literal_until_its_delimiter_or_end_of_input() {
 fn headers_have_signatures_and_snippets_and_incremental_edits_refresh_literal_boundaries() {
     let main = uri();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },

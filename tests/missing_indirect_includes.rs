@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn call(form: &str) -> &str {
     match form {
@@ -50,7 +50,7 @@ fn indirect_missing_include_warnings_fix_only_the_filename_with_versioned_edits(
                 "{form}/{argument}: {diagnostic:?}"
             );
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     versioned_edits: true,
                     ..Default::default()
@@ -147,7 +147,7 @@ fn legacy_indirect_include_fixes_recheck_alias_dependencies_without_changing_the
         std::fs::write(root.join("definitions.tex"), r"\def\readpart{\include}").unwrap();
         std::fs::write(root.join("chapter.tex"), "Chapter.").unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 apply_edits: true,
                 versioned_edits: true,
                 ..Default::default()
@@ -230,7 +230,7 @@ fn indirect_include_fixes_respect_the_active_includeonly_filter() {
             std::fs::write(&main, &source).unwrap();
             std::fs::write(directory.path().join("chapter.tex"), "Chapter").unwrap();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     versioned_edits: true,
                     ..Default::default()

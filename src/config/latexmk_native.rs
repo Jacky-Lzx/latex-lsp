@@ -147,7 +147,7 @@ struct Effective {
 
 // -e executes after standard rc loading, in the same Perl environment as a
 // normal invocation. JSON::PP ships with Perl; no shell or TeX engine is run.
-const REPORT: &str = r#"require JSON::PP; print "\nLATEX_LSP_CONFIGURATION ", JSON::PP->new->utf8->encode({output => $out_dir, auxiliary => $aux_dir, final_output => $out2_dir, mode => 0+$pdf_mode, sources => [@rc_files_read]}), "\n";"#;
+const REPORT: &str = r#"require JSON::PP; print "\nTEXQUILL_CONFIGURATION ", JSON::PP->new->utf8->encode({output => $out_dir, auxiliary => $aux_dir, final_output => $out2_dir, mode => 0+$pdf_mode, sources => [@rc_files_read]}), "\n";"#;
 
 pub(super) fn resolve(
     root: &Path,
@@ -189,7 +189,7 @@ pub(super) fn resolve(
     })?;
     let line = output
         .lines()
-        .find_map(|line| line.strip_prefix("LATEX_LSP_CONFIGURATION "))
+        .find_map(|line| line.strip_prefix("TEXQUILL_CONFIGURATION "))
         .ok_or("latexmk did not report its effective configuration")?;
     let effective: Effective = serde_json::from_str(line)
         .map_err(|error| format!("Invalid latexmk configuration report: {error}"))?;

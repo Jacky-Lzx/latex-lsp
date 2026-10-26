@@ -1,8 +1,8 @@
-# 布尔表达式诊断与修复
+# Boolean expression diagnostics and fixes
 
-[返回文档索引](README.md) · [boolean 诊断](boolean-diagnostics.md) · [toggle 诊断](toggle-diagnostics.md)
+[Back to documentation index](README.md) · [boolean diagnostic](boolean-diagnostics.md) · [toggle diagnostic](toggle-diagnostics.md)
 
-etoolbox 的 `ifboolexpr`、`ifboolexpe`、`whileboolexpr` 和 `unlessboolexpr` 会将未定义操作数报告为 `Invalid boolean expression`，具体名称位于日志的帮助正文。服务器保留该说明，并在核对完整表达式和源码回显后精确标记 `bool {...}` 或 `togl {...}` 中的名称。
+etoolbox's `ifboolexpr`, `ifboolexpe`, `whileboolexpr` and `unlessboolexpr` will report the undefined operand as `Invalid boolean expression`, the specific name is in the help text of the log. The server retains this description and accurately marks the name in `bool {...}` or `togl {...}` after checking the full expression and source code echo.
 
 ```tex
 \newbool{draft}
@@ -10,61 +10,61 @@ etoolbox 的 `ifboolexpr`、`ifboolexpe`、`whileboolexpr` 和 `unlessboolexpr` 
 \ifboolexpr{not (bool {darft} and togl {darft})}{Yes}{No}
 ```
 
-两个拼写错误分别提供 ``Replace with boolean `draft` `` 和 ``Replace with toggle `draft` ``，保留运算符、分组、另一命名空间的操作数及分支。boolean 候选和 toggle 候选各自遵循对应的[声明规则](boolean-diagnostics.md#候选与边界)与[冲突检查](toggle-diagnostics.md#候选与边界)。`bool` 操作数也支持未被覆盖的内置 `true` / `false` 建议。
+The two misspellings provide ``Replace with boolean `draft` `` and ``Replace with toggle `draft` `` respectively, preserving operators, groupings, operands from another namespace, and branches. boolean candidates and toggle candidates each follow the corresponding [Declaration Rules](boolean-diagnostics.md#candidates-and-boundaries) and [Conflict Check](toggle-diagnostics.md#candidates-and-boundaries). The `bool` operand also supports the uncovered built-in `true` / `false` suggestions.
 
-## 表达式边界
+## Expression bounds
 
-支持静态名称、`not` / `and` / `or`、圆括号、注释和跨行参数，包括 `nottogl{...}` 等紧接的关键字。`test {...}` 支持未被重定义的 `ifstrequal`、`ifstrempty`、`ifblank` 和 `notblank`，要求字符串参数使用完整花括号。编译时也识别[已确认的静态副本](string-test-copy-calls.md)，使用调用处保存的数据参数数量。这些[字符串测试](string-tests.md)不展开数据中的命令，字符串中的类似操作数文本和命令 token 不作为可执行引用，也不妨碍外层操作数的精确定位。
+Supports static names, `not` / `and` / `or`, parentheses, comments and cross-line parameters, including following keywords such as `nottogl{...}`. `test {...}` supports unredefined `ifstrequal`, `ifstrempty`, `ifblank`, and `notblank`, requiring full curly braces for string parameters. [Confirmed static copy](string-test-copy-calls.md) is also recognized at compile time, using the number of data parameters saved at the call site. These [string tests](string-tests.md) do not expand commands in the data, similar operand text and command tokens in strings are not used as executable references, and do not prevent the precise positioning of outer operands.
 
-动态名称、任意宏生成的表达式或测试、重定义、残缺或无法确认的语法，以及同一表达式内同一命名空间的重复名称保留行级诊断。宏生成的名称和嵌套测试可能产生与外层操作数相同的回显，因此不能仅按错误名称搜索源码。分析超出预算时也保留原错误。
+Dynamic names, arbitrary macro-generated expressions or tests, redefinitions, broken or unidentified syntax, and duplicate names in the same namespace within the same expression retain row-level diagnostics. Macro-generated names and nested tests may produce the same echo as the outer operand, so the source code cannot be searched by error name alone. The original errors are also retained when the analysis exceeds the budget.
 
-循环命令在报错前已读取表达式和循环体，日志必须确认完整读取边界；条件命令在报错前只读取表达式。修复不修改循环体、条件分支或赋值。
+The loop command has read the expression and loop body before reporting an error, and the log must confirm the complete reading boundary; the conditional command only reads the expression before reporting an error. The fix does not modify the loop body, conditional branches, or assignments.
 
-缩短的源码回显必须在对应源码行中唯一，并与调用的读取终点一致。帮助正文提供完整名称时，回显可只覆盖名称的后半部分；如果只剩结束花括号，或长循环体使操作数完全不可见，则保留行级诊断。
+The shortened source code echo must be unique within the corresponding source code line and consistent with the read endpoint of the call. When the full name is provided in the help text, the echo can cover only the second half of the name; if only the closing curly brace is left, or the long loop body makes the operands completely invisible, line-level diagnostics are retained.
 
-## 注释与源码编辑
+## Comments and source code editing
 
-关键词内部的注释续行遵循 TeX 的读取规则。例如，下面的 `bo` 和 `ol` 组成 `bool`：
+Comment continuation lines within keywords follow TeX's reading rules. For example, the following `bo` and `ol` form `bool`:
 
 ```tex
 \newbool{draft}
-\ifboolexpr{bo% 保留这条注释
+\ifboolexpr{bo% keep this comment
   ol{draft}}{Yes}{No}
 ```
 
-`bool`、`togl`、`not`、`and`、`or` 和 `test` 均支持这种写法，包括 CRLF、下一行缩进和连续注释。导航、引用、悬停、名称补全与跨文件重命名能识别相应的操作数；编译诊断及拼写修复使用名称本身的源码范围。编辑保留关键词、注释和缩进，同名 boolean 与 toggle 各自更新。
+`bool`, `togl`, `not`, `and`, `or` and `test` all support this writing method, including CRLF, next line indentation and continuous comments. Navigation, referencing, hovering, name completion, and cross-file renaming recognize corresponding operands; compile diagnostics and spelling fixes use the source scope of the name itself. The editor retains keywords, comments and indentation, and the boolean and toggle with the same name are updated respectively.
 
-普通空格、空行和转义的百分号不会拼接成关键词。`test` 中字面字符串里的类似操作数文本不作为 boolean / toggle 引用；名称本身仍须为静态字面内容。
+Ordinary spaces, blank lines, and escaped percent signs will not be spliced into keywords. Similar operand literals in literal strings in `test` are not referenced as boolean / toggle references; the names themselves must still be static literal content.
 
-## 日志与协议
+## Logs and protocols
 
-诊断消息追加编译器给出的 `Boolean '名称' undefined.` 或 `Toggle '名称' undefined.`，保留两个命名空间的独立错误。标准帮助正文缺失、残缺或与当前错误无法确认关联时，不猜测名称；折行说明在确认完整结束后恢复，不跨越其他诊断。
+The diagnostic message appends the `Boolean 'name' undefined.` or `Toggle 'name' undefined.` given by the compiler, leaving separate errors for the two namespaces. When the standard help text is missing, incomplete, or cannot be confirmed to be related to the current error, the name will not be guessed; the line break description will be restored after the confirmation is complete and will not span other diagnoses.
 
-精确诊断复用 `undefined-boolean` / `undefined-toggle` 代码、名称数据与宏来源校验。版本化编辑、旧客户端以及过期修复遵循[通用规则](diagnostics.md#分析范围与来源确认)。即使主文件版本未变，依赖文件重定义测试命令后也会拒绝旧修复；同一命名空间新增重复操作数后也须重新确认位置。
+Accurate diagnostic reuse `undefined-boolean` / `undefined-toggle` code, name data and macro source verification. Versioned edits, legacy clients, and obsolescence fixes follow [General Rules](diagnostics.md#analysis-scope-and-source-confirmation). Even if the main file version remains unchanged, the old fix will be rejected after the test command is redefined in the dependent file; the location must be reconfirmed after adding duplicate operands in the same namespace.
 
-## 验证
+## verify
 
-默认回归检查两个命名空间、表达式与循环的读取边界、字面测试字符串、动态或歧义操作数、帮助正文的关联与折行、重复及缩短回显、跨行和 UTF-16 范围，以及版本化和旧客户端修复：
+Default regression checks for two namespaces, read boundaries for expressions and loops, literal test strings, dynamic or ambiguous operands, help text correlation and wrapping, duplicate and shortened echoes, cross-line and UTF-16 ranges, and versioning and legacy client fixes:
 
 ```sh
 cargo test --locked --test boolean_expression_diagnostics
 cargo test --locked --test protocol expression_fixes_recheck_cross_file_tests_without_a_main_version_change
 ```
 
-注释续行另有编辑、诊断和版本化跨文件重命名回归：
+Comment continuation lines also add editing, diagnostics, and versioning cross-file rename regressions:
 
 ```sh
 cargo test --locked --test expression_keywords
 cargo test --locked --test protocol commented_expression_keywords_return_versioned_cross_file_renames_over_stdio
 ```
 
-真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox：
+True regression requires pdfLaTeX, XeLaTeX, LuaLaTeX and etoolbox:
 
 ```sh
 cargo test --locked --test boolean_expression_diagnostics -- --include-ignored
 cargo test --locked --test expression_keywords -- --include-ignored
 ```
 
-三个引擎分别使用 60 / 79 列和传统 / 文件行号日志。每组验证 11 处操作数修复，再重新编译生成 PDF，并核对条件分支、循环次数、内置条件、跨行表达式与长名称的实际结果；另确认动态名称及用户测试宏保留行级诊断。其他外部工具测试见[真实工具回归](testing.md)。
+The three engines use 60/79 column and traditional/file line number logs respectively. Each group verified 11 operand fixes, recompiled to generate PDF, and checked the actual results of conditional branches, loop times, built-in conditions, cross-line expressions, and long names; it also confirmed that dynamic names and user test macros retain line-level diagnostics. For other external tool tests, see [Real Tool Regression](testing.md).
 
-注释续行的真实回归在三个引擎中分别使用传统和文件行号日志。先独立重命名跨文件的 boolean 与 toggle，核对分支、字面字符串和两次循环的结果；再引入两个命名空间的拼写错误，验证精确范围、修复及重新编译后的相同结果。
+Real regression of comment continuation lines in three engines using traditional and file line number logs respectively. First, independently rename cross-file boolean and toggle, and check the results of branches, literal strings, and two loops; then introduce spelling errors in the two namespaces, verify the exact range, fix and recompile the same results.

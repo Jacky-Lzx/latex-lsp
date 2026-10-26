@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
+use texquill::{compilation::build_log, text::Text};
 
 #[test]
 fn numbered_missing_character_errors_preserve_severity_and_utf16_character_ranges() {
@@ -187,8 +187,8 @@ fn unresolved_sources_and_invalid_lines_keep_errors_without_borrowing_glyph_rang
 #[test]
 #[ignore = "requires xelatex"]
 fn native_xelatex_missing_glyph_levels_preserve_warnings_errors_and_child_positions() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
     for numbered in [false, true] {
         for level in [2, 3] {
             let directory = tempfile::tempdir().unwrap();
@@ -372,8 +372,8 @@ fn different_glyph_contexts_and_fonts_retain_their_own_positions() {
 #[test]
 #[ignore = "requires xelatex"]
 fn native_xelatex_shared_glyph_runs_keep_repetitions_and_conservative_macro_ranges() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
     let long = format!("Before {}😀 after.", "中".repeat(24));
     for numbered in [false, true] {
         for (source, precise) in [

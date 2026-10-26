@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::collections::BTreeMap;
+use texquill::{
     compilation::build,
     editing,
     language::{features, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::collections::BTreeMap;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str, version: Option<i32>) -> Url {
     let uri = Url::parse(&format!("file:///named-colors/{name}")).unwrap();
@@ -17,7 +17,7 @@ fn insert(workspace: &mut Workspace, name: &str, source: &str, version: Option<i
 }
 fn setup(source: &str) -> (Workspace, Url) {
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },
@@ -1260,7 +1260,7 @@ fn real_color_renames_preserve_expanded_rgb_specs_and_successful_compilation() {
             std::fs::write(&main, "\\documentclass{article}\\usepackage{xcolor}\\input{palette}\\begin{document}\\input{content}\\end{document}").unwrap();
             std::fs::write(root.join("palette.tex"), &declarations).unwrap();
             std::fs::write(root.join("content.tex"), body).unwrap();
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable: engine.into(),
                 ..Default::default()
             };
@@ -1309,7 +1309,7 @@ fn real_color_renames_preserve_expanded_rgb_specs_and_successful_compilation() {
             };
             assert_eq!(audit(&before.output), audit(&after.output));
             assert_eq!(audit(&after.output).len(), 2);
-            assert!(root.join("build/latex-lsp/main.pdf").is_file());
+            assert!(root.join("build/texquill/main.pdf").is_file());
         }
     }
 }

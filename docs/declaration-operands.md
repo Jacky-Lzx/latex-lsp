@@ -1,8 +1,8 @@
-# 命令名操作数与声明
+# Command-name operands and declarations
 
-[返回文档目录](README.md) · [符号与重命名](symbols.md)
+[Back to documentation](README.md) · [Symbols and renaming](symbols.md)
 
-声明或复制语句中被读取的控制词是命令名操作数，不等于执行该命令。例如：
+The control word read in a declaration or copy statement is the command name operand and is not equivalent to executing the command. For example:
 
 ```tex
 \newcommand{\ordinary}[1]{#1}
@@ -10,24 +10,24 @@
 \ordinary{Body}
 ```
 
-这里仅声明了 `ordinary` 和 `saved`。复制来源 `newcommand` 不会再次执行，也不会把后面的 `ordinary` 调用登记为第二处声明。重命名 `ordinary` 时仍可更新它的真实声明和调用。
+Only `ordinary` and `saved` are declared here. The copy source `newcommand` will not be executed again, nor will the subsequent `ordinary` call be registered as the second statement. Renaming `ordinary` can still update its actual declaration and call.
 
-## 索引与编辑
+## Indexing and editing
 
-识别直接声明目标，以及 `let`、内核命令复制和 `cslet` 的控制词来源；兼容允许的分组写法和显式 `expandafter` 展开的静态 `csname` 目标。命令名本身保留为宏引用，支持来源命令的导航与重命名。
+Recognizes direct declaration targets, as well as control word sources for `let`, kernel command copy, and `cslet`; compatible with allowed grouping notation and static `csname` targets with explicit `expandafter` expansion. The command name itself is retained as a macro reference, supporting navigation and renaming of the source command.
 
-被复制的声明命令不向后读取普通文本，避免生成虚假的宏、寄存器、环境、计数器、布尔开关、toggle、标签、文献条目、PDF 目标、颜色或保存文本。操作数也不为后续分组提供名称补全、参数提示、键名高亮或重命名编辑。例如 `\let\saved\ref{real}` 中的 `{real}` 是普通分组，重命名同名标签时会保留它。
+The copied statement command does not read plain text backwards, avoiding the generation of spurious macros, registers, environments, counters, Boolean switches, toggle, labels, document entries, PDF targets, colors, or save text. Operands also do not provide name completion, signature help, key name highlighting, or rename editing for subsequent groupings. For example, `{real}` in `\let\saved\ref{real}` is a common group and will be retained when renaming the label with the same name.
 
-复制 `verb`、`begin` 等命令也不会在复制处启动逐字扫描或环境配对。复制之后实际出现的命令仍正常解析；`futurelet` 的继续执行规则见[前瞻目标](futurelet.md)。
+Copying `verb`, `begin`, etc. commands will also not initiate a verbatim scan or environment pairing at the copy location. The actual commands that appear after copying are still parsed normally; for the continuation execution rules of `futurelet`, see [Look-ahead Target](futurelet.md).
 
-操作数位置的命令名补全只替换名称，不插入调用参数；详见[补全规则](completion.md#命令名操作数)。`meaning` 查看命令时的同类索引与编辑规则见[meaning 操作数](meaning.md)。
+The command name completion at the operand position only replaces the name and does not insert the calling parameters; see [Completion Rules](completion.md#command-name-operands) for details. `meaning` For similar indexing and editing rules when viewing commands, see [meaning operands](meaning.md).
 
-`undef` / `gundef` 的目标同样作为未展开控制词读取，支持裸控制词及单控制词分组；`csundef` / `csgundef` 使用静态名称。撤销位置是宏引用而非新声明，不会执行目标原有的语法，详情见[撤销定义与字符串测试](string-test-undefinitions.md)。
+The targets of `undef` / `gundef` are also read as unexpanded control words, supporting bare control words and single control word grouping; `csundef` / `csgundef` use static names. The undo location is a macro reference rather than a new statement, and the original syntax of the target will not be executed. For details, see [Undo Definition and String Test](string-test-undefinitions.md).
 
-## 边界
+## Boundary
 
-原始 `let` 的来源是一个 token；复制 `{` 不会把后面整组内容都当成操作数。来源花括号与宏正文的配对规则见[静态花括号诊断](brace-diagnostics.md)。静态分析保留后续实际声明，不执行任意宏展开、类别码变更或赋值流程，也不据此为副本推断确定的调用签名。
+The source of the original `let` is a token; copying `{` will not treat the entire following set of contents as an operand. For the matching rules between source curly braces and macro text, see [Static Braces Diagnostics](brace-diagnostics.md). Static analysis preserves the actual subsequent declarations and does not perform any macro expansion, category code changes, or assignment procedures, nor does it infer a definite call signature for the copy.
 
-本文件前文已通过直接、命名或静态 `csname` 声明显式改写声明/复制关键词时，不再按该关键词的原始规则确认后续操作数。此判断保留不确定性，不模拟分组结束后的含义恢复。
+When the declaration/copy keyword has been explicitly rewritten through direct, named or static `csname` declaration earlier in this document, subsequent operands will no longer be confirmed according to the original rules of the keyword. This judgment retains uncertainty and does not simulate the recovery of meaning after the grouping ends.
 
-编译诊断中可能的参数消费关系另见[特殊字符修复的宏来源](literal-macro-scopes.md)。
+For possible parameter consumption relationships in compilation diagnostics, see also [Macro Sources for Special Character Repair](literal-macro-scopes.md).

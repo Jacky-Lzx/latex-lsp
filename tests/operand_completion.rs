@@ -1,16 +1,16 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn complete(marked: &str, label: &str) -> (CompletionItem, Text, usize) {
     let offset = marked.find('|').unwrap();
     let source = marked.replacen('|', "", 1);
     let uri = Url::parse("file:///operand-completion/main.tex").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },
@@ -224,7 +224,7 @@ fn operand_completions_use_cross_file_definitions_and_preserve_following_text() 
         let source = format!("\\meaning % comment\r\n  \\{prefix}$ suffix");
         std::fs::write(temp.path().join("content.tex"), &source).unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 snippets: true,
                 ..Default::default()
             },
@@ -273,7 +273,7 @@ fn literal_text_and_escaped_backslashes_do_not_complete_commands() {
         let source = marked.replacen('|', "", 1);
         let text = Text::new(source.clone());
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 snippets: true,
                 ..Default::default()
             },

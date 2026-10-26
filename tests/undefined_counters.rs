@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
+use texquill::{compilation::build_log, text::Text};
 
 const HELP: &str = "\nSee the LaTeX manual or LaTeX Companion for explanation.\nType  H <return>  for immediate help.\n ...                                              \n                                                  \n";
 
@@ -302,8 +302,8 @@ fn uncertain_counter_errors_keep_line_ranges_without_machine_readable_name_data(
 #[cfg(unix)]
 #[ignore = "requires pdflatex, xelatex and lualatex"]
 fn real_engines_separate_direct_counter_errors_and_leave_macro_expansion_errors_on_the_call_line() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::{os::unix::fs::PermissionsExt, sync::atomic::AtomicBool};
+    use texquill::{compilation::build, config::BuildConfig};
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for numbered in [false, true] {
             let directory = tempfile::tempdir().unwrap();
@@ -483,8 +483,8 @@ fn counter_relation_names_can_precede_the_final_consumed_line_and_require_unique
 #[cfg(unix)]
 #[ignore = "requires pdflatex, xelatex, lualatex, amsmath, amsthm, aliascnt and refcount"]
 fn real_engines_pinpoint_parent_alias_theorem_and_reset_counter_errors() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::{os::unix::fs::PermissionsExt, sync::atomic::AtomicBool};
+    use texquill::{compilation::build, config::BuildConfig};
     let source = concat!(
         "\\newcounter{inner}[parentmissing]\n",
         "\\newaliascnt{mirror}{aliasmissing}\n",

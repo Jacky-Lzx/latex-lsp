@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeMap, path::Path};
+use texquill::{
     editing::file_operations,
     language::{features, navigation},
     project::{graphics, workspace::Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::{collections::BTreeMap, path::Path};
 
 const PNG: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0,
@@ -490,7 +490,7 @@ fn real_quoted_images_compile_after_moves_and_missing_filename_repairs() {
                     std::slice::from_ref(&image)
                 );
                 let outcome =
-                    latex_lsp::compilation::build::run(&path, &config, &Default::default());
+                    texquill::compilation::build::run(&path, &config, &Default::default());
                 assert_eq!(
                     outcome.status, "success",
                     "{engine}/{argument}: {}",
@@ -521,7 +521,7 @@ fn real_quoted_images_compile_after_moves_and_missing_filename_repairs() {
                 .replace(r#""assets/chart image.png""#, missing);
             assert!(source.contains(missing), "{source}");
             std::fs::write(&path, &source).unwrap();
-            let outcome = latex_lsp::compilation::build::run(&path, &config, &Default::default());
+            let outcome = texquill::compilation::build::run(&path, &config, &Default::default());
             assert_eq!(outcome.status, "error", "{engine}: {}", outcome.output);
             let diagnostic = outcome.diagnostics[&main]
                 .iter()
@@ -537,7 +537,7 @@ fn real_quoted_images_compile_after_moves_and_missing_filename_repairs() {
             let start = text.source.find(missing).unwrap();
             assert_eq!(diagnostic.range, text.range(start, start + missing.len()));
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     ..Default::default()
                 },
@@ -548,7 +548,7 @@ fn real_quoted_images_compile_after_moves_and_missing_filename_repairs() {
                 .project
                 .build_diagnostics
                 .insert(main.clone(), outcome.diagnostics);
-            let actions = latex_lsp::editing::code_actions(
+            let actions = texquill::editing::code_actions(
                 &workspace,
                 &main,
                 diagnostic.range,
@@ -576,7 +576,7 @@ fn real_quoted_images_compile_after_moves_and_missing_filename_repairs() {
                 )
                 .unwrap();
             std::fs::write(&path, repaired.source).unwrap();
-            let outcome = latex_lsp::compilation::build::run(&path, &config, &Default::default());
+            let outcome = texquill::compilation::build::run(&path, &config, &Default::default());
             assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
             assert!(outcome
                 .inputs
@@ -587,12 +587,12 @@ fn real_quoted_images_compile_after_moves_and_missing_filename_repairs() {
 }
 
 #[cfg(unix)]
-fn engine_config(root: &Path, engine: &str) -> latex_lsp::config::BuildConfig {
+fn engine_config(root: &Path, engine: &str) -> texquill::config::BuildConfig {
     use std::os::unix::fs::PermissionsExt;
     let compiler = root.join(engine);
     std::fs::write(&compiler, format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
     std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
-    latex_lsp::config::BuildConfig {
+    texquill::config::BuildConfig {
         executable: compiler.to_string_lossy().into(),
         ..Default::default()
     }
@@ -635,7 +635,7 @@ fn real_quoted_search_directories_keep_images_and_repairs_after_directory_and_ro
                 assert!(
                     changes(&workspace, &[rename(root, "figure files", "new figures")]).is_empty()
                 );
-                let outcome = latex_lsp::compilation::build::run(
+                let outcome = texquill::compilation::build::run(
                     &root.join("main.tex"),
                     &config,
                     &Default::default(),
@@ -663,7 +663,7 @@ fn real_quoted_search_directories_keep_images_and_repairs_after_directory_and_ro
                     targets(&workspace, &main).as_slice(),
                     std::slice::from_ref(&image)
                 );
-                let outcome = latex_lsp::compilation::build::run(
+                let outcome = texquill::compilation::build::run(
                     &main.to_file_path().unwrap(),
                     &config,
                     &Default::default(),
@@ -709,7 +709,7 @@ fn real_quoted_search_directories_keep_images_and_repairs_after_directory_and_ro
                 .unwrap()
                 .replace(r#""plot image""#, r#""plto image""#);
             std::fs::write(&path, &source).unwrap();
-            let outcome = latex_lsp::compilation::build::run(&path, &config, &Default::default());
+            let outcome = texquill::compilation::build::run(&path, &config, &Default::default());
             assert_eq!(outcome.status, "error", "{engine}: {}", outcome.output);
             let diagnostic = outcome.diagnostics[&main]
                 .iter()
@@ -725,7 +725,7 @@ fn real_quoted_search_directories_keep_images_and_repairs_after_directory_and_ro
                 text.range(start, start + r#""plto image""#.len())
             );
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     ..Default::default()
                 },
@@ -737,7 +737,7 @@ fn real_quoted_search_directories_keep_images_and_repairs_after_directory_and_ro
                 .project
                 .build_diagnostics
                 .insert(main.clone(), outcome.diagnostics);
-            let actions = latex_lsp::editing::code_actions(
+            let actions = texquill::editing::code_actions(
                 &workspace,
                 &main,
                 diagnostic.range,
@@ -760,7 +760,7 @@ fn real_quoted_search_directories_keep_images_and_repairs_after_directory_and_ro
                 }])
                 .unwrap();
             std::fs::write(&path, repaired.source).unwrap();
-            let outcome = latex_lsp::compilation::build::run(&path, &config, &Default::default());
+            let outcome = texquill::compilation::build::run(&path, &config, &Default::default());
             assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
             assert!(outcome
                 .inputs

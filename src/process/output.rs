@@ -6,7 +6,7 @@ use std::{
     path::Path,
 };
 
-pub(crate) const TRUNCATED: &str = "[latex-lsp: middle of compiler output omitted]";
+pub(crate) const TRUNCATED: &str = "[texquill: middle of compiler output omitted]";
 
 pub(crate) fn truncated(text: &str) -> bool {
     text.lines().any(|line| line == TRUNCATED)

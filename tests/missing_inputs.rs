@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::{build, build_log},
     editing,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 #[test]
 fn missing_input_diagnostics_select_literal_paths_in_braces_quotes_and_bare_forms() {
@@ -154,7 +154,7 @@ fn input_spelling_fixes_protect_spaces_and_preserve_existing_delimiters_and_comm
         std::fs::write(directory.path().join("main.tex"), &source).unwrap();
         std::fs::write(directory.path().join("my chapter.tex"), "Chapter.").unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 versioned_edits: true,
                 ..Default::default()
@@ -209,7 +209,7 @@ fn unicode_input_fixes_group_paths_and_legacy_commands_revalidate_the_expanded_e
         std::fs::write(root.join("main.tex"), &source).unwrap();
         std::fs::write(root.join("café.tex"), "Chapter.").unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 apply_edits: true,
                 versioned_edits: true,
@@ -274,7 +274,7 @@ fn input_file_fixes_ignore_includeonly_and_revalidate_files_and_command_requests
     std::fs::write(root.join("main.tex"), source).unwrap();
     std::fs::write(root.join("chapter.tex"), "Chapter.").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             apply_edits: true,
             ..Default::default()
         },
@@ -334,7 +334,7 @@ fn shared_input_source_uses_the_diagnostic_build_root_for_filename_suggestions()
     }
     let uri = Url::from_file_path(root.join("shared/source.tex")).unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -366,7 +366,7 @@ fn input_fixes_reject_incomplete_quotes_and_mismatched_compiler_filename_data() 
     for source in [r#"\input"chapetr"#, r"\input{chapetr}"] {
         std::fs::write(root.join("main.tex"), source).unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -409,7 +409,7 @@ fn real_input_filename_fixes_read_the_intended_source_for_braced_bare_and_quoted
                 "\\typeout{REPAIRED INPUT READ}Chapter.\n",
             )
             .unwrap();
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable: "pdflatex".into(),
                 ..Default::default()
             };
@@ -421,7 +421,7 @@ fn real_input_filename_fixes_read_the_intended_source_for_braced_bare_and_quoted
                 .unwrap_or_else(|| panic!("{command}: {:?}\n{}", failed.diagnostics, failed.output))
                 .clone();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     ..Default::default()
                 },

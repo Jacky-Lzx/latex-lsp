@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const ERROR: &str = "Package etoolbox Error: Invalid boolean expression.";
 const HELP: &str = "\nSee the etoolbox package documentation for explanation.\nType  H <return>  for immediate help.\n ...\n\n";
@@ -77,7 +77,7 @@ fn expression_repairs_preserve_operators_branches_and_the_other_namespace() {
         let diagnostics = build_log::parse(&main, &log(2, call, detail, true));
         let error = diagnostics[&uri][0].clone();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -430,7 +430,7 @@ fn expression_fixes_revalidate_tests_candidates_versions_and_readonly_builtins()
     let uri = Url::from_file_path(&main).unwrap();
     let error = diagnostics[&uri][0].clone();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             versioned_edits: true,
             ..Default::default()
@@ -492,7 +492,7 @@ fn expression_fixes_revalidate_tests_candidates_versions_and_readonly_builtins()
     );
     let errors = diagnostics[&uri].clone();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -512,8 +512,8 @@ fn expression_fixes_revalidate_tests_candidates_versions_and_readonly_builtins()
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_expression_repairs_preserve_logic_loops_literals_and_wrapped_names_in_all_engines() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let long_name = format!("{}draft", "audit".repeat(16));
     let long_typo = long_name.replace("draft", "darft");
@@ -595,7 +595,7 @@ fn real_expression_repairs_preserve_logic_loops_literals_and_wrapped_names_in_al
                     before.output
                 );
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         code_action_literals: true,
                         ..Default::default()
                     },
@@ -737,9 +737,9 @@ fn copied_string_tests_keep_boolean_expression_errors_on_the_executable_sibling(
         )
         .unwrap();
         std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let outcome = latex_lsp::compilation::build::run(
+        let outcome = texquill::compilation::build::run(
             &main,
-            &latex_lsp::config::BuildConfig {
+            &texquill::config::BuildConfig {
                 executable: compiler.to_string_lossy().into(),
                 arguments: Some(vec!["%o".into(), "%f".into()]),
                 ..Default::default()

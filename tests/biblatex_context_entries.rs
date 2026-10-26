@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace};
 #[test]
 fn context_entry_assignments_participate_in_complete_key_renames() {
     let dir = tempfile::tempdir().unwrap();
@@ -51,7 +51,7 @@ fn key(ws: &Workspace, uri: &Url, marker: &str, name: &str) -> Location {
     Location::new(uri.clone(), doc.text.range(at, at + name.len()))
 }
 fn apply(source: &str, edits: &[TextEdit]) -> String {
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     let mut result = source.to_string();
     let mut edits = edits.iter().collect::<Vec<_>>();
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
@@ -89,7 +89,7 @@ fn direct_starred_named_and_forwarded_assignments_keep_only_real_key_edits() {
             "{call}"
         );
         assert_eq!(
-            latex_lsp::editing::highlights(&ws, &main, assignment.range.start).len(),
+            texquill::editing::highlights(&ws, &main, assignment.range.start).len(),
             2
         );
         let changes = features::rename(&ws, &main, assignment.range.start, "fresh")
@@ -149,7 +149,7 @@ fn assignment_lists_complete_full_keys_and_signature_help_requires_exact_native_
         }
         let doc = &ws.documents[&main];
         let at = doc.text.source.find(&body).unwrap() + marked.find('¦').unwrap();
-        let help = latex_lsp::language::signature::help(&ws, &main, doc.text.position(at))
+        let help = texquill::language::signature::help(&ws, &main, doc.text.position(at))
             .unwrap_or_else(|| panic!("{marked}"));
         assert_eq!(
             help.signatures[0].label,

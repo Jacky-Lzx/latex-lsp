@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::{build, build_log},
     editing,
     language::navigation,
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 const PDF_FRAME: &str = "\\FV@Error ... {FancyVerb Error:\n\\space \\space #1\n}\n";
 const XE_FRAME: &str = "\\FV@Error ...ncyVerb Error:^^J\\space \\space #1^^J}\n";
@@ -90,7 +90,7 @@ fn apply(text: Text, edit: TextEdit) -> Text {
 
 fn workspace(root: &Path, main: &Url, source: &str, items: Vec<Diagnostic>) -> Workspace {
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             versioned_edits: true,
             ..Default::default()
@@ -169,7 +169,7 @@ fn unsupported_calls_redefinitions_and_expansion_frames_keep_generic_errors() {
         "<argument> \\expanded\n",
         "\\FV@Error ... unknown implementation\n",
         "\\FV@Error ... {FancyVerb Error:\n\\space \\space #1\nwrong\n",
-        "[latex-lsp: middle of compiler output omitted]\n",
+        "[texquill: middle of compiler output omitted]\n",
     ] {
         let (_, _, _, items) = parse(r"\VerbatimInput{smaple.rs}¦", "smaple.rs", frame, true);
         assert!(missing(&items).is_none(), "{frame}: {items:?}");
@@ -306,7 +306,7 @@ fn incomplete_error_blocks_unknown_sources_and_incorrect_echoes_do_not_guess_pat
         format!("(./main.tex\n! FancyVerb Error:\n  No verbatim file smaple.rs\n{PDF_FRAME}l.1 \\VerbatimInput{{smaple.rs}}\n"),
         format!("(./main.tex\n! FancyVerb Error:\n  No verbatim file smaple.rs\nPackage local Warning: Adjacent warning.\n.\n{PDF_FRAME}l.1 \\VerbatimInput{{smaple.rs}}\n"),
         format!("(./unavailable.tex\n! FancyVerb Error:\n  No verbatim file smaple.rs\n.\n{PDF_FRAME}l.1 \\VerbatimInput{{smaple.rs}}\n"),
-        format!("[latex-lsp: middle of compiler output omitted]\n! FancyVerb Error:\n  No verbatim file smaple.rs\n.\n{PDF_FRAME}l.1 \\VerbatimInput{{smaple.rs}}\n"),
+        format!("[texquill: middle of compiler output omitted]\n! FancyVerb Error:\n  No verbatim file smaple.rs\n.\n{PDF_FRAME}l.1 \\VerbatimInput{{smaple.rs}}\n"),
         format!("(./main.tex\n./main.tex:2: FancyVerb Error:\n  No verbatim file smaple.rs\n.\n{PDF_FRAME}l.2 \\VerbatimInput{{smaple.rs}}\n"),
         format!("(./main.tex\n./main.tex:1: FancyVerb Error:\n  No verbatim file smaple.rs\n.\n{PDF_FRAME}l.1 \\VerbatimInput{{other.rs}}\n"),
     ] {
@@ -394,7 +394,7 @@ fn real_missing_fancyverb_fixes_read_the_intended_file_with_both_engines() {
             let source = format!("% 😀\r\n\\documentclass{{article}}\\usepackage{{fancyvrb}}\\begin{{document}}\r\n\\VerbatimInput *[frame=single] % keep\r\n{{{value}}}\r\n\\end{{document}}\r\n");
             std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
             std::fs::write(root.join(right), "Original code.\n").unwrap();
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable: engine.into(),
                 ..Default::default()
             };
@@ -424,7 +424,7 @@ fn real_missing_fancyverb_fixes_read_the_intended_file_with_both_engines() {
                 .values()
                 .flatten()
                 .all(|item| item.code != Some(NumberOrString::String(CODE.into()))));
-            let recorder = std::fs::read_to_string(root.join("build/latex-lsp/main.fls")).unwrap();
+            let recorder = std::fs::read_to_string(root.join("build/texquill/main.fls")).unwrap();
             assert!(recorder
                 .lines()
                 .any(|line| line.strip_prefix("INPUT ").is_some_and(|path| root

@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "missing-bibliography-field";
 fn uri(root: &Path, file: &str) -> Url {
@@ -255,7 +255,7 @@ fn required_field_key_cache_refreshes_without_inventing_an_insertion_quickfix() 
         let item = &items(&diagnostics, &uri(root, "refs.data"))[0];
         assert_eq!(item.range, span(&source, "café😀"));
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },

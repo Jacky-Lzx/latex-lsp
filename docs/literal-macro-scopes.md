@@ -1,18 +1,18 @@
-# 特殊字符修复的跨文件宏来源
+# Macro sources for special character fixes
 
-[返回文档目录](README.md) · [特殊字符诊断](special-characters.md) · [重复上下标](math-scripts.md)
+[Back to documentation](README.md) · [Special character diagnostics](special-characters.md) · [Duplicate superscript and subscript](math-scripts.md)
 
-服务器会结合编译时已加载的项目文件检查宏参数。正文特殊字符、多余对齐分隔符和重复上下标中的 `&`、`#`、`_`、`^`，如果被可静态识别的宏参数消费，就保留整行诊断，不提供字符替换。
+The server checks the macro parameters against the project file loaded during compilation. `&`, `#`, `_`, and `^` in text special characters, redundant alignment delimiters, and repeated superscripts and subscripts, if consumed by statically identifiable macro parameters, retain the entire line of diagnostics and do not provide character replacement.
 
-## 跨文件参数
+## Cross-file parameters
 
-例如，`macros.tex` 声明：
+For example, `macros.tex` declares:
 
 ```tex
 \def\bad#1#2{&}
 ```
 
-主文件使用：
+Main file uses:
 
 ```tex
 \documentclass{article}
@@ -22,32 +22,32 @@
 \end{document}
 ```
 
-TeX 可能将 `Extra alignment tab` 的源码回显停在 `\bad x&`。这里的 `&` 是宏的第二个参数，实际分隔符来自宏展开；服务器不会建议把这个参数转义为 `\&`。分隔参数也进行同样检查，例如 `\def\bad#1&{&}`。
+TeX may stop the source code echo of `Extra alignment tab` at `\bad x&`. Here `&` is the second parameter of the macro, and the actual delimiter comes from the macro expansion; the server will not recommend escaping this parameter to `\&`. Delimited parameters are also checked, for example `\def\bad#1&{&}`.
 
-如果 `\bad` 改为零参数的 `\def\bad{}`，同一处 `&` 才是直接执行的分隔符，可以获得精确诊断和转义修复。正常执行的盒子内容，如 `\hbox{#}`，仍支持 `#` 的字符定位。
+If `\bad` is changed to `\def\bad{}` with zero parameters, the same `&` is the delimiter for direct execution, and accurate diagnostics and escape repair can be obtained. Normally executed box contents, such as `\hbox{#}`, still support the character positioning of `#`.
 
-## 重复声明与环境参数
+## Repeat declarations and environment parameters
 
-同一文件内的重复声明也可能改变参数数量：
+Duplicate declarations within the same file may also change the number of parameters:
 
 ```tex
 \def\bad{}
 \def\bad#1#2{&}
 ```
 
-服务器保留可识别的候选参数形式。只要其中一种形式消费了出错字符，就不会提供直接替换；检查也会沿纯控制词别名转发，遇到循环时终止。候选只用于排除字符编辑，不会为有歧义的宏提供确定的签名、来源加载或导航结果。
+The server retains recognized candidate parameter forms. As long as one of the forms consumes the offending character, no direct replacement is provided; the check is also forwarded along pure control word aliases, terminating when a loop is encountered. Candidates are only used to exclude character edits and do not provide definite signatures, source loading, or navigation results for ambiguous macros.
 
-环境的开始控制与普通宏共享命名空间。父文件定义 `\newenvironment{bad}[2]{&}{}`、子文件使用 `\begin{bad}x&` 时，第二个裸参数同样不会被修复；支持传统可选参数、xparse 环境以及 `\begin` 的纯别名。
+The environment's start controls share a namespace with ordinary macros. When the parent file defines `\newenvironment{bad}[2]{&}{}` and the child file uses `\begin{bad}x&`, the second naked parameter will also not be repaired; traditional optional parameters, the xparse environment, and the pure alias of `\begin` are supported.
 
-无参数的重复声明、参数已经完整读取的调用，仍可定位后续直接执行的分隔符，例如 `\begin{bad}xy&` 中的 `&`。声明中的参数文本和替换体不会被当成独立调用。
+Repeated declarations without parameters and calls in which parameters have been completely read can still locate the delimiter for subsequent direct execution, such as `&` in `\begin{bad}xy&`. The parameter text and replacement body in the declaration are not treated as independent calls.
 
-存在已确认的项目来源时，使用完整的项目参数分析；分别定义在不同文件中的别名与目标宏也会一起检查，避免把已完成的分组参数之后的字符继续当成参数。无法解析的声明继续保留不确定边界。
+When there is a confirmed project source, complete project parameter analysis is used; aliases and target macros defined in different files will also be checked together to avoid using characters after the completed grouping parameters as parameters. Unresolvable declarations continue to remain undefined.
 
-## 命令与环境复制
+## Command and environment copy
 
-参数候选也识别静态复制声明：`\let`（含可选的 `=`）、`NewCommandCopy` / `RenewCommandCopy` / `DeclareCommandCopy`、相应的环境复制命令，以及 etoolbox 的 `cslet`、`letcs`、`csletcs`。支持这些接口允许的裸控制词、分组控制词、静态名称及显式 `expandafter` 展开的目标 `csname`。
+Parameter candidates also recognize static copy declarations: `\let` (with optional `=`), `NewCommandCopy` / `RenewCommandCopy` / `DeclareCommandCopy`, the corresponding environment copy commands, and etoolbox's `cslet`, `letcs`, `csletcs`. Support for bare control words, grouped control words, static names, and explicit `expandafter` expanded targets `csname` allowed by these interfaces.
 
-例如：
+For example:
 
 ```tex
 \def\consume#1#2{&}
@@ -55,23 +55,23 @@ TeX 可能将 `Extra alignment tab` 的源码回显停在 `\bad x&`。这里的 
 \def\consume{}
 ```
 
-副本 `\bad` 仍保留复制时的两个参数，后续 `\bad x&` 中的 `&` 不会被当成直接执行的分隔符。静态分析保留可识别的来源声明，不模拟任意赋值顺序，也不把复制关系当成普通的晚绑定别名；来源后来改变不会自动把旧副本视为零参数。
+The copy `\bad` still retains the two parameters when copying, and `&` in subsequent `\bad x&` will not be used as a delimiter for direct execution. Static analysis preserves identifiable source declarations, does not simulate arbitrary assignment orders, and does not treat copy relationships as ordinary late-binding aliases; subsequent changes in the source do not automatically treat old copies as zero arguments.
 
-复制语句中的来源控制词是操作数，不是一次实际调用。例如 `\let\saved\input` 不会仅因为复制了 `input` 就读取后续文件。复制关键词本身被重定义或来源动态时，不据此确认操作数边界。
+The source control words in the copy statement are operands, not an actual call. For example `\let\saved\input` will not read subsequent files just because `input` was copied. When the copy keyword itself is redefined or the source is dynamic, the operand boundaries are not confirmed accordingly.
 
-这些候选只参与编译诊断和修复校验，不为副本推断确定的参数提示或静态文件加载行为。分组参数已经完整读取后，仍可定位后面的真实分隔符；宏文件变更后，修复菜单和旧客户端命令都会重新检查复制关系。
+These candidates only participate in compile diagnostics and fix verification, and do not infer deterministic signature help or static file loading behavior for the replica. After the grouping parameters have been completely read, the real delimiter behind can still be located; after the macro file is changed, the repair menu and old client commands will recheck the copy relationship.
 
-## 来源边界
+## Source Boundary
 
-- 使用错误发生时已经加载的项目来源；尚未加载的文件不提供宏签名。
-- 执行子文件时暂停的父文件声明只用于排除可能的宏参数，不据此确认宏在当前位置的含义。
-- 动态加载或无法确认的来源、编译过程中发生变化的宏文件，保留整行诊断。
-- 分析是静态的，不执行任意 TeX 宏展开。原有的源码回显、宏展开帧、注释和逐字内容检查继续适用。
+- Use project sources that were already loaded when the error occurred; macro signatures are not provided for files that have not yet been loaded.
+- Parent file declarations that are paused when executing child files are only used to exclude possible macro arguments and are not used to confirm the meaning of the macro at the current position.
+- Dynamically loaded or unconfirmed sources, macro files that change during compilation, retain the entire line of diagnostics.
+- The analysis is static and does not perform arbitrary TeX macro expansion. The original source code echo, macro expansion frame, annotation and verbatim content inspection continue to apply.
 
-## 修复重校验
+## Fix revalidation
 
-精确诊断的 `data.macroSources` 记录参与分析的已加载来源；有暂停父文件时，另记录 `data.macroPausedSources`。来源须属于当前项目及服务器确认的编译来源。
+`data.macroSources` for accurate diagnostics records the loaded sources participating in the analysis; when there is a paused parent file, `data.macroPausedSources` is also recorded. The source must belong to the current project and the compiled source confirmed by the server.
 
-请求 Code Action 或执行旧客户端的 `latex.applyQuickFix` 时，服务器重新检查当前宏参数。即使主文件版本没有变化，宏文件从零参数改为两个参数后，原来的字符修复也会被拒绝。旧命令还会核对主文件版本、当前诊断和替换内容。
+The server rechecks the current macro parameters when requesting a Code Action or executing `latex.applyQuickFix` for an old client. Even if the main file version does not change, after the macro file is changed from zero parameters to two parameters, the original character repair will be rejected. The old command also checks the master file version, current diagnostics, and replacement content.
 
-测试命令与外部工具要求见[真实工具回归](testing.md)。
+For test commands and external tool requirements, see [Real Tool Regression](testing.md).

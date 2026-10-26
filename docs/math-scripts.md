@@ -1,36 +1,36 @@
-# 重复上下标
+# Duplicate math scripts
 
-[返回文档目录](README.md) · [编译诊断](diagnostics.md) · [正文特殊字符](special-characters.md)
+[Back to documentation](README.md) · [Compilation diagnostics](diagnostics.md) · [Text special characters](special-characters.md)
 
-TeX 报告 `Double subscript.` 或 `Double superscript.` 时，同一个数学基底已有同类上下标。服务器核对日志的源码回显，精确标出第二个 `_` 或 `^`，并提供显式添加空基底的快速修复。
+When TeX reports `Double subscript.` or `Double superscript.`, the same mathematical base already has similar superscripts and subscripts. The source code echo of the server check log accurately identifies the second `_` or `^`, and provides a quick fix to explicitly add an empty base.
 
-## 使用
+## use
 
-| 错误 | 诊断代码 | 快速修复 | 修改示例 |
+| Errors | Diagnostic Codes | Quick Fixes | Modify Examples |
 | --- | --- | --- | --- |
 | `Double subscript.` | `double-subscript` | `Insert empty base before '_'` | `x_1_2` → `x_1{}_2` |
 | `Double superscript.` | `double-superscript` | `Insert empty base before '^'` | `y^1^2` → `y^1{}^2` |
 
-操作只把选中的脚本符号替换为 `{}_` 或 `{}^`，保留已有上下标内容及后续分组。例如：
+The operation only replaces the selected script symbol with `{}_` or `{}^`, retaining the existing superscript and subscript content and subsequent grouping. For example:
 
 ```tex
 $x_{ab}_{cd}$ and $y^{ab}^{cd}$
 ```
 
-分别选择修复后得到：
+After selecting repair respectively, you get:
 
 ```tex
 $x_{ab}{}_{cd}$ and $y^{ab}{}^{cd}$
 ```
 
-空基底让后续上下标附着到新的数学原子上。如果希望合并为一个上下标，或表达嵌套关系，应按公式含义调整花括号，例如 `x_{12}` 或 `x_{1_2}`。正常的 `x_1^2` 不属于重复上下标；正文中的 `_` / `^` 转义仍由[特殊字符诊断](special-characters.md)处理。
+The empty base allows subsequent superscripts and subscripts to be attached to new mathematical atoms. If you want to combine them into a superscript and subscript, or express a nested relationship, you should adjust the curly braces according to the meaning of the formula, such as `x_{12}` or `x_{1_2}`. Normal `x_1^2` does not belong to repeated superscripts and subscripts; `_` / `^` escapes in the text are still processed by [Special Character Diagnostics](special-characters.md).
 
-支持行内与显示公式、分组上下标及注释续行。同一行的多个错误分别定位；修复后重新编译，已解决的诊断清除。
+Supports inline and display formulas, grouping superscripts and subscripts, and comment continuation lines. Multiple errors on the same line are located separately; recompile after repair, and the resolved diagnoses are cleared.
 
-## 来源确认
+## Source confirmation
 
-精确诊断的 `data.character` 保存脚本符号，`data.sourceContext` 保存核对用的源码回显。支持传统 `!` 日志、文件行号格式、子文件、CRLF 和 UTF-16 位置。完整回显须匹配源码前缀，缩短回显须在整行中唯一匹配。
+`data.character` for accurate diagnostics saves the script symbols, and `data.sourceContext` saves the source code echo for verification. Supports legacy `!` logs, file line number format, subfiles, CRLF and UTF-16 locations. The full echo must match the source code prefix, and the shortened echo must match uniquely in the entire line.
 
-宏展开帧、不匹配或不唯一的回显、未知来源和无效行号保留整行诊断。注释、逐字内容、宏定义体及已转义符号不提供该操作；已加载项目来源中可识别的宏参数中的脚本符号也不视为直接执行的上下标。跨文件来源边界见[宏来源说明](literal-macro-scopes.md)。
+Macro expansion frames, mismatched or non-unique echoes, unknown sources, and invalid line numbers retain full line diagnostics. Comments, verbatim content, macro definition bodies, and escaped symbols do not provide this operation; script symbols in macro parameters recognized in the source of the loaded project are not considered to be superscripts or subscripts for direct execution. For cross-file source boundaries, see [Macro Source Description](literal-macro-scopes.md).
 
-支持版本化 Code Action 及旧客户端的 `latex.applyQuickFix`。请求修复时核对当前诊断、消息、字符、源码和宏参数；旧命令执行时还会检查文档版本，并拒绝被改写的替换内容。
+Supports versioned Code Action and `latex.applyQuickFix` for legacy clients. The current diagnostics, messages, characters, source code and macro parameters are checked when requesting repair; the document version is also checked when the old command is executed, and the overwritten replacement content is rejected.

@@ -1,82 +1,82 @@
-# 文献编译诊断
+# Bibliography build diagnostics
 
-[文档目录](README.md) · [编译诊断](diagnostics.md#bibtex-与-biber) · [文献资源](biblatex-resources.md)
+[Documentation](README.md) · [Build diagnostics](diagnostics.md#bibtex-and-biber) · [Documentation Resources](biblatex-resources.md)
 
-可使用默认 latexmk 或[显式文献后端](bibliography-processing.md)完成处理。服务器读取本次编译新增或更新的 `.blg` 文件，分析 BibTeX 的重复条目、语法错误和字段警告，以及 Biber 的错误/警告；能识别数据库和文献键时定位到 `.bib` 文件。未能定位的消息显示在主文档。旧 `.blg` 不会被当成本次编译错误。日志中实际读取的 `.bib` 和 `.bst` 也会加入项目依赖，支持宏展开后的文献路径、文献键重命名、根文件识别、未保存检查和过期 PDF 检查；系统目录中的样式不会批量索引。文献记录独立于 `.fls` 保留，直到新的文献日志更新它，避免只运行 TeX 时丢失文献来源。
+Processing can be done using the default latexmk or [explicit documentation backend](bibliography-processing.md). The server reads the `.blg` file newly added or updated in this compilation, analyzes BibTeX's duplicate entries, syntax errors and field warnings, as well as Biber's errors/warnings; it locates the `.bib` file when it can identify database and citation keys. A failed to locate message is displayed in the main document. The old `.blg` will not be treated as an error in this compilation. The `.bib` and `.bst` actually read in the log will also be added to the project dependency, supporting the macro-expanded document path, citation key renaming, root file identification, unsaved check and expired PDF check; styles in the system directory will not be indexed in batches. The bibliography record is retained independently of `.fls` until a new bibliography log updates it, to avoid losing bibliographic sources when running only TeX.
 
-## 数据库角色与特殊后缀
+## Database roles and special suffixes
 
-Biber 的完整 `INFO - Found BibTeX data source '文件名'` 记录确认该文件作为 BibTeX 数据库读取。数据库可以使用 `.data` 等其他扩展名，也可以没有扩展名；即使名称以 `.tex`、`.png` 或 `.bst` 结尾，仍按文献数据索引，不导入其中看似 LaTeX 宏的文字。警告、示例文字、不完整记录或截断日志不会建立新的数据库依赖。
+Biber's complete `INFO - Found BibTeX data source 'filename'` record confirms that the file is read as a BibTeX database. The database can use other extensions such as `.data` or no extension; even if the name ends with `.tex`, `.png` or `.bst`, it will still be indexed by the document data, and the text in it that looks like a LaTeX macro will not be imported. Warnings, example text, incomplete logging, or truncated logs do not create new database dependencies.
 
-这些来源参与文献导航、版本化文献键重命名、文件移动、未保存检查和编译结果有效性检查。数据库角色随文件移动保留，并以新的完整文献日志更新；数据库与样式仍分别遵循 `BIBINPUTS` / `BSTINPUTS` 的搜索顺序，符号链接使用实际目标。
+These sources participate in document navigation, versioned citation key renaming, file movement, unsaved checks, and compilation result validity checks. The database role is retained with the file move and updated with the new complete document log; the database and style still follow the search order of `BIBINPUTS` / `BSTINPUTS` respectively, and the symbolic links use the actual target.
 
-数据库的完整日志名称也用于警告中的引号路径、裸路径和条目字段定位，包括 Biber 的 `Duplicate entry key` 和 `Datamodel: Entry` 消息。无法确认的显式文件保留在主文档，不借用其他数据库的同名条目。
+The full log name of the database is also used for quoted paths, bare paths, and entry field positioning in warnings, including Biber's `Duplicate entry key` and `Datamodel: Entry` messages. Unidentified explicit files remain in the main document and do not borrow entries of the same name from other databases.
 
-## 日志记录边界
+## Logging boundaries
 
-BibTeX 的数据库、样式和辅助文件记录按完整文件名处理；路径中的 `ERROR -`、`WARN -`、`---line … of file …` 等文字不会生成额外错误。语法错误后的 ` : ` 源码回显也保留为上下文，里面的日志样式文本不会成为新诊断。
+BibTeX's database, style, and auxiliary file records are processed as full file names; text such as `ERROR -`, `WARN -`, `---line … of file …`, etc. in the path will not generate additional errors. The ` : ` source code echo after the syntax error is also retained as context, and the log style text inside will not become a new diagnostics.
 
-Biber 的级别从当前记录头读取，支持普通 `WARN - …`、`[0] WARN - …` 和 `[0] Utils.pm:395> WARN - …` 格式。警告正文中的 `ERROR -` 不改变级别，正文中的 BibTeX 行号样式不改变诊断来源。`INFO` / `DEBUG` 消息里的错误示例不会产生错误；数据库角色只采纳实际 `INFO` 记录中完整的 `Found BibTeX data source '…'` 消息。
+Biber's level is read from the current record header and supports the common `WARN - …`, `[0] WARN - …` and `[0] Utils.pm:395> WARN - …` formats. `ERROR -` in the warning text does not change the level, and BibTeX line number styles in the text do not change the diagnostic source. Examples of errors in `INFO` / `DEBUG` messages do not generate errors; the database role only accepts the complete `Found BibTeX data source '…'` message from the actual `INFO` record.
 
-## 缺失样式文件
+## Missing style files
 
-BibTeX 报告无法打开样式文件时，诊断代码为 `missing-bibliography-style`。最终 TeX 日志确认读取的来源中只有一个对应的静态 `bibliographystyle` 声明时，错误定位到精确样式名，并提供最多 5 个同目录本地 `.bst` 拼写建议；保留逗号名称、显式后缀和周围注释。动态或拼接名称、声明歧义、来源不完整及扫描超限时保留主文档中的错误，不提供猜测修复。样式已经恢复或诊断过期时不再修复。
+BibTeX reports a diagnostic code of `missing-bibliography-style` when it cannot open a style file. When the final TeX log confirmed that there was only one corresponding static `bibliographystyle` declaration in the source read, the error was localized to the exact style name, and spelling suggestions for up to 5 local `.bst` in the same directory were provided; comma names, explicit suffixes, and surrounding comments were preserved. Errors in dynamic or spliced names, declaration ambiguities, incomplete sources, and scan overruns are retained in the main document and no guesswork fixes are provided. It is no longer repaired when the style has been restored or the diagnostics has expired.
 
-## 缺失文献库
+## Missing library
 
-BibTeX 无法打开数据库时，诊断代码为 `missing-bibliography-database`。实际读取的项目源码中存在唯一静态 `bibliography` / `nobibliography` 声明时，精确标出列表中的缺失项，提供最多 5 个同目录本地 `.bib` 拼写建议；保留其他数据库、注释、目录及显式后缀。按 BibTeX 规则匹配名称中的空白，候选不引入空白或逗号。系统宏包实现不充当用户声明，本地宏包、文档类及已索引的外部来源仍参与校验；动态名称、重定义、歧义、来源不完整或日志截断时保留主文档错误，不提供猜测修复。修复兼容版本化编辑和旧客户端，并在应用前复查版本与文件是否已恢复。
+When BibTeX cannot open the database, the diagnostic code is `missing-bibliography-database`. When there is a unique static `bibliography` / `nobibliography` declaration in the actual read project source code, the missing items in the list are accurately marked and up to 5 local `.bib` spelling suggestions in the same directory are provided; other databases, comments, directories and explicit suffixes are retained. Matches whitespace in names according to BibTeX rules, candidates do not introduce whitespace or commas. The system package implementation does not serve as a user statement, and local packages, document classes, and indexed external sources still participate in verification; main document errors are retained when dynamic names, redefinitions, ambiguities, incomplete sources, or log truncation occur, and no guesswork fixes are provided. Fix for compatibility with versioned editors and older clients, and review whether versions and files have been restored before applying.
 
-Biber 的完整错误 `Cannot find 'reffs.bib'!` 同样使用 `missing-bibliography-database`，支持定位到唯一活动的 `addbibresource` / `addglobalbib` 文件名。BibTeX 后端的缺库错误也支持这两个命令。控制文件缺失、警告、示例文字和不完整消息不会被当作这类缺库错误。
+Biber's full error `Cannot find 'reffs.bib'!` also uses `missing-bibliography-database`, with support for locating the only active `addbibresource` / `addglobalbib` filename. Missing library errors in the BibTeX backend also support these two commands. Missing control files, warnings, sample text, and incomplete messages are not treated as such missing errors.
 
-资源参数按完整字面文件名匹配，保留选项、空格、撇号、逗号、`%`、Unicode 和显式扩展名。修复只替换文件参数，并保留完整扩展名；例如 `{reffs.bib}` 可修复为 `{refs.bib}`，`{refs}` 可明确修复为 `{refs.bib}`。查找依赖时仍不自动补 `.bib`，详见[文献资源加载规则](biblatex-resources.md)。
+Resource parameters are matched by full literal filename, preserving options, spaces, apostrophes, commas, `%`, Unicode, and explicit extensions. Repair only replaces file parameters and preserves the full extension; for example, `{reffs.bib}` can be repaired to `{refs.bib}`, and `{refs}` can be explicitly repaired to `{refs.bib}`. `.bib` is still not automatically added when searching for dependencies. For details, see [Document Resource Loading Rules](biblatex-resources.md).
 
-最多提供 5 个同目录候选，显式指定后缀时只比较同后缀文件。远程、通配符、动态资源、重定义、重复声明、来源未确认或日志截断时不猜测修改位置；文件已补回或当前调用含义已改变时不提供旧修复。
+Up to 5 candidates in the same directory are provided. When the suffix is explicitly specified, only files with the same suffix are compared. Modification locations are not guessed when remote, wildcard, dynamic resources, redefinition, duplicate declaration, unconfirmed source, or log truncation; legacy fixes are not provided when the file has been made up or the meaning of the current call has changed.
 
-## 间接调用与修复校验
+## Indirect call and repair verification
 
-LSP 编译结果也会定位静态命名调用和纯别名中的缺失文献库与样式，并提供同样的文件名拼写修复。定位依据本次编译实际读取、且通过输入快照校验的项目来源；宏参数内未执行的命令、未调用的宏体和未加载的别名定义不提供定位依据。修复同时复查已记录的宏作用域与当前项目调用，保留间接调用形式、注释及数据库列表；含义已改变或来源不完整时不提供编辑。
+LSP compilation results also locate missing libraries and styles in static named calls and pure aliases, and provide the same filename spelling fixes. The positioning is based on the source of the project actually read during this compilation and verified by the input snapshot; no positioning basis is provided for unexecuted commands, uncalled macro bodies and unloaded alias definitions in macro parameters. The repair also reviews the recorded macro scope and current project calls, retaining indirect call forms, comments, and database lists; editing is not provided when the meaning has changed or the source is incomplete.
 
-## latexmk 的缺库警告
+## latexmk missing library warning
 
-默认 latexmk 确认数据库缺失并跳过 BibTeX 时，服务器也会产生 `missing-bibliography-database` 警告，提供相同的精确定位和修复。编译继续遵守 latexmk 的策略及现有输入一致性检查，预生成 `.bbl` 的项目仍可生成 PDF。警告只采纳本次最后一次目标日志检查后的完整驱动列表，已有的原生 BibTeX 错误优先；没有输出新列表的空操作编译不会新增缺库警告。其他可执行程序、不同作业日志、不完整或截断的输出不进入这项解析。
+The server also generates a `missing-bibliography-database` warning by default when latexmk confirms that the database is missing and skips BibTeX, providing the same pinpointing and fixing. Compilation continues to respect latexmk's policies and existing input consistency checks, and projects with pre-generated `.bbl` can still generate PDFs. The warning only adopts the complete driver list after the last target log check, and existing native BibTeX errors take precedence; no-operation compilation that does not output a new list will not add a missing library warning. Other executable programs, different job logs, incomplete or truncated output do not enter this analysis.
 
-## Biber 扩展姓名组成部分
+## Biber extended name components
 
-Biber 的完整 `Invalid namepart 'part' found in extended name format name 'field' in entry 'key', ignoring` 警告使用 `invalid-bibliography-namepart`。例如 `author={family=Doe, given=Jane, bogus=Extra}` 中的 `bogus` 可由工具报告为未知组成部分；有效名称由实际 Biber 数据模型决定，服务器不静态否定自定义姓名部分。
+Full `Invalid namepart 'part' found in extended name format name 'field' in entry 'key', ignoring` warning for Biber Use `invalid-bibliography-namepart`. For example `bogus` in `author={family=Doe, given=Jane, bogus=Extra}` can be reported by the tool as an unknown component; the valid name is determined by the actual Biber data model and the server does not statically negate custom name parts.
 
-诊断保留原生 `namepart`、所属键及模型字段名，定位到完整原始字段值。字面值使用内部范围，空值保留定界符，字符串宏和拼接表达式使用整个右值。Biber 可能已展开或转换姓名，因此不从日志猜测某个原始词的位置，也不自动重写姓名或数据模型。
+The diagnostics retains the native `namepart`, belonging key and model field name, and locates the complete original field value. Literal values use the inner scope, null values retain the delimiter, and string macros and concatenation expressions use the entire rvalue. Biber may have expanded or transformed the name, so it does not guess the position of an original word from the log, nor does it automatically rewrite the name or data model.
 
-字段匹配使用 Biber 的完整 Unicode 折叠，例如 `TRANſLATOR` 对应 `translator`。字段缺失、重复、模型名碰撞或条目不完整时回退到唯一条目键；所有此前输入均可读且所属键按规范分解后唯一时才定位数据库。来源历史失效、键歧义及缓存超限时保留主文档诊断。保存后重新编译更新位置，修复后清除 push/pull 诊断。
+Field matching uses Biber's full Unicode folding, e.g. `TRANſLATOR` corresponds to `translator`. Fallback to the unique entry key when fields are missing, duplicated, model names collide, or entries are incomplete; locate the database only when all previous inputs are readable and the keys are unique after decomposition according to the specification. Diagnostics of source history invalidation, key ambiguity and retention of root document when cache exceeds limit. After saving, recompile and update the location, and clear the push/pull diagnostics after repairing.
 
 ```sh
 cargo test --locked --test biber_namepart_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_nameparts_
 ```
 
-## Biber 文献集合
+## Biber Bibliography entry sets
 
-Biber 原生的集合警告使用 `invalid-bibliography-set`：集合条目中已不需要的 `crossref`、集合成员中已不需要的 `entryset`，以及集合缺少 `entryset`。前两类标记原始字段名，数据中的 `reason` 为 `obsolete-field`；后一类标记所属条目键，`reason` 为 `missing-entryset`。诊断保留工具报告的级别与消息，不在没有原生报告时静态判断集合是否合法。
+Biber's native collection warnings use `invalid-bibliography-set`: `crossref` is no longer required in the collection entry, `entryset` is no longer required in the collection member, and `entryset` is missing from the collection. The original field name of the first two types of marks, `reason` in the data, is `obsolete-field`; the entry key of the latter type of mark, `reason`, is `missing-entryset`. Diagnostics retains the levels and messages reported by the tool, and does not statically determine whether the collection is legal when there is no native report.
 
-字段名按 Biber 的完整 Unicode 折叠匹配，支持 `CROSSREF`、`croſſref` 等原始拼写和动态值表达式。重复字段、模型名称碰撞、不完整赋值或 source map 生成的字段回退到唯一条目键，并标记 `unresolvedField`。缺少 `entryset` 的报告始终使用条目键，因为 source map 可能已移走原始字段。
+Field names are matched according to Biber's full Unicode fold, supporting original spellings and dynamic value expressions such as `CROSSREF`, `croſſref`. Duplicate fields, model name collisions, incomplete assignments, or source map generated fields fall back to unique entry keys and are flagged `unresolvedField`. Reports missing `entryset` always use the entry key because the source map may have removed the original fields.
 
-这类警告没有数据库名，只有此前输入历史完整、全部来源可读、规范等价且区分大小写的所属键唯一时才定位到数据库。来源不明、键有歧义或缓存超限时保留主文档诊断。保存后重新编译更新位置，修复后清除 push/pull 诊断；不提供猜测的字段删除或插入。
+This type of warning does not have a database name. The database can only be located if the previous input history is complete, all sources are readable, the specifications are equivalent, and the case-sensitive keys are unique. Retain root document diagnostics when the source is unknown, the key is ambiguous, or the cache exceeds the limit. Recompile updates position after saving, clears push/pull diagnostics after fix; does not provide guesswork for field deletion or insertion.
 
 ```sh
 cargo test --locked --test biber_set_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_sets_
 ```
 
-## Biber 字段校验
+## Biber field verification
 
-Biber 原生 `Datamodel: Entry 'key' (refs.bib): Field 'field' invalid in data model - ignoring` 和 `Invalid field 'field' for entrytype 'book'` 使用诊断代码 `invalid-bibliography-field`，标记明确条目中的唯一字段名。是否支持字段由实际 Biber 数据模型决定，服务器只采纳工具报告，不静态推测自定义字段是否有效。
+Biber native `Datamodel: Entry 'key' (refs.bib): Field 'field' invalid in data model - ignoring` and `Invalid field 'field' for entrytype 'book'` use diagnostic code `invalid-bibliography-field` to mark unique field names in unambiguous entries. Whether fields are supported is determined by the actual Biber data model. The server only adopts tool reports and does not statically speculate whether custom fields are valid.
 
-`invalid-bibliography-field-value` 标记无效值，支持日期及日期范围结束部分的格式警告、数据类型、上下界、模式匹配，以及 ISBN、ISSN、ISMN 校验消息。完整单一字面值标记内部内容，空字面值覆盖定界符；字符串缩写、拼接和其他完整表达式标记整段值表达式，不执行宏展开。消息和级别均保持原生结果，不自动删除字段或改写值。
+`invalid-bibliography-field-value` marks invalid values and supports format warnings, data types, upper and lower bounds, pattern matching for dates and the end of date ranges, and ISBN, ISSN, and ISMN verification messages. A complete single literal value marks the internal content, and an empty literal value covers the delimiter; string abbreviation, concatenation, and other complete expressions mark the entire value expression, and macro expansion is not performed. Both messages and levels maintain native results and do not automatically delete fields or overwrite values.
 
-带文件名的消息只取明确命名的数据库，支持已确认数据库角色的其他扩展名、完整特殊文件名和符号链接。字段仅来自该条目完整正文中的唯一有效赋值；重复字段、未闭合正文、无效表达式及缺失字段（包括仅由继承提供的字段）保留唯一条目键的位置，不借用父条目或其他数据库。条目键缺失或有歧义时保留文件首行；来源不可读、未确认或超限时保留主文档。日期消息中未转义的文件名与值若无法区分，保留主文档警告。
+Messages with filenames only take explicitly named databases, supporting other extensions for confirmed database roles, full special filenames, and symbolic links. Fields come only from unique valid assignments in the complete body of the entry; duplicate fields, unclosed bodies, invalid expressions, and missing fields (including fields provided only by inheritance) retain the location of unique entry keys and do not borrow from parent entries or other databases. The first line of the file is retained when the entry key is missing or ambiguous; the main document is retained when the source is unreadable, unconfirmed, or exceeds the limit. Preserve main document warnings if unescaped filenames and values in date messages are indistinguishable.
 
-默认 Biber 未开启数据模型校验时，完整的 `legacy year field 'value' in entry 'key' is not an integer - this will probably not sort properly.`、同模板的 `month` 警告、`ISBN 'value' in entry 'key' is invalid - run biber with '--validate_datamodel' for details.`，以及 `Range field 'pages' in entry 'key' is malformed, falling back to literal` 也使用值诊断代码。这些消息没有文件名，仅在此前数据库读取历史完整、所有候选文件可读且规范化后的键在全部候选中唯一时定位相应字段值；符号链接按实际目标去重，不借用后续输入。范围字段按输入拼写定位，支持默认页码及自定义模型范围字段；消息未指出具体片段，因此标记完整值。历史缺失、语法或未知错误、日志截断、规范化键碰撞或读取超限时保留主文档警告。原始值中的引号、文件名及类似日志的文字不会被另行解释为位置，不自动修改日期、ISBN 或页码范围。
+By default, when Biber does not enable data model verification, the complete `legacy year field 'value' in entry 'key' is not an integer - this will probably not sort properly.`, `month` warning, `ISBN 'value' in entry 'key' is invalid - run biber with '--validate_datamodel' for details.`, and `Range field 'pages' in entry 'key' is malformed, falling back to literal` of the same template also use value diagnostic codes. These messages have no file names and only locate the corresponding field value if the previous database read history is complete, all candidate files are readable, and the normalized key is unique among all candidates; symbolic links are deduplicated according to the actual target and do not borrow subsequent input. Range fields are positioned according to the input spelling, and support default page numbers and custom model range fields; the message does not indicate a specific fragment, so the complete value is marked. Preserve main document warnings for missing history, syntax or unknown errors, log truncation, normalization key collisions, or read limits. Quotes, filenames, and log-like text in raw values are not otherwise interpreted as locations, and dates, ISBNs, or page ranges are not automatically modified.
 
-匹配按 Biber 的 Unicode 规则区分命名空间：键保持大小写并规范分解；未知字段、日期及畸形范围警告保留输入字段的组合后 ASCII 折叠；条目类型限制、数据类型及其他数据模型校验、默认年份、月份与 ISBN 警告使用完整 Unicode 折叠。例如自定义模型 `strasse` 可对应原始 `Straße`，默认 `isbn` 可对应 `IſBN`。同条目中的 `STRASSE` 和 `Straße` 对模型警告构成歧义，即使有拼写恰好相同的字段也回退到键；未知字段消息仍能分别定位这两个原始字段，畸形范围警告也能分别定位 `pages` 和 `pageſ` 的值。范围始终指向原始源码，保留 UTF-16 和 CRLF；两种字段索引共享每个原始位置的一次转换，按有界来源建立缓存。保存后重新编译会更新范围，修复后推送与拉取诊断都会清除。
+Matches distinguish namespaces according to Biber's Unicode rules: keys are case-preserved and decomposed normally; unknown field, date, and malformed range warnings preserve ASCII folding after combination of input fields; entry type restrictions, data type and other data model checks, default year, month, and ISBN warnings use full Unicode folding. For example, the custom model `strasse` can correspond to the original `Straße`, and the default model `isbn` can correspond to `IſBN`. `STRASSE` and `Straße` in the same entry constitute ambiguity for model warnings, falling back to the key even if there are fields with exactly the same spelling; unknown field messages can still locate the two original fields respectively, and malformed range warnings can also locate the values of `pages` and `pageſ` respectively. The scope always points to the original source, preserving UTF-16 and CRLF; both field indexes share a conversion per original position, and the cache is built by bounded source. Recompiling after saving will update the scope, and both push and pull diagnostics will be cleared after repair.
 
 ```sh
 cargo test --locked --test biber_field_diagnostics -- --include-ignored
@@ -84,158 +84,158 @@ cargo test --locked --test protocol biber_field_warnings_
 cargo test --locked --test protocol biber_unqualified_field_warnings_
 ```
 
-## Biber XDATA 引用
+## Biber XDATA Quote
 
-Biber 报告 `xdata` 目标缺失或目标不是 XDATA 条目时，使用 `invalid-bibliography-xdata`。支持完整的 `I didn't find a database entry for xdata entry … - ignoring (section …)`、`Entry … references XDATA entry … which does not exist, not resolving (section …)` 和 `which is not an XDATA entry` 模板，保留原生消息、级别和 section 编号。缺失目标可能产生两条不同的原生消息，均保留。
+Use `invalid-bibliography-xdata` when Biber reports that the `xdata` target is missing or the target is not an XDATA entry. Supports full `I didn't find a database entry for xdata entry … - ignoring (section …)`, `Entry … references XDATA entry … which does not exist, not resolving (section …)` and `which is not an XDATA entry` templates, retaining native messages, levels and section numbers. Missing targets may produce two different native messages, both retained.
 
-此前数据库历史完整且条目键在所有可读输入中唯一时，诊断标记该条目 `xdata` 字面列表中的唯一目标项，保留其他列表项、空白、Unicode 和 CRLF。条目键及目标按区分大小写的 NFD 匹配。宏、拼接、继承、source map 生成的字段、重复字段、重复目标或未闭合条目回退到唯一条目键；来源缺失、不可读、超限、历史错误或规范等价键碰撞时保留主文档诊断。section 编号用于保留工具上下文，来源选择仍保守检查此前全部数据库。不自动猜测缺失条目、不改变目标类型或展开宏。
+Previously when the database history was complete and the entry key was unique across all readable input, the diagnostic marked the entry `xdata` as the only target item in the literal list, preserving other list items, whitespace, Unicode, and CRLF. Entry keys and targets are matched by case-sensitive NFD. Fallback to unique entry keys for fields generated by macros, splicing, inheritance, source map, duplicate fields, duplicate targets, or unclosed entries; retain main document diagnostics when sources are missing, unreadable, out of bounds, history errors, or canonical equivalent key collisions. The section number is used to preserve tool context, and source selection still conservatively checks all previous databases. No automatic guessing of missing entries, no changing of target types, or expansion of macros.
 
 ```sh
 cargo test --locked --test biber_xdata_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_xdata_warnings_
 ```
 
-字段级 XDATA 消息也使用 `invalid-bibliography-xdata`，覆盖引用未指定源字段、源字段不存在、两侧字段类型不兼容，以及姓名列表或普通列表的源位置不存在。消息明确给出引用字段时，诊断标记其唯一原始赋值的完整值；字符串宏、拼接与混合列表保留整个值表达式，不猜测某个内部片段。原始字段缺失、重复或不完整时回退到所属键，来源与历史限制沿用上述规则。
+Field-level XDATA messages also use `invalid-bibliography-xdata`, covering references that do not specify a source field, the source field does not exist, the field types on both sides are incompatible, and the source location of a list of names or a normal list does not exist. When a message explicitly gives a reference to a field, the diagnostic marks the complete value of its unique original assignment; string macros, concatenations, and mixlists retain the entire value expression and do not guess at an internal fragment. When the original field is missing, duplicated or incomplete, it falls back to the corresponding key. The source and history restrictions follow the above rules.
 
-这类原生消息保留输入字段拼写，按组合后 ASCII 小写及 NFD 匹配，`Straße` 和 `STRASSE` 分别定位；不使用数据模型的完整 Unicode 折叠。诊断保留消息明确给出的 `parent`、`sourceField` 及文本形式的 `sourcePosition`，未指定源字段的消息不推测父条目。XDATA 标记和分隔符可以配置，因此服务器不从原始值中自行解析或改写引用。
+Such native messages preserve input field spelling, combined ASCII lowercase and NFD matching, `Straße` and `STRASSE` respectively; do not use full Unicode folding of the data model. Diagnostics retain `parent`, `sourceField` and textual `sourcePosition` given explicitly by the message. Messages that do not specify a source field do not infer the parent entry. XDATA tags and delimiters can be configured so that the server does not parse or rewrite references from the original value itself.
 
 ```sh
 cargo test --locked --test biber_xdata_field_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_granular_xdata_warnings_
 ```
 
-## Biber 关系引用
+## Biber relationship reference
 
-Biber 的完整 `I didn't find a database entry for … 'parent' in entry 'child' - ignoring (section …)` 消息使用 `missing-bibliography-relation`，支持 `crossref`、`xref`、`related entry` 和 `static set member` 四种原生关系。它们分别对应原始 `crossref`、`xref`、`related` 和 `entryset` 字段，保留原生消息、级别及 section 编号；静态集合成员警告由 Biber 实际处理集合条目时报告。
+Biber's complete `I didn't find a database entry for … 'parent' in entry 'child' - ignoring (section …)` message uses `missing-bibliography-relation` and supports four native relationships: `crossref`, `xref`, `related entry` and `static set member`. They correspond to the original `crossref`, `xref`, `related` and `entryset` fields respectively, retaining the native message, level and section number; static collection member warnings are reported by Biber when it actually processes the collection entries.
 
-定位与 XDATA 共享完整此前输入历史及规范化键唯一性检查，单一关系标记唯一字面目标，列表关系标记精确列表项。同一目标在不同关系字段中分别索引；重复字段或同字段内的规范等价目标仍有歧义。宏、拼接、继承、source map 和不完整字段回退到所属键，未确认来源回退到主文档。不猜测改名、插入缺失条目或展开动态值。保存后重新编译更新范围，补齐目标后的推送与拉取诊断都会清除。
+Positioning shares complete previous input history with XDATA and canonical key uniqueness checks, single relationships mark unique literal targets, and list relationships mark exact list items. The same target is indexed separately in different relational fields; duplicate fields or canonically equivalent targets within the same field remain ambiguous. Macros, splicing, inheritance, source map and incomplete fields fall back to their own keys, and unconfirmed sources fall back to the main document. No guesswork renaming, inserting missing entries, or expanding dynamic values. After saving, recompile the update range, and the push and pull diagnostics after completing the target will be cleared.
 
 ```sh
 cargo test --locked --test biber_relation_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_relation_warnings_
 ```
 
-## Biber 循环继承
+## Biber circular inheritance
 
-Biber 的完整 `Circular inheritance between 'parent'<->'child'` 和 `Circular XDATA inheritance between 'parent'<->'child'` 使用 `cyclic-bibliography-inheritance`，保留原生错误级别及两个条目键。只使用当前错误发生前完整的数据库读取历史，所有候选须可读且被报告的子键按区分大小写的 NFD 匹配后唯一。
+Biber's full `Circular inheritance between 'parent'<->'child'` and `Circular XDATA inheritance between 'parent'<->'child'` use `cyclic-bibliography-inheritance`, retaining the native error level and two entry keys. Only the complete database read history before the current error is used, all candidates must be readable and the reported subkeys must be unique after a case-sensitive NFD match.
 
-普通循环继承可定位到子条目唯一静态 `crossref` 中的父键；字符串宏、拼接、重复字段、source map 生成字段或通过 `ids` 别名引用父条目时，回退到子条目键。XDATA 的条目级和字段级循环使用同一原生模板，均标记子条目键，不猜测具体字段。通过 `relatedInformation` 链接被报告的父条目；子键歧义时保留主文档错误，并列出最多 16 个候选位置。自循环不会重复列出与主诊断相同的范围。
+Ordinary circular inheritance can target the parent key in the child entry's unique static `crossref`; fallback to the child entry key when string macros, splicing, repeated fields, source map generated fields, or referencing the parent entry through the `ids` alias. XDATA's entry-level and field-level loops use the same native template, both mark sub-entry keys, and do not guess specific fields. Reported parent entry via `relatedInformation` link; retains main document error on child key ambiguity and lists up to 16 candidate locations. Self-looping does not list the same range as the main diagnostic repeatedly.
 
-循环继承是致命错误。当前消息使用报错前的输入记录，之后的诊断仍按失效历史处理，后续输入也不会恢复这一状态。此前已有未知错误、来源缺失或超限、不可读文件或日志截断时，当前循环同样保留主文档错误。不自动删除字段或打断引用链；保存后重新编译刷新位置，修复后清除推送与拉取诊断。
+Circular inheritance is a fatal error. The current message uses the input record before the error is reported, and subsequent diagnostics is still processed according to the failure history, and subsequent input will not restore this state. If there have been previously unknown errors, missing or exceeded sources, unreadable files, or truncated logs, the current loop will also retain the main document errors. Do not automatically delete fields or break reference chains; recompile and refresh the position after saving, and clear push and pull diagnostics after repair.
 
 ```sh
 cargo test --locked --test biber_cycle_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_inheritance_cycles_
 ```
 
-## Biber 姓名格式
+## Biber name format
 
-Biber 的完整姓名消息使用 `malformed-bibliography-name`，覆盖以下原生情况：
+Biber's full name message uses `malformed-bibliography-name`, covering the following native situations:
 
-- `Name "name" has too many commas, skipping entry 'key'`：逗号过多。
-- `Name "name" is malformed (consecutive commas): skipping entry 'key'`：连续逗号。
-- `Name in key 'key' is empty (probably consecutive 'and'): skipping entry 'key'`：空姓名。
+- `Name "name" has too many commas, skipping entry 'key'`: Too many commas.
+- `Name "name" is malformed (consecutive commas): skipping entry 'key'`: Consecutive commas.
+- `Name in key 'key' is empty (probably consecutive 'and'): skipping entry 'key'`: Empty name.
 
-诊断保留实际级别、消息、文献键及 `reason`，前两类另保存 Biber 报告的 `name`。逗号错误仍使构建失败；空姓名按原生警告显示。姓名可能经 LaTeX 解码，也可能来自自定义模型的姓名字段，因此只标记唯一条目键，不猜测原始姓名范围或提供逗号、`and` 的自动修复。
+Diagnostics retains the actual level, message, citation key and `reason`. The first two categories also save the `name` reported by Biber. Comma errors still fail the build; empty names show up as native warnings. Names may be LaTeX decoded or may come from a custom model's name field, so only unique entry keys are marked, no guessing of the original name range or automatic fixes for commas, `and` are provided.
 
-消息没有文件名，要求此前输入历史完整、所有候选可读，且键经过区分大小写的规范分解后唯一。后续数据库不参与定位；键碰撞、来源缺失、日志截断或读取超限时保留主文档。位置复用有界键缓存，支持 Unicode、CRLF 及特殊文件名。
+Messages do not have file names and require that the previous input history is complete, all candidates are readable, and the keys are unique after case-sensitive canonical decomposition. Subsequent databases do not participate in positioning; the main document is retained in case of key collision, missing source, log truncation or read limit. Positional multiplexing bounded key cache, supports Unicode, CRLF and special file names.
 
-这三种完整消息表示仅跳过一个条目，Biber 仍会处理后面的条目，所以保留已有输入历史，让后续姓名错误和字段警告继续精确定位。语法错误、未知错误及不完整姓名错误模板继续使历史失效；该规则也适用于重复键、大小写关联和默认字段诊断。保存后重编译更新范围，修复后清除推送与拉取诊断。
+These three complete messages mean that only one entry is skipped, and Biber will still process subsequent entries, so the existing input history is retained and subsequent name errors and field warnings can continue to be accurately located. Syntax errors, unknown errors, and incomplete name error templates continue to invalidate history; this rule also applies to duplicate keys, case correlation, and default field diagnostics. After saving, recompile the update range, and clear the push and pull diagnostics after repairing.
 
 ```sh
 cargo test --locked --test biber_name_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_name_errors_
 ```
 
-## Biber 日期覆盖
+## Biber Date Override
 
-完整的 `Overwriting field 'year' with year value from field 'date' for entry 'key'` 和对应的 `month` 警告使用独立代码 `overwritten-bibliography-field`，标记被覆盖的原始年份或月份值。诊断保留工具消息、级别及 `overwrittenBy: "date"` 数据；值本身可以有效，只是与 Biber 实际使用的日期分量不同，不自动决定应删除或修改哪个字段。
+The complete `Overwriting field 'year' with year value from field 'date' for entry 'key'` and corresponding `month` warnings use the standalone code `overwritten-bibliography-field`, marking the original year or month value being overwritten. Diagnostics retain tool messages, levels, and `overwrittenBy: "date"` data; the value itself can be valid, just different from the date components actually used by Biber, and does not automatically decide which field should be deleted or modified.
 
-条目内存在唯一、完整的原始 `date` 赋值时，标准 `relatedInformation` 关联到它的值，便于从被覆盖值跳转查看日期。范围日期关联整个值，字符串及拼接表达式保持原始表达式范围。原始年份或月份缺失、重复或不完整时回退到唯一条目键；`date` 缺失、歧义或由 source map 生成时不猜测关联位置，不借用其他条目中的字段。
+When the entry has a unique, complete original `date` assignment, the standard `relatedInformation` is associated with its value, making it easier to jump from the overwritten value to view the date. Range dates associate the entire value, and string and concatenated expressions maintain the original expression range. Fallback to a unique entry key when the original year or month is missing, duplicated, or incomplete; `date` does not guess the associated position when it is missing, ambiguous, or generated from a source map, and does not borrow fields from other entries.
 
-这类消息没有文件名，复用完整的此前 Biber 输入历史、区分大小写的规范化键唯一性和有界来源缓存。来源未确认、键有歧义、日志截断、此前语法或未知错误、读取失败时保留主文档诊断。保存后重新编译更新主位置及关联位置；调整日期或使分量一致后，推送与拉取诊断一并清除。
+Such messages have no file names, reuse the complete history of previous Biber inputs, case-sensitive normalized key uniqueness, and bounded origin caching. Unconfirmed source, ambiguous keys, log truncation, previous syntax or unknown errors, retain root document diagnostics on read failure. After saving, recompile and update the main location and associated locations; after adjusting the date or making the components consistent, the push and pull diagnoses are cleared together.
 
 ```sh
 cargo test --locked --test biber_overwritten_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_overwritten_fields_
 ```
 
-## Biber 条目类型
+## Biber entry type
 
-Biber 数据模型校验的完整 `Datamodel: Entry 'key' (refs.bib): Invalid entry type 'boook' - defaulting to 'misc'` 消息使用诊断代码 `invalid-bibliography-entry-type`，标记唯一条目中的原始类型名。有效类型由实际工具的数据模型决定；诊断保留原生消息、级别和 `entryType` 数据，不静态否定自定义类型，也不自动将源码改为 `misc`。
+The complete `Datamodel: Entry 'key' (refs.bib): Invalid entry type 'boook' - defaulting to 'misc'` message for Biber data model validation uses the diagnostic code `invalid-bibliography-entry-type`, marking the original type name in the unique entry. Valid types are determined by the actual tool's data model; diagnostics retain native message, level, and `entryType` data and do not statically negate custom types or automatically change source code to `misc`.
 
-类型名按 Biber 的完整 Unicode 大小写折叠和规范分解匹配，例如 `Straße` / `STRAẞE` 对应 `strasse`，希腊词尾 sigma、带点 I 和连字也按原生结果处理。引用键仍只做区分大小写的规范分解，字段名沿用自己的匹配规则；位置始终覆盖原始源码，保留实际字符数及 UTF-16 范围。
+Type names are matched according to Biber's full Unicode case folding and standard decomposition, for example, `Straße` / `STRAẞE` corresponds to `strasse`, and Greek suffix sigma, dotted I and ligatures are also processed according to native results. The reference key is still only case-sensitive and canonical decomposition, and the field name follows its own matching rules; the position always covers the original source code, retaining the actual number of characters and the UTF-16 range.
 
-只在明确命名的数据库内定位。完整条目、唯一规范化键及匹配的原始类型均可确认时才标记类型名；正文未闭合，或 source map 等处理让报告类型与源码不同时，标记唯一条目键并附 `unresolvedType`。键缺失或有歧义时保留来源首行；来源未确认、不可读或超限时保留主文档，不借用其他库。类型和字段位置共用有界来源缓存，保存后重编译会更新范围，修复后清除推送与拉取诊断。
+Locate only within explicitly named databases. Mark the type name only when the complete entry, unique normalized key, and matching original type can all be confirmed; mark the unique entry key and append `unresolvedType` when the text is not closed, or when the source map and other processing make the report type different from the source code. When the key is missing or ambiguous, the first line of the source is retained; when the source is unconfirmed, unreadable, or exceeds the limit, the main document is retained and no other libraries are borrowed. Types and field positions share a bounded source cache. Recompiling after saving will update the range. After repair, push and pull diagnostics will be cleared.
 
 ```sh
 cargo test --locked --test biber_type_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_type_warnings_
 ```
 
-## Biber 必填字段
+## Biber required fields
 
-Biber 数据模型校验的完整 `Missing mandatory field 'author'` 和 `Missing mandatory field - one of 'date, year' must be defined` 消息使用诊断代码 `missing-bibliography-field`。只采纳实际工具报告的要求，不静态假定条目必须有哪些字段；字段组表示至少填写一项，不会被拆成多条全部必填的错误。诊断数据中单字段保存在 `field`，备选组保存在 `fields`。
+The complete `Missing mandatory field 'author'` and `Missing mandatory field - one of 'date, year' must be defined` messages verified by the Biber data model use diagnostic code `missing-bibliography-field`. Only the requirements of the actual tool report are adopted, and there is no static assumption about which fields the entry must have; the field group indicates that at least one item must be filled in, and it will not be split into multiple all-required errors. The single field in the diagnostic data is saved in `field`, and the alternative group is saved in `fields`.
 
-警告定位到明确命名数据库中的唯一条目键，按 Biber 的 Unicode 规范分解匹配并保留原始 UTF-16 范围。键缺失或规范化后有多个声明时使用该文件首行，不借用其他库；来源缺失、未确认、不可读或超限时保留主文档。完整特殊文件名、其他后缀的数据库及符号链接沿用现有来源规则。
+Warnings target unique entry keys in an explicitly named database, breaking up matches according to Biber's Unicode specification and preserving the original UTF-16 range. When the key is missing or there are multiple declarations after normalization, the first line of the file is used, and no other libraries are borrowed; the main document is retained when the source is missing, unconfirmed, unreadable, or exceeds limits. Complete special file names, databases with other suffixes, and symbolic links follow existing source rules.
 
-消息和级别保持原生结果，不猜测字段值、不替用户选择备选字段，也不自动插入字段。保存后重新编译会更新条目键位置，补齐要求后清除推送与拉取诊断；同一日志的多条警告复用有界键位置缓存。
+Messages and levels remain native results, with no guessing of field values, no selection of alternative fields for the user, and no automatic field insertion. Recompiling after saving will update the entry key position, and clear push and pull diagnostics after completing the requirements; multiple warnings in the same log reuse the bounded key position cache.
 
 ```sh
 cargo test --locked --test biber_required_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_required_fields_
 ```
 
-## Biber 文献别名冲突
+## Biber document alias conflict
 
-Biber 的三类完整 `ids` 警告使用 `conflicting-bibliography-alias`：`Entry alias … already has an alias …, skipping ...`、`Citekey alias … is also a real entry key, skipping ...`（也接受 `Entry alias` 前缀）和 `BAD RECURSION! Entry alias … is identical to the entry key, skipping ...`。它们分别表示别名已被其他条目占用、别名与真实主键冲突、别名等于自身主键；保留原生消息与级别，不在没有编译器报告时自行生成警告。
+Biber's three complete classes of `ids` warnings use `conflicting-bibliography-alias`: `Entry alias … already has an alias …, skipping ...`, `Citekey alias … is also a real entry key, skipping ...` (the `Entry alias` prefix is also accepted), and `BAD RECURSION! Entry alias … is identical to the entry key, skipping ...`. They respectively indicate that the alias is occupied by other entries, the alias conflicts with the real primary key, and the alias is equal to its own primary key; retain the native message and level and do not generate warnings by itself when there is no compiler report.
 
-此前输入历史完整且全部来源可读时，诊断使用静态 `ids` 声明索引，按区分大小写的 NFD 匹配别名与所属主键。被跳过的声明及相关主键可唯一确认时，精确标记别名并链接已有声明。多个候选、主键碰撞、动态或重复字段、未闭合正文等情况保留主文档警告，并列出最多 16 个可确认的相关位置；不会依据重复消息的先后顺序推断被跳过的条目。未知错误、截断、读取或来源数量超限后不借用位置。只报告冲突，不猜测应该删除或改名的条目；保存后重新编译更新范围，修复后的推送与拉取诊断都会清除。
+When the previous input history is complete and all sources are readable, the diagnostic declares the index using the static `ids`, matching the alias to the associated primary key by case-sensitive NFD. When the skipped declaration and associated primary key can be uniquely identified, the alias is accurately marked and the existing declaration is linked. Multiple candidates, primary key collisions, dynamic or repeated fields, unclosed text, etc. retain main document warnings and list up to 16 confirmable related positions; skipped entries will not be inferred based on the order of duplicate messages. Positions are not borrowed due to unknown errors, truncation, reads, or after the number of sources exceeds the limit. Only conflicts are reported, and entries that should be deleted or renamed are not guessed; recompile the update range after saving, and the repaired push and pull diagnostics will be cleared.
 
 ```sh
 cargo test --locked --test biber_alias_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_alias_conflicts_
 ```
 
-## Biber 重复文献键
+## Biber duplicate citation keys
 
-完整的 `Duplicate entry key: 'alpha' in file 'refs.bib', skipping ...` 消息使用诊断代码 `duplicate-bibliography-key`；开启 `--noskipduplicates` 时没有 `, skipping ...` 的原生格式也受支持。主键仅在明确命名的数据库中区分大小写匹配，唯一声明使用精确键范围；同一文件有多个同名声明时保留文件首行范围，通过 `relatedInformation` 列出候选，不凭无行号消息猜测具体声明。
+The complete `Duplicate entry key: 'alpha' in file 'refs.bib', skipping ...` message uses diagnostic code `duplicate-bibliography-key`; the native format without `, skipping ...` is also supported when `--noskipduplicates` is turned on. Primary keys are case-sensitive matching only in explicitly named databases, and unique declarations use the exact key range; when there are multiple declarations with the same name in the same file, the first line range of the file is retained, candidates are listed through `relatedInformation`, and specific declarations are not guessed based on no line number messages.
 
-匹配遵守 Biber 的 Unicode 规范分解，组合形式 `café` 与分解形式 `café` 属于同一键；同库同时存在两种形式时保留歧义并列出原始声明范围，不把报告中的分解形式误当作唯一声明。大小写和兼容字符仍按各自键匹配，不执行兼容分解。规范等价拼写共享 16 项候选上限。
+The matching complies with Biber's Unicode specification decomposition. The combined form `café` and the decomposed form `café` belong to the same key; when both forms exist in the same library, the ambiguity is retained and the original declaration range is listed, and the decomposed form in the report is not mistaken as the only declaration. Uppercase and lowercase and compatible characters are still matched by their respective keys, and compatible decomposition is not performed. Canonical equivalent spellings share an upper limit of 16 candidates.
 
-相关位置取当前文件及此前日志确认读取的数据库，最多 16 项，符号链接按实际目标去重；唯一主位置不会再次列为相关位置。未解析来源、不可读或超限文件保留主文档警告；缺失主键不借用其他数据库。日志截断、语法或未知错误、不完整来源历史会停止跨库关联，仍可显示当前明确文件中的候选。沿用大小写警告的完整文件名、数据库角色和有界缓存规则。
+The relevant location is the current file and the database read from the previous log confirmation, with a maximum of 16 entries. Symbolic links are deduplicated according to the actual target; the only primary location will not be listed as a relevant location again. Unresolved sources, unreadable or oversized files retain the main document warning; missing primary keys do not borrow from other databases. Log truncation, syntax or unknown errors, and incomplete source history will stop cross-repository correlation, but candidates in the current explicit file will still be displayed. Inherit full file names, database roles, and bounded cache rules with case warnings.
 
-诊断保留原生级别与消息。Biber 的重复键选择随选项变化，服务器不把候选位置标为保留或删除项，也不提供自动删除或重命名。保存后重编译会刷新相关位置，修复后清除推送与拉取诊断。同一次日志中按来源缓存键的 UTF-16 范围和首行范围，支持大量条目集中在同一长行的数据库。
+Diagnostics retain native levels and messages. Biber's selection of duplicate keys varies with options, and the server does not mark candidates for retention or deletion, nor does it provide automatic deletion or renaming. Recompiling after saving will refresh the relevant locations, and clear push and pull diagnostics after repair. UTF-16 range and first row range of cache keys by source in the same log, supporting databases where a large number of entries are concentrated in the same long row.
 
 ```sh
 cargo test --locked --test biber_duplicate_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_duplicate_warnings_
 ```
 
-## Biber 文献键大小写警告
+## Biber citation key case warning
 
-Biber 的完整 `Possible typo (case mismatch) between datasource keys: 'ALPHA' and 'alpha' in file 'refs.bib'` 消息使用诊断代码 `bibliography-key-case-mismatch`，精确标记明确报告的数据库中唯一的第一个键。匹配区分大小写，支持 Unicode、UTF-16、CRLF 和含撇号的完整文件名；其他后缀的文件须已确认数据库角色。
+Biber's complete `Possible typo (case mismatch) between datasource keys: 'ALPHA' and 'alpha' in file 'refs.bib'` message uses the diagnostic code `bibliography-key-case-mismatch`, marking exactly the first unique key in the database that is unambiguously reported. Matching is case-sensitive and supports Unicode, UTF-16, CRLF, and full file names including apostrophes; files with other suffixes must have confirmed database roles.
 
-主键与关联键均按 Biber 的 Unicode 规范分解匹配，但范围指向原始源码。例如日志中的 `CAFÉ` / `café` 可以对应源码中的 `CAFÉ` / `café`。规范化后主键仍有多个声明时保留文件首行；另一种拼写的多个规范等价声明保留为独立关联位置。普通 BibTeX 导航及其他后端的名称规则不受影响。
+Both primary keys and associated keys are decomposed and matched according to Biber's Unicode specification, but the scope points to the original source code. For example, `CAFÉ` / `café` in the log can correspond to `CAFÉ` / `café` in the source code. If there are still multiple declarations of the primary key after normalization, the first line of the file is retained; multiple canonical equivalent declarations of another spelling are retained as independent associated positions. Name rules for normal BibTeX navigation and other backends are not affected.
 
-`relatedInformation` 链接另一种拼写在当前数据库及此前已确认读取数据库中的位置，最多 16 处；同名声明有多个时保留多个候选。后续数据库不参与定位。日志截断、此前 Biber 语法或未知错误、来源未解析或读取历史超限时，只使用当前明确命名的数据库；缺失或重复的主键保留文件首行警告，不借用其他数据库。来源不可读、未确认或超出有界解析缓存时保留主文档警告，相关键缺失不影响原始消息。
+`relatedInformation` links the position of another spelling in the current database and the previously confirmed reading database, up to 16 places; multiple candidates are retained when there are multiple declarations with the same name. Subsequent databases will not participate in positioning. When log truncation, previous Biber syntax or unknown errors, unresolved sources, or read history exceeds the limit, only the currently explicitly named database is used; missing or duplicate primary keys retain the first line warning of the file and do not borrow from other databases. Preserve main document warnings when the source is unreadable, unconfirmed, or exceeds the bounded parsing cache, and the absence of relevant keys does not affect the original message.
 
-Biber 将这两个键视为不同条目，并可能保留两者；诊断维持原生警告级别，不提供自动合并或重命名。引用键与数据库键之间的大小写消息仍按原有日志规则处理。修复并重新编译后，推送和拉取诊断同步清除旧结果。
+Biber treats the two keys as different entries and may retain both; diagnostics maintain native warning levels and do not provide automatic merging or renaming. The upper and lower case messages between the reference key and the database key are still processed according to the original log rules. After fixing and recompiling, push and pull diagnostics clear old results simultaneously.
 
 ```sh
 cargo test --locked --test bibliography_case_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_case_warnings_
 ```
 
-## 未定义字符串缩写
+## Undefined string abbreviation
 
-BibTeX 的两行 `Warning--string name "jouranl" is undefined` / `--line 2 of file refs.bib` 警告使用诊断代码 `undefined-bibliography-string`，精确标记该行中唯一的裸缩写引用。支持字段、`@string`、`@preamble` 和多行 `#` 拼接，按 ASCII 大小写不敏感匹配，并保留 UTF-16 与 CRLF 位置。字面值、声明名、文献键和注释不充当引用；同一行重复引用时保留整行诊断，不猜测修改位置。来源缺失、位置无效或位置行不紧随警告时也保留警告。
+The two-line `Warning--string name "jouranl" is undefined` / `--line 2 of file refs.bib` warning for BibTeX uses the diagnostic code `undefined-bibliography-string`, marking exactly the only bare abbreviation reference in that line. Supports field, `@string`, `@preamble` and multi-line `#` splicing, ASCII case-insensitive matching, and preserves UTF-16 and CRLF positions. Literal values, declaration names, citation keys, and comments do not serve as references; when the same line is repeatedly cited, the entire line of diagnostics is retained, and the modification position is not guessed. Warnings are also retained when the source is missing, the location is invalid, or the location line does not immediately follow the warning.
 
-快速修复最多提供 5 个相近名称，只取警告发生前已读取数据库中的有效 `@string` 声明，以及当前库中位于引用之前的声明。同名声明使用最近一次的拼写；后置声明、独立项目和隐含月份名不作为候选。月份缩写由样式提供，服务器不解析 `.bst` 宏定义。
+The quick fix provides up to 5 similar names, taking only the valid `@string` declaration in the database that was read before the warning occurred, and the declaration that precedes the reference in the current library. Declarations with the same name use the most recent spelling; post-declarations, independent items, and implicit month names are not candidates. The month abbreviation is provided by the style and the server does not parse the `.bst` macro definition.
 
-修复复查已读取数据库和可定位样式的内容、当前缓冲区、版本及编译输入快照，兼容版本化编辑与旧客户端。日志截断、数据库历史缺失或异常、此前发生语法错误、来源超限或输入变化时保留诊断并停止提供修复。单文件最多读取 2 MiB，累计最多 16 MiB；不完整的 `@string` 赋值不作为修复候选。
+Fixed review of read database and positionable style content, current buffer, version and compilation input snapshot, compatible with versioned editing and old clients. Preserve diagnostics and stop providing fixes when log truncation, database history is missing or abnormal, previous syntax errors occurred, sources exceeded limits, or input changes. Maximum read of 2 MiB per file, cumulative maximum of 16 MiB; incomplete `@string` assignment is not a candidate for repair.
 
-验证命令：
+Verify command:
 
 ```sh
 cargo test --locked --test bibliography_string_diagnostics
@@ -243,95 +243,95 @@ cargo test --locked --test bibliography_string_diagnostics real_bibtex -- --incl
 cargo test --locked --test protocol bibliography_string_warnings_
 ```
 
-## 未定义条目类型
+## Undefined entry type
 
-BibTeX 的两行 `Warning--entry type for "entry" isn't style-file defined` / `--line 2 of file refs.bib` 使用诊断代码 `undefined-bibliography-entry-type`。警告行号指向键名所在行，服务器通过解析索引记录的键和类型关系，标记对应条目的类型名称。例如 `@artcle` 标记 `artcle`，类型与键分行时也能定位。
+Two lines of BibTeX, `Warning--entry type for "entry" isn't style-file defined` / `--line 2 of file refs.bib`, use diagnostic code `undefined-bibliography-entry-type`. The warning line number points to the line where the key name is located, and the server marks the type name of the corresponding entry by parsing the key and type relationship of the index record. For example, `@artcle` tag `artcle` can also be positioned when the type and key are separated.
 
-来源、行号和完整键共同确定条目；同名键出现在多个数据库或不同行时，使用明确报告的数据库与行号。支持 Unicode、CRLF、两种定界符和未完成正文；相同行中有多个匹配键时保留整行警告。来源或位置缺失时保留主文档警告，辅助文件和样式的别名不会因指向相同数据库而提供类型范围。
+The source, row number, and full key together determine the entry; when a key with the same name appears in multiple databases or on different rows, use the explicitly reported database and row number. Supports Unicode, CRLF, both delimiters, and unfinished body; retain full-line warnings when there are multiple matching keys on the same line. Preserve main document when source or location is missing Warning, aliases for auxiliary files and styles do not provide type scope by pointing to the same database.
 
-类型是否受支持由当前文献样式决定，此处只采纳编译器确认的警告。服务器尚未解析样式中的类型定义，因此不生成类型拼写修复；条目类型的编辑补全仍可使用。
+Whether a type is supported is determined by the current documentation style, only warnings acknowledged by the compiler are taken into account here. The server has not yet parsed the type definition in the style, so type spelling fixes are not generated; editorial completion of entry types still works.
 
 ```sh
 cargo test --locked --test bibliography_type_diagnostics -- --include-ignored
 cargo test --locked --test protocol bibliography_type_warnings_
 ```
 
-## 无效的 crossref
+## Invalid crossref
 
-原生 BibTeX 的两行 `A bad cross reference---entry "child"` / `refers to entry "parent", which doesn't exist` 使用错误代码 `bad-bibliography-crossref`，定位到子条目中唯一的字面 `crossref` 值。字段名不区分 ASCII 大小写，支持花括号、引号、两种条目定界符、UTF-16、CRLF 和数据库符号链接。
+The two lines `A bad cross reference---entry "child"` / `refers to entry "parent", which doesn't exist` in native BibTeX use error code `bad-bibliography-crossref`, targeting the only literal `crossref` value in the subentry. Field names are ASCII case-insensitive and support braces, quotes, two entry delimiters, UTF-16, CRLF, and database symbolic links.
 
-字面值前后的 ASCII 空白按 BibTeX 的报告匹配，范围只覆盖父键；空值同样保留完整错误，范围覆盖其花括号或引号，便于在编辑器中看见。
+ASCII whitespace before and after the literal value is matched as reported by BibTeX, and the range only covers the parent key; null values also retain the complete error, and the range covers their curly braces or quotes, making it easy to see in the editor.
 
-定位只使用报错前日志确认读取的数据库，并要求完整的子条目、唯一键和唯一 `crossref` 字段。动态值、拼接、重复字段、歧义键、缺失数据库、异常读取顺序、此前语法错误、截断日志或扫描超限时，在主文档保留原始错误。缺少第二行时仍保留第一行错误，并继续处理后续独立诊断。沿用单文件 2 MiB、累计 16 MiB 和 1024 个输入的限制，另限制最多扫描 16384 个条目。
+Locate databases that only use pre-error log acknowledgment reads and require the complete subentry, unique key, and unique `crossref` field. Keep the original errors in the main document for dynamic values, splicing, duplicate fields, ambiguous keys, missing databases, abnormal reading order, previous syntax errors, truncated logs, or scan overruns. The first row error remains when the second row is missing, and subsequent independent diagnostics continue to be processed. The limits of 2 MiB per file, 16 MiB cumulative, and 1024 inputs continue, with an additional limit of scanning to a maximum of 16384 entries.
 
-已读取数据库中存在同名父条目时，通过 `relatedInformation` 提供最多 16 个相关位置。父条目排在子条目前时，说明 BibTeX 可能跳过未显式引用的前置父条目：父条目确实存在，仍可能报“不存在”。显式引用父条目、使用通配引用和将父条目放在子条目之后会影响 BibTeX 的选择；服务器不把物理存在性当作成功解析的依据，也不自动移动条目或提供未经选择规则验证的拼写修复。
+Provides up to 16 related positions via `relatedInformation` when a parent entry with the same name exists in the read database. When the parent entry is ranked before the child entry, it means that BibTeX may skip the preceding parent entry that is not explicitly referenced: the parent entry does exist, but it may still report "does not exist". Explicitly referencing parent entries, using wildcard references, and placing parent entries after child entries affect BibTeX's selection; the server does not treat physical presence as a basis for successful parsing, nor does it automatically move entries or provide spelling fixes that are not validated by selection rules.
 
 ```sh
 cargo test --locked --test bibliography_crossref_diagnostics -- --include-ignored
 cargo test --locked --test protocol bibliography_crossref_errors_
 ```
 
-## 嵌套的 crossref
+## Nested crossref
 
-原生 BibTeX 的两行 `Warning--you've nested cross references--entry "child"` / `refers to entry "parent", which also refers to something` 使用诊断代码 `nested-bibliography-crossref`。警告保留完整的子、父条目关系，定位到子条目的字面 `crossref` 值，并在 `relatedInformation` 中链接父条目键。父条目可排在子条目之前或之后；相关说明标明编译器报告的嵌套引用链，不把已经解析到的父条目解释为缺失。
+The two lines `Warning--you've nested cross references--entry "child"` / `refers to entry "parent", which also refers to something` of native BibTeX use diagnostic code `nested-bibliography-crossref`. The warning preserves the complete child, parent entry relationship, targeting the literal `crossref` value of the child entry, and linking the parent entry key in `relatedInformation`. Parent entries can come before or after child entries; the relevant specification indicates the nested reference chain reported by the compiler and does not interpret resolved parent entries as missing.
 
-普通嵌套、自引用和循环均按实际编译器日志处理，级别保持为警告，不单凭这些警告将成功构建改成失败。若父条目又引用了缺失祖先，紧随其后的 `bad-bibliography-crossref` 错误独立定位到父条目的字段值，保留错误级别；两条诊断同时显示。
+Ordinary nesting, self-references, and loops are handled as per the actual compiler log, the level remains at warnings, and these warnings alone do not change a successful build into a failure. If the parent entry references a missing ancestor, the subsequent `bad-bibliography-crossref` error is independently located to the field value of the parent entry and the error level is retained; both diagnoses are displayed at the same time.
 
-定位复用上述数据库历史、唯一键、唯一字段、完整正文和读取上限。动态或有歧义的子条目引用、缺失来源、截断日志以及缺失或不匹配的续行，都会在主文档保留警告；不会吞掉下一条独立记录。该诊断只采纳原生编译器报告，不静态推测动态继承关系，也不自动改写继承链。修复并重编译后，推送和拉取诊断均清除旧结果。
+Positioning reuses the above database history, unique keys, unique fields, complete text and read limit. Dynamic or ambiguous subentry references, missing sources, truncated logs, and missing or unmatched continuation lines will all retain warnings in the main document; they will not swallow up the next independent record. This diagnostics only uses native compiler reports, does not statically speculate on dynamic inheritance relationships, and does not automatically rewrite the inheritance chain. After fixing and recompiling, both push and pull diagnostics clear old results.
 
 ```sh
 cargo test --locked --test bibliography_crossref_diagnostics -- --include-ignored
 cargo test --locked --test protocol bibliography_nested_crossrefs_
 ```
 
-## 重复字段
+## Repeating fields
 
-原生 BibTeX 的 `Warning--I'm ignoring entry's extra "title" field` 及紧随的 `--line … of file …` 使用诊断代码 `repeated-bibliography-field`。诊断精确标记被忽略的字段名，`relatedInformation` 链接同一条目中首次赋值的字段名。保留警告级别、原始键和字段信息，支持 ASCII 大小写变化、含引号或撇号的键、自定义字段名、UTF-16、CRLF、两种条目定界符及数据库符号链接。
+Native BibTeX's `Warning--I'm ignoring entry's extra "title" field` followed by `--line … of file …` uses diagnostic code `repeated-bibliography-field`. Diagnostic precision marks ignored field names, `relatedInformation` links the first assigned field name in the same entry. Preserves warning levels, original key and field information, supports ASCII case changes, keys with quotes or apostrophes, custom field names, UTF-16, CRLF, two entry delimiters, and database symbolic links.
 
-BibTeX 的报告行指向解析完字段值后看到的逗号或条目关闭符，可能位于字段名之后数行。定位复用完整值表达式和解析边界，包含 `#` 拼接及后移到下一行的定界符。同一行存在多个重复字段时，只有完整日志中的对应警告数与源码候选数一致，才按源码顺序分别定位；不同字段或报告行独立计数。
+BibTeX's report line points to the comma or entry close seen after parsing the field value, possibly several lines after the field name. Locate multiplexed full value expressions and parsing boundaries, including `#` splicing and delimiters moved to the next line. When there are multiple duplicate fields in the same line, only if the corresponding warning number in the complete log is consistent with the number of source code candidates, they will be positioned separately in source code order; different fields or report lines are counted independently.
 
-同组警告复用字段匹配和位置转换结果，数千个重复字段仍逐一显示精确范围及首次赋值。跨行字面值、Unicode 字段名和 CRLF 均保留原始位置；后续语法错误使读取历史不完整时，后续警告重新核对顺序定位条件。位置缓存仅在本次日志中使用，并与实际解析的来源绑定。
+The same group of warnings reuses field matching and position conversion results, and thousands of repeated fields still display the exact range and first assignment one by one. Cross-line literals, Unicode field names, and CRLFs retain their original positions; subsequent warnings recheck sequence positioning when subsequent syntax errors render the read history incomplete. The location cache is only used in this log and is tied to the actual parsed source.
 
-缺失续行或未确认的数据库来源保留主文档警告；行号无效、字段或条目有歧义、赋值无效、日志不完整或无法确认顺序时，保留可确认的报告行。字面文本、注释、特殊构造和其他条目不提供字段位置。该警告按编译器实际忽略的值定位；保存修改并重编译后，push/pull 诊断更新位置，消除重复后清除旧结果。
+Preserve root document warnings for missing continuation lines or unconfirmed database sources; preserve confirmable report lines when row numbers are invalid, fields or entries are ambiguous, assignments are invalid, logs are incomplete, or the sequence cannot be confirmed. Literal text, comments, special constructs, and other entries do not provide field positions. The warning is positioned by a value that the compiler actually ignores; after saving changes and recompiling, push/pull diagnostics update the location, clearing old results after eliminating duplicates.
 
 ```sh
 cargo test --locked --test bibliography_field_diagnostics -- --include-ignored
 cargo test --locked --test protocol repeated_bibliography_fields_
 ```
 
-## 来源与条目定位
+## Source and entry positioning
 
-普通 BibTeX 样式警告（如 `Warning--empty author in entry`）和 Biber 条目消息复用本次日志的有界数据库解析缓存，避免每条警告重新读取、解析整个文献库。没有独立行号时，只有候选数据库均可读取、且完整键名对应唯一条目，才使用精确键范围；同一库或多个库的重复键不会默认选择首个条目。名称按原始大小写匹配，数据库符号链接与重复输入路径按实际文件去重。
+Ordinary BibTeX style warnings (such as `Warning--empty author in entry`) and Biber entry messages reuse the bounded database parsing cache of this log to avoid re-reading and parsing the entire library for each warning. When there is no independent row number, the exact key range is only used if both candidate databases can read it and the complete key name corresponds to a unique entry; duplicate keys in the same library or multiple libraries will not select the first entry by default. Names are matched according to the original case, and database symbolic links and repeated input paths are deduplicated according to the actual files.
 
-显式来源只在该文件内查找；其他数据库不可读时不影响明确来源。没有显式来源时，已记录但缺失、不可读或超过缓存上限的数据库会阻止猜测条目位置，消息仍保留在主文档。单文件 2 MiB、累计 16 MiB、最多 1024 个文件的限制与其他原生文献诊断共用；缓存随本次日志解析结束而释放，保存修改后重编译重新定位。
+Explicit sources are only searched within this file; explicit sources are not affected when other databases are unreadable. Without an explicit source, a database that is logged but missing, unreadable, or exceeds the cache limit prevents guessing at the entry location and the message remains in the main document. The limit of 2 MiB for a single file, 16 MiB in total, and a maximum of 1024 files is shared with other native document diagnoses; the cache will be released when this log parsing is completed, and the modifications will be saved and recompiled for relocation.
 
-原生 BibTeX `Repeated entry---line … of file …` 错误使用诊断代码 `repeated-bibliography-entry`。报告行中只有一个文献条目键时，精确标记该键，并通过标准 `relatedInformation` 列出此前已读取数据库中的同名条目位置，最多 16 项。按 BibTeX 规则忽略 ASCII 大小写，保留原键的拼写；支持键与条目类型分行、UTF-16、CRLF 及符号链接。后置条目、尚未读取的数据库、字符串声明和注释不会提供相关位置。同一行有多个可能条目、来源缺失或行号无效时保留原行诊断，不猜测文献键。
+The native BibTeX `Repeated entry---line … of file …` error uses diagnostic code `repeated-bibliography-entry`. When there is only one document entry key in the report row, mark the key exactly and list the positions of previously read entries in the database with the same name, up to 16 entries via standard `relatedInformation`. Ignore ASCII case according to BibTeX rules and retain the spelling of the original key; support key and entry type line breaking, UTF-16, CRLF and symbolic links. Post-entries, databases not yet read, string declarations, and comments do not provide relative positions. When there are multiple possible entries in the same line, the source is missing, or the line number is invalid, the original line diagnostics is retained and the citation key is not guessed.
 
 ```sh
 cargo test --locked --test bibliography_duplicate_diagnostics -- --include-ignored
 cargo test --locked --test protocol repeated_bibliography_entries_
 ```
 
-BibTeX 带行号的文献库及样式错误按日志中的输入名称识别类型，再定位到符号链接的实际文件；目标使用无关扩展名时仍保留正确行号。辅助文件不会因链接目标带有源码扩展名而被误当成文献来源；路径缺失或实际为目录时，诊断保留在主文件。
+BibTeX line-numbered bibliography and style errors recognize the type by the input name in the log and then locate the actual file of the symbolic link; correct line numbers are retained when the target uses an unrelated extension. Auxiliary files will not be mistaken for source files because the link target has a source code extension; when the path is missing or is actually a directory, the diagnostics remains in the main file.
 
-Biber 消息中的文献路径按完整文件名边界匹配，`refs.bib.backup`、`refs.bib2` 或目录名中的 `.bib` 不会借用已有 `refs.bib` 的位置。显式的 `in file refs.bib` 和 `in file 'refs.bib'` 优先于错误正文中的文件名；普通文本 `in parser` 不会阻止识别后面的真实来源。引号内的 `in 'wrong.bib'` 或 `file 'wrong.bib'` 不会覆盖显式来源；无法确认的来源保留原错误信息并在主文件显示。
+Document paths in Biber messages are matched on full filename boundaries, `refs.bib.backup`, `refs.bib2`, or `.bib` in directory names will not borrow the location of an existing `refs.bib`. Explicit `in file refs.bib` and `in file 'refs.bib'` take precedence over filenames in the error text; plain text `in parser` does not prevent the subsequent true source from being identified. `in 'wrong.bib'` or `file 'wrong.bib'` within quotation marks will not overwrite the explicit source; unconfirmed sources retain the original error message and display it in the main file.
 
-没有显式来源字段时，独立引号包围的完整文件名、`refs.bib:` 及括号中的路径仍可定位；不会从更大的引号文本中截取内嵌文件名。未加引号的路径保留撇号、逗号和目录中的 `.bib`，兼容消息标点及 Unicode 空白分隔符。
+Without an explicit source field, the full filename, `refs.bib:`, and the path in parentheses can still be located if enclosed in independent quotes; inline filenames are not truncated from the larger quoted text. Unquoted paths preserve apostrophes, commas, and `.bib` in directories, and are compatible with message punctuation and Unicode whitespace delimiters.
 
-日志明确指出的带引号文献路径会作为完整名称处理，保留空格、撇号和文件名内部的 `.bib` 片段。`refs.bib':copy.bib` 等文件名中紧接引号的标点也保留为名称的一部分，文件名中的 `line 700` 不会覆盖真实行号；这些完整名称也用于依赖索引、跳转和文献键重命名。条目警告只在指定数据库中定位文献键；指定文件不存在、路径为目录或引号无法确认时，在主文件标记来源未确认，不借用前缀、后缀或其他数据库的位置，也不将其他文件的条目范围套到当前文件。
+Quoted document paths explicitly noted by the log are treated as full names, preserving spaces, apostrophes, and the `.bib` fragment inside the filename. Punctuation immediately following quotation marks in file names such as `refs.bib':copy.bib` is also retained as part of the name, and `line 700` in the file name does not overwrite the real line number; these full names are also used for dependent indexing, jumps, and citation key renaming. The entry warning only locates the citation key in the specified database; when the specified file does not exist, the path is a directory, or the quotation marks cannot be confirmed, the source of the main file mark is not confirmed, the prefix, suffix or the position of other databases is not borrowed, and the entry range of other files is not applied to the current file.
 
-当引号后的标点和空格也属于文件名（如 `refs.bib': copy.bib`）时，使用文献日志确认的完整数据库名称消除歧义。多个已记录名称同时匹配时优先完整的长名称，再按共同的搜索路径规则查找文件；完整文件缺失时在主文件显示原错误，不借用短文件的位置。文件名中的 `in file`、`entry` 和 `line` 不会被当作日志字段，已记录的短名称也不会截断消息中另一个边界明确的长名称。
+When punctuation and spaces after quotation marks also belong to the file name (e.g., `refs.bib': copy.bib`), use the full database name confirmed by the literature log to disambiguate it. When multiple recorded names match at the same time, the complete long name is given priority, and the file is found according to the common search path rules; when the complete file is missing, the original error is displayed in the main file, and the location of the short file is not borrowed. `in file`, `entry`, and `line` in the file name are not treated as log fields, nor does the logged short name truncate another well-bounded long name in the message.
 
-诊断没有为文献路径添加引号时，也使用日志确认的完整名称保留空格及文件名内部的引号，支持消息中的成对括号。例如 `refs.bib line 700 copy.bib` 不会截成 `refs.bib`，其中的 `line 700` 也不会覆盖真实行号。显式来源和独立路径均遵守这些规则；完整来源缺失时在主文件显示原错误并标记来源未确认。
+Diagnostics also uses the full name confirmed by the log when quotes are not added to the literature path, preserving spaces and quotes inside the file name, and supporting pairs of brackets in the message. For example, `refs.bib line 700 copy.bib` will not be cut into `refs.bib`, and `line 700` will not overwrite the real line number. Both explicit sources and independent paths adhere to these rules; when a complete source is missing, an original error is displayed in the main file and the source is marked as unconfirmed.
 
-显式 `file` / `in file` 来源未列入输入日志时，也可定位包含空格的完整 `.bib` 路径。文件名范围内的 `line`、`entry` 文字和消息中其他引号文件名不会提供错误位置；完整文件缺失或名称使用 `.bib.backup` 等后缀时，保留来源未确认状态。普通说明文字（如 `in parser: ...` 或 `in 'parser'`）不会抢在后续可确认的文件字段之前成为诊断来源。
+When the explicit `file` / `in file` source is not listed in the input log, the full `.bib` path including spaces can also be located. `line`, `entry` text within the filename range and other quoted filenames in the message do not provide an error location; when the complete file is missing or the name uses a suffix such as `.bib.backup`, the source is left unconfirmed. Generic description text (such as `in parser: ...` or `in 'parser'`) does not become the source of diagnostics before subsequent confirmable file fields.
 
-日志与诊断使用不同路径写法时，也按同一输入识别：支持绝对路径、相对路径、`./` 和指向同一数据库的目录链接，保留符号链接后 `..` 的实际含义。匹配遵守工具工作目录及 `BIBINPUTS` 的顺序，使用日志确认读取的目标；其他目录的同名文件不会冒充该来源。来源缺失或发生切换时保留完整消息并标记来源未确认，不借用干扰文件的文献条目范围。诊断明确指定且真实存在的其他文件，即使未列入输入记录，仍可正常定位。
+When logs and diagnostics use different path writing methods, they are also recognized by the same input: absolute paths, relative paths, `./` and directory links pointing to the same database are supported, and the actual meaning of `..` after symbolic links is retained. The match follows the order of the tool working directory and `BIBINPUTS`, and uses the log to confirm the read target; files with the same name in other directories will not impersonate the source. Keep the complete message and mark the source as unconfirmed when the source is missing or switched, and do not borrow the range of document entries that interfere with the file. Other files that are explicitly specified by the diagnostics and actually exist can still be located normally even if they are not included in the input record.
 
-BibTeX 警告末尾的 `in 键名` 按文献键的原始内容查找，保留键名中的引号；即使键名为 `entry.bib`、且磁盘上存在同名文件，也定位到实际数据库中的条目。Biber 的 `entry '键' in file '路径'` 则分别识别文献键和来源路径；键名中的 `.bib` 不会让同名文件覆盖实际数据库，未闭合的键字段也不会被当成来源路径。显式指定的来源文件仍优先使用。
+`in key` at the end of the BibTeX warning searches by the original content of the citation key, preserving the quotes in the key name; even if the key name is `entry.bib` and a file with the same name exists on disk, the entry in the actual database is located. Biber's `entry 'key' in file 'path'` identifies the citation key and source path respectively; `.bib` in the key name will not allow the file with the same name to overwrite the actual database, and the unclosed key field will not be regarded as the source path. Explicitly specified source files still take precedence.
 
-Biber 的 `entry` / `Entry` 字段支持单、双引号包围，完整保留 `O'Connor2026` 等带撇号的文献键，并按 UTF-16 范围定位。文件名、其他引号内容和 `subentry` 等单词中的同名文字不会被当成条目字段；截断、未闭合的显式键不会借用消息末尾其他条目的位置。
+Biber's `entry` / `Entry` field supports single and double quotation marks, completely retains the citation keys with apostrophes such as `O'Connor2026`, and is positioned according to the UTF-16 range. Filenames, other quoted content, and words with the same name as `subentry` are not treated as entry fields; truncated, unclosed explicit keys do not borrow positions from other entries at the end of the message.
 
-Biber 行号只取来源字段和引号内容之外的完整 `line 整数` 字段，`line 700 refs.bib` 等文件名、引号内的错误内容及 `outline` 等单词不会覆盖真实行号；条目警告也保留键名的精确范围。BibTeX 样式生成的警告即使正文包含 `line 700`，仍按末尾的文献键定位；带源文件和行号的 BibTeX 错误继续使用工具的独立行号格式。
+Biber line numbers only take the complete `line integer` field except the source field and quotation mark content. File names such as `line 700 refs.bib`, error content within quotation marks, and words such as `outline` will not cover the real line number; entry warnings also retain the precise range of key names. Warnings generated by BibTeX style are positioned by the last citation key even if the text contains `line 700`; BibTeX errors with source file and line numbers continue to use the tool's independent line number format.
 
-文献依赖和日志定位共用搜索规则，识别 BibTeX 的工作目录与 latexmk 报告的数据库/样式搜索路径，避免主目录和输出目录中的同名文件导致定位错误。Biber 日志中的空格、中文及含单引号的数据库名也会保留。
+Document dependency and log positioning share search rules, identify the working directory of BibTeX and the database/style search path reported by latexmk, and avoid positioning errors caused by files with the same name in the main directory and output directory. Spaces, Chinese characters, and database names containing single quotes in Biber logs will also be retained.

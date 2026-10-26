@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::{build, build_log},
     editing,
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
 
 #[test]
 fn missing_loader_diagnostics_follow_static_names_and_the_consumed_lookahead_token() {
@@ -348,7 +348,7 @@ fn loader_repairs_preserve_options_lists_versions_and_fix_redundant_suffixes() {
         std::fs::write(root.join("main.tex"), source).unwrap();
         std::fs::write(root.join(filename), "Loaded source.").unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -383,7 +383,7 @@ fn loader_repairs_revalidate_legacy_versions_metadata_and_file_existence() {
     std::fs::write(root.join("local.sty"), "Loaded source.").unwrap();
     let uri = Url::from_file_path(root.join("main.tex")).unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             apply_edits: true,
             ..Default::default()
         },
@@ -440,7 +440,7 @@ fn package_names_discard_tex_spaces_while_class_names_preserve_internal_spaces()
     let mut workspace = Workspace::default();
     workspace.add_root(root.into());
     let uri = Url::from_file_path(root.join("main.tex")).unwrap();
-    let links = latex_lsp::language::navigation::document_links(&workspace, &uri);
+    let links = texquill::language::navigation::document_links(&workspace, &uri);
     assert_eq!(links.len(), 2, "{links:?}");
     assert_eq!(
         links[0].target,
@@ -454,18 +454,18 @@ fn package_names_discard_tex_spaces_while_class_names_preserve_internal_spaces()
         old_uri: Url::from_file_path(root.join(old)).unwrap().to_string(),
         new_uri: Url::from_file_path(root.join(new)).unwrap().to_string(),
     };
-    assert!(latex_lsp::editing::file_operations::will_rename(
+    assert!(texquill::editing::file_operations::will_rename(
         &workspace,
         &[rename("mylocal.cls", "decoy.cls")]
     )
     .unwrap()
     .is_none());
-    assert!(latex_lsp::editing::file_operations::will_rename(
+    assert!(texquill::editing::file_operations::will_rename(
         &workspace,
         &[rename("mylocal.sty", "new package.sty")]
     )
     .is_err());
-    let class_edit = latex_lsp::editing::file_operations::will_rename(
+    let class_edit = texquill::editing::file_operations::will_rename(
         &workspace,
         &[rename("my local.cls", "new class.cls")],
     )
@@ -475,7 +475,7 @@ fn package_names_discard_tex_spaces_while_class_names_preserve_internal_spaces()
     .unwrap();
     assert_eq!(class_edit[&uri].len(), 1);
     assert_eq!(class_edit[&uri][0].new_text, "new class");
-    let edit = latex_lsp::editing::file_operations::will_rename(
+    let edit = texquill::editing::file_operations::will_rename(
         &workspace,
         &[rename("mylocal.sty", "renamed.sty")],
     )
@@ -537,7 +537,7 @@ fn real_missing_package_and_class_names_offer_versioned_repairs_that_compile() {
             )
             .unwrap();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     versioned_edits: true,
                     ..Default::default()
@@ -555,7 +555,7 @@ fn real_missing_package_and_class_names_offer_versioned_repairs_that_compile() {
             };
             let source = std::fs::read_to_string(uri.to_file_path().unwrap()).unwrap();
             workspace.open(uri.clone(), source.clone(), 7);
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable: engine.into(),
                 ..Default::default()
             };

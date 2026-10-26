@@ -1,6 +1,6 @@
-use latex_lsp::{editing::file_operations, language::navigation, project::workspace::Workspace};
 use lsp_types::*;
 use std::path::Path;
+use texquill::{editing::file_operations, language::navigation, project::workspace::Workspace};
 
 const FILES: [(&str, &str); 9] = [
     ("input", "tex"),
@@ -24,7 +24,7 @@ fn project(root: &Path, body: &str, extension: &str) -> (Workspace, Url, Url) {
     .unwrap();
     std::fs::write(root.join(format!("refs.{extension}")), "Data.").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },

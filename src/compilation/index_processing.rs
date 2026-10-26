@@ -356,7 +356,7 @@ impl Plan {
 }
 fn staged_path(directory: &Path, extension: &str) -> Result<tempfile::TempPath, Failure> {
     let path = tempfile::Builder::new()
-        .prefix("latex-lsp-index-")
+        .prefix("texquill-index-")
         .suffix(&format!(".{extension}"))
         .tempfile_in(directory)
         .map_err(|error| Failure::error(format!("Cannot stage index output: {error}")))?

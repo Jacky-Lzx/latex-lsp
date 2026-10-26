@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 fn uri(path: &std::path::Path) -> Url {
     Url::from_file_path(path).unwrap()
@@ -64,7 +64,7 @@ fn missing_local_resources_from_biber_and_bibtex_offer_exact_versioned_filename_
                 ))
             );
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     versioned_edits: true,
                     ..Default::default()
@@ -155,7 +155,7 @@ fn biber_resource_fixes_preserve_literal_names_options_and_explicit_extensions()
                 "{missing}: {diagnostic:?}"
             );
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     versioned_edits: true,
                     ..Default::default()
@@ -229,7 +229,7 @@ fn malformed_biber_messages_and_unconfirmed_resource_sources_do_not_offer_edits(
             "{body}: {diagnostic:?}"
         );
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 versioned_edits: true,
                 ..Default::default()
@@ -266,7 +266,7 @@ fn resource_candidates_are_bounded_and_recheck_diagnostic_identity() {
         build_log::parse_bibliography(&root.join("main.tex"), "ERROR - Cannot find 'refsx.bib'!\n");
     let diagnostic = &diagnostics[&main][0];
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             versioned_edits: true,
             ..Default::default()
@@ -339,7 +339,7 @@ fn real_biber_missing_resources_offer_fixes_that_load_the_selected_database() {
                 })
                 .unwrap();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     versioned_edits: true,
                     ..Default::default()
@@ -422,7 +422,7 @@ fn real_bibtex_resource_file_fixes_restore_compilation() {
             })
             .unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 versioned_edits: true,
                 ..Default::default()

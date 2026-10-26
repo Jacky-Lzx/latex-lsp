@@ -1,32 +1,32 @@
-# 缺失的定界符参数
+# Missing delimiter operands
 
-[返回文档目录](README.md) · [编译诊断](diagnostics.md) · [缺失的右定界符](missing-right-delimiters.md)
+[Back to documentation](README.md) · [Compile Diagnostics](diagnostics.md) · [Missing right delimiter](missing-right-delimiters.md)
 
-`\left`、`\right` 和 `\middle` 后需要一个定界符。编译器报告 `Missing delimiter (. inserted).` 时，服务器核对待重新读取的 token 和源码回显，将诊断标在缺少定界符的命令上，并提供 `Insert invisible delimiter after '…'` 快速修复。
+A delimiter is required after `\left`, `\right` and `\middle`. When the compiler reports `Missing delimiter (. inserted).`, the server checks the token to be reread and the source code echo, flags the diagnostics on the command with the missing delimiter, and provides a quick fix for `Insert invisible delimiter after '…'`.
 
 ```latex
-$\left a+b\right)$          % 修复后：$\left. a+b\right)$
-$\left(a+b\right x$         % 修复后：$\left(a+b\right. x$
-$\left(a\middle b\right)$   % 修复后：$\left(a\middle. b\right)$
+$\left a+b\right)$          % after the fix：$\left. a+b\right)$
+$\left(a+b\right x$         % after the fix：$\left(a+b\right. x$
+$\left(a\middle b\right)$   % after the fix：$\left(a\middle. b\right)$
 ```
 
-修复在命令后插入一个点，表示不可见定界符。原来的字母、数学符号、空白、换行和注释原样保留。若需要可见括号，请按公式含义改用 `\left(`、`\right)` 等写法。
+Fix inserting a dot after a command to represent an invisible delimiter. Original letters, mathematical symbols, whitespace, line breaks, and comments are retained intact. If visible brackets are required, please use `\left(`, `\right)`, etc. according to the meaning of the formula.
 
-这与[缺失整个右定界符命令](missing-right-delimiters.md)不同：本操作只补已有命令的参数，不补 `\right`，也不保证消除其他分组或数学错误。比如 `\left{` 中的花括号仍然是分组；若本来想显示集合括号，应改用 `\left\{`。
+This is different from [missing the entire right delimiter command](missing-right-delimiters.md): this operation only supplements the parameters of the existing command, not `\right`, and does not guarantee to eliminate other grouping or mathematical errors. For example, the curly brackets in `\left{` are still grouping; if you originally want to display the set brackets, you should use `\left\{` instead.
 
-## 定位与来源
+## Positioning and Source
 
-需要紧邻错误消息的 `<to be read again>` 帧，下一行必须是单个可对应源码的 ASCII token，再接直接的 `l.N` 源码回显。该 token 必须恰好出现在命令之后，期间仅允许空白和注释；普通字符和 `\alpha` 等控制序列都可核对。完整回显须匹配源码前缀，缩短回显须在该行唯一匹配。
+The `<to be read again>` frame needs to be next to the error message. The next line must be a single ASCII token that can correspond to the source code, followed by the direct `l.N` source code echo. The token must appear exactly after the command, during which only blanks and comments are allowed; ordinary characters and control sequences such as `\alpha` can be checked. The full echo must match the source code prefix, and the shortened echo must match the unique line.
 
-支持子文件、UTF-16 范围、CRLF、传统与文件行号日志，以及跨行注释。诊断覆盖命令，实际编辑是命令末尾的零宽插入。第二行源码回显和已经完整确认的标准 TeX 帮助文本不会作为文件进入或退出事件；之后的主文件和兄弟文件诊断保持各自来源。
+Supports subfiles, UTF-16 ranges, CRLF, legacy and file line number logging, and cross-line comments. The diagnostic overwrites the command and the actual edit is a zero-width insert at the end of the command. The second line of source code echo and the fully confirmed standard TeX help text will not be used as file entry or exit events; subsequent main file and sibling file diagnostics remain from their respective sources.
 
-额外用户展开帧、展开后与源码不一致的 token、不完整或歧义回显、未知来源、定义正文、宏参数、逐字内容和注释保留原诊断，不提供编辑。`^^` 写法及非 ASCII token 暂不按单 token 修复；`\big` 等宏内部的同类错误也不作直接原语推断。
+Additional user expanded frames, tokens that are inconsistent with the source code after expansion, incomplete or ambiguous echoes, unknown sources, definition text, macro parameters, verbatim content and comments retain the original diagnostics and do not provide editing. The writing method of `^^` and non-ASCII token will not be fixed on a per-token basis for the time being; similar errors within `\big` and other macros will not be directly inferred from primitives.
 
-修复使用编译时已确认来源中的参数语法。原语或相关控制词被项目内重定义时不提供此操作；请求操作和执行旧客户端命令时重新校验文档版本、源码、诊断数据与依赖。依赖中的参数定义变化后，旧操作可能失效。详见[宏来源规则](literal-macro-scopes.md)。
+Fix parameter syntax in confirmed sources when using compile. This operation is not provided when the primitive or related control words are redefined within the project; the document version, source code, diagnostic data and dependencies are rechecked when requesting operations and executing old client commands. After the parameter definition in the dependency changes, the old operation may become invalid. See [Macro Source Rules](literal-macro-scopes.md) for details.
 
-诊断代码为 `missing-delimiter-operand`。`data.delimiterCommand` 保存带反斜杠的命令，`recoveryToken` 保存已核对的待处理 token，`sourceContext` 保存源码回显，`sourceLine` 保存从零开始的回显行号；跨行调用中，回显行可与诊断行不同。
+The diagnostic code is `missing-delimiter-operand`. `data.delimiterCommand` saves the command with backslash, `recoveryToken` saves the verified token to be processed, `sourceContext` saves the source code echo, and `sourceLine` saves the echo line number starting from zero; in cross-line calls, the echo line can be different from the diagnostic line.
 
-## 验证
+## verify
 
 ```sh
 cargo test --locked --test delimiter_operands
@@ -34,4 +34,4 @@ cargo test --locked --test delimiter_operands -- --include-ignored
 cargo test --locked --test protocol right_delimiter
 ```
 
-真实回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX。在 60 / 79 列与两种错误格式中修复子文件的 13 处错误，覆盖三个原语、控制词与脚本符号、连续调用和跨行注释，确认生成一页 PDF、错误清除且主文件警告来源正确。stdio 回归覆盖 Code Action、旧客户端命令、伪造替换拒绝、版本失效和重编译后的诊断清除。
+True regression requires pdfLaTeX, XeLaTeX and LuaLaTeX. Fixed 13 errors in subfiles in 60 / 79 columns and two error formats, covering three primitives, control words and script symbols, continuous calls and cross-line comments, confirming that one page PDF is generated, errors are cleared and main file warnings come from the correct source. stdio regression covers Code Action, old client commands, fake replacement rejections, version invalidation and diagnostic cleanup after recompilation.

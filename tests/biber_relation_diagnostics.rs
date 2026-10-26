@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "missing-bibliography-relation";
 const FIELDS: [&str; 4] = ["crossref", "xref", "related", "entryset"];
@@ -151,7 +151,7 @@ fn relation_owners_require_complete_prior_inputs_and_unique_case_sensitive_norma
         ),
         format!("{}ERROR - Earlier failure\n{warning}", found("refs.data")),
         format!(
-            "{}[latex-lsp: middle of compiler output omitted]\n{warning}",
+            "{}[texquill: middle of compiler output omitted]\n{warning}",
             found("refs.data")
         ),
         format!("{}{}{warning}", found("refs.data"), found("duplicate.data")),
@@ -257,7 +257,7 @@ fn relation_locations_move_after_saving_and_do_not_guess_target_repairs() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },

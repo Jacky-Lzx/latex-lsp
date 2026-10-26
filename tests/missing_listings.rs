@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::{build, build_log},
     editing,
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -163,7 +163,7 @@ fn listing_spelling_fixes_preserve_full_names_options_and_versioned_ranges() {
         let item = missing(&items).unwrap().clone();
         std::fs::write(directory.path().join(right), r"\input{main}").unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 versioned_edits: true,
                 ..Default::default()
@@ -212,7 +212,7 @@ fn listing_fixes_reject_tampered_metadata_and_tex_suffix_shadowing() {
     let item = missing(&items).unwrap().clone();
     std::fs::write(directory.path().join("sample.rs"), "Intended.").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -265,7 +265,7 @@ fn real_missing_listing_fixes_compile_the_intended_code_file() {
             let source = format!("% 😀\n\\documentclass{{article}}\\usepackage{{listings}}\\begin{{document}}\n\\lstinputlisting[columns=fullflexible]{{{wrong}}}\n\\end{{document}}\n");
             std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
             std::fs::write(root.join(right), "Original code\n").unwrap();
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable: engine.into(),
                 ..Default::default()
             };
@@ -276,7 +276,7 @@ fn real_missing_listing_fixes_compile_the_intended_code_file() {
             let start = source.find(wrong).unwrap();
             assert_eq!(diagnostic.range, text.range(start, start + wrong.len()));
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     versioned_edits: true,
                     ..Default::default()

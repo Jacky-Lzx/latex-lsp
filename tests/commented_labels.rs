@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, semantic},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///commented-labels/{name}")).unwrap();
@@ -367,7 +367,7 @@ fn trailing_comments_do_not_hide_the_reported_closing_line_of_missing_labels() {
             "{call}: {diagnostic:?}"
         );
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -441,12 +441,12 @@ fn real_commented_labels_complete_and_rename_while_spaced_labels_remain_distinct
     assert_eq!(fixed, reference.replace("\n oldBAD %", "\nold%"));
     std::fs::write(&child, &fixed).unwrap();
     workspace.open(child_uri.clone(), fixed.clone(), 8);
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
     let compile = || {
-        let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+        let outcome = texquill::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(outcome.status, "success", "{}", outcome.output);
         outcome
     };
@@ -773,7 +773,7 @@ fn parenthesized_label_spelling_fixes_preserve_the_compilers_exact_key_range() {
         let diagnostics = build_log::parse(&main, &format!("(./main.tex\nLaTeX Warning: {kind} `sec:(targte)' on page 1 undefined on input line 2.\n)\n"));
         let diagnostic = diagnostics[&uri][0].clone();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },

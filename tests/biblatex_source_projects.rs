@@ -1,7 +1,7 @@
 #[path = "support/completion.rs"]
 mod completion;
-use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace};
 fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url, Url) {
     let dir = tempfile::tempdir().unwrap();
     let source = format!(

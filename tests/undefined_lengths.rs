@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 fn log(call: &str, numbered: bool) -> String {
     let header = if numbered { "./main.tex:2:" } else { "!" };
@@ -49,7 +49,7 @@ fn a_missing_length_offers_a_spelling_fix_from_its_project() {
     let uri = Url::from_file_path(&main).unwrap();
     let diagnostic = diagnostics[&uri][0].clone();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -110,7 +110,7 @@ fn fixture_name(declarations: &str, name: &str) -> (tempfile::TempDir, Workspace
     let uri = Url::from_file_path(&main).unwrap();
     let diagnostic = diagnostics[&uri][0].clone();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -294,8 +294,8 @@ fn versioned_and_legacy_length_fixes_revalidate_candidates_versions_and_operands
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_length_errors_offer_repairs_and_compile_with_original_expressions_in_all_engines() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let source = concat!(
         "\\ifcslength{measuer}{Yes}{No}\\deflength{\\measuer}{2pt+3pt}\n",
@@ -356,7 +356,7 @@ fn real_length_errors_offer_repairs_and_compile_with_original_expressions_in_all
                     before.output
                 );
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         code_action_literals: true,
                         ..Default::default()
                     },

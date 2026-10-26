@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace};
 use lsp_types::*;
+use texquill::{compilation::build_log, editing, project::workspace::Workspace};
 
 const CONFIRMED: &[&str] = &[
     "Package rerunfilecheck Warning: File `main.brf' has changed.\n\n(rerunfilecheck)                Rerun to get bibliographical\n references right.",
@@ -43,7 +43,7 @@ fn actions(
     diagnostics: &std::collections::BTreeMap<Url, Vec<Diagnostic>>,
 ) -> CodeActionResponse {
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -407,8 +407,8 @@ fn real_file_changes_request_rebuild_until_the_next_unchanged_pass() {
 #[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX, LuaLaTeX and hyperref"]
 fn real_backreferences_request_rebuild_after_citation_pages_change_and_clear_when_stable() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let cache = tempfile::tempdir().unwrap();
     for engine in ["pdflatex", "xelatex", "lualatex"] {

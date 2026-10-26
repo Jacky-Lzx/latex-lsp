@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace, text::Text};
 
 fn setup(files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace, Url) {
     let directory = tempfile::tempdir().unwrap();
@@ -129,14 +129,14 @@ fn non_source_file_creation_and_deletion_refresh_the_selected_hook() {
     let target = position(source, "draft");
     assert!(features::definitions(&workspace, &main, target).is_empty());
     std::fs::write(gate.to_file_path().unwrap(), "Data,not TeX").unwrap();
-    latex_lsp::editing::file_operations::FileChanges::new([gate.as_str()])
+    texquill::editing::file_operations::FileChanges::new([gate.as_str()])
         .unwrap()
         .refresh(&mut workspace);
     assert_eq!(features::definitions(&workspace, &main, target).len(), 1);
     assert!(!workspace.documents.contains_key(&gate));
     assert_eq!(workspace.documents[&main].version, Some(9));
     std::fs::remove_file(gate.to_file_path().unwrap()).unwrap();
-    latex_lsp::editing::file_operations::FileChanges::new([gate.as_str()])
+    texquill::editing::file_operations::FileChanges::new([gate.as_str()])
         .unwrap()
         .refresh(&mut workspace);
     assert!(features::definitions(&workspace, &main, target).is_empty());
@@ -169,8 +169,8 @@ fn uncertain_file_conditions_reject_affected_edits_but_preserve_other_symbols() 
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_conditional_hook_renames_preserve_state_and_input_order_in_three_engines() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
 
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for command in ["InputIfFileExists", "IfFileExists"] {

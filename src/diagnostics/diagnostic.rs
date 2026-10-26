@@ -8,7 +8,7 @@ use std::{
 };
 
 pub(crate) type Snapshot = (Url, Vec<Diagnostic>, Option<i32>);
-pub(crate) const IDENTIFIER: &str = "latex-lsp";
+pub(crate) const IDENTIFIER: &str = "texquill";
 
 #[derive(Default)]
 struct Refresh {

@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::collections::BTreeMap;
+use texquill::{
     compilation::build_log,
     editing,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::collections::BTreeMap;
 
 fn extension(command: &str) -> &'static str {
     match command {
@@ -485,7 +485,7 @@ fn fixture(command: &str) -> (tempfile::TempDir, Workspace, Url, Url, Diagnostic
     )
     .unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             code_action_literals: true,
             ..Default::default()

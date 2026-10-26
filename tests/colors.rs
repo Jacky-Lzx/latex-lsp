@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build, language::colors, project::workspace::Document};
 use lsp_types::*;
+use texquill::{compilation::build, language::colors, project::workspace::Document};
 
 fn document(source: &str) -> Document {
     Document::new(
@@ -286,7 +286,7 @@ fn optional_color_definitions_keep_real_components_after_picker_edits() {
             .collect();
         for (index, source) in [source, apply(&doc, presentations)].into_iter().enumerate() {
             std::fs::write(&main, source).unwrap();
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable: engine.into(),
                 ..Default::default()
             };
@@ -404,7 +404,7 @@ fn applied_picker_edits_remain_compilable_with_pdftex_and_xetex() {
         }
         for source in [source.into(), apply(&doc, presentations)] {
             std::fs::write(&main, &source).unwrap();
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable: engine.into(),
                 ..Default::default()
             };
@@ -528,7 +528,7 @@ fn cmyk_preview_and_picker_values_match_real_xcolor_conversions() {
             for requested in [found.color, color(0.25, 0.5, 0.75), color(0.0, 0.0, 0.0)] {
                 let updated = apply(&doc, colors::presentations(&doc, found.range, requested));
                 std::fs::write(&main, &updated).unwrap();
-                let config = latex_lsp::config::BuildConfig {
+                let config = texquill::config::BuildConfig {
                     executable: engine.into(),
                     ..Default::default()
                 };

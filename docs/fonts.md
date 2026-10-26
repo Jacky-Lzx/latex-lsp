@@ -1,25 +1,25 @@
-# 字体声明、诊断与结果分析
+# Font declarations, diagnostics, and analysis
 
-[返回文档目录](README.md) · [编译](build.md) · [编译诊断](diagnostics.md)
+[Back to documentation](README.md) · [Compile](build.md) · [Compile diagnostics](diagnostics.md)
 
-编译成功生成 PDF 时，字体替换和缺字警告仍可能表示排版内容与预期不同。结果摘要帮助客户端集中显示这些问题，逐位置诊断保留原有级别和计数。
+When compilation successfully generates a PDF, font substitution and missing word warnings may still indicate that the typesetting is different than expected. Results summaries help clients focus on displaying these issues, with location-by-location diagnostics retaining the original levels and counts.
 
-## NFSS 字体声明
+## NFSS font declaration
 
-字体定义文件 `.fd` 使用 LaTeX 源码解析，参与项目扫描、文件监听与显式 `\input{...fd}` 路径补全。以下内核声明提供命令说明、参数片段和逐参数提示：
+The font definition file `.fd` uses LaTeX source code analysis to participate in project scanning, file monitoring and explicit `\input{...fd}` path completion. The following kernel declaration provides command descriptions, argument snippets, and per-argument hints:
 
-| 命令 | 参数顺序 |
+| Command | Parameter order |
 | --- | --- |
-| `\DeclareFontEncoding` | 编码、文本设置、数学设置 |
-| `\DeclareFontEncodingDefaults` | 默认文本设置、默认数学设置 |
-| `\DeclareFontFamily` | 编码、字体族、加载设置 |
-| `\DeclareFontShape` | 编码、字体族、字重、字形、字号规格、加载设置 |
-| `\DeclareFontSubstitution` | 编码、默认字体族、字重、字形 |
-| `\DeclareMathSizes` | 正文字号、数学字号、上标字号、次级上标字号 |
+| `\DeclareFontEncoding` | Encoding, text settings, math settings |
+| `\DeclareFontEncodingDefaults` | Default text settings, default math settings |
+| `\DeclareFontFamily` | Encoding, font family, loading settings |
+| `\DeclareFontShape` | Encoding, font family, font weight, font style, font size specifications, loading settings |
+| `\DeclareFontSubstitution` | Encoding, default font family, font weight, font style |
+| `\DeclareMathSizes` | Main text size, mathematical font size, superscript font size, secondary superscript font size |
 
-`\DeclareMathSizes*` 同样支持四个参数的提示，默认片段插入无星号形式。其他五类声明不接受星号。提示可跨注释、换行及嵌套设置分组；这些编码和字体族参数不会被登记为命令定义。客户端未支持片段时只插入命令名，已有参数时保留原参数；项目内自定义的同名命令使用自己的签名。
+`\DeclareMathSizes*` also supports four signature help, and the default fragment is inserted in the form without asterisks. The other five categories of statements do not accept asterisks. Prompts can be grouped across comments, line breaks, and nested settings; these encoding and font family parameters are not registered as command definitions. If the client does not support snippets, only the command name will be inserted. If there are parameters, the original parameters will be retained. Customized commands with the same name in the project use their own signatures.
 
-例如声明一个采用 Computer Modern 的独立编码和字体族：
+For example, declare an independent encoding and font family using Computer Modern:
 
 ```tex
 \DeclareFontEncoding{LSP}{}{}
@@ -29,28 +29,28 @@
 \DeclareMathSizes{10}{10}{7}{5}
 ```
 
-编码、字体族和字体文件名暂不提供注册表驱动的候选或导航；字号规格仍按 LaTeX 原始语法填写。
+Encoding, font family, and font file name do not currently provide registry-driven candidates or navigation; font size specifications are still filled in according to the original LaTeX syntax.
 
-## 选择字体与行距
+## Select font and line spacing
 
-`\fontencoding{encoding}`、`\fontfamily{family}`、`\fontseries{series}`、`\fontshape{shape}`、`\fontsize{size}{baseline skip}` 和 `\linespread{factor}` 提供参数片段及提示。它们设置请求属性，需要随后调用无参数的 `\selectfont` 才应用；`\usefont{encoding}{family}{series}{shape}` 立即选择字体，并保留当前字号。字号与基线距离不带单位时按 pt 处理，基线距离还受行距因子缩放。
+`\fontencoding{encoding}`, `\fontfamily{family}`, `\fontseries{series}`, `\fontshape{shape}`, `\fontsize{size}{baseline skip}` and `\linespread{factor}` provide parameter snippets and hints. They set the request properties and require a subsequent call to `\selectfont` without parameters before they are applied; `\usefont{encoding}{family}{series}{shape}` selects the font immediately and retains the current font size. The distance between the font size and the baseline without units is treated as pt, and the baseline distance is also scaled by the line spacing factor.
 
 ```tex
 {\fontencoding{OT1}\fontfamily{cmr}\fontseries{m}\fontshape{n}
  \linespread{1.25}\fontsize{10}{12}\selectfont
- 正文使用 10pt 字体与 15pt 基线距离。}
+ Body text uses a 10pt font with a 15pt baseline skip.}
 ```
 
-选择命令共用已有参数保留、客户端片段协商和用户签名覆盖规则。`\selectfont` 及其静态别名不会消耗后续命令的参数，后续命令仍可正常获取提示与源码修复。
+Select commands share existing parameter preservation, client fragment negotiation, and user signature override rules. `\selectfont` and its static alias will not consume the parameters of subsequent commands, and subsequent commands can still obtain prompts and source code repairs normally.
 
-## 字体与字号替换
+## Font and font size replacement
 
-最终日志中的完整标准 `LaTeX Font Warning` 分为两类：
+The complete standard `LaTeX Font Warning` in the final log is divided into two categories:
 
-- `analysis.fontSubstitutions`：请求字体与实际替代字体，字段为 `requested` 和 `replacement`。
-- `analysis.fontSizeSubstitutions`：字号替换，字段为 `font`、`requestedSize` 和 `replacementSize`。
+- `analysis.fontSubstitutions`: Requested font and actual substitute font, fields are `requested` and `replacement`.
+- `analysis.fontSizeSubstitutions`: Font size replacement, fields are `font`, `requestedSize` and `replacementSize`.
 
-字体使用 NFSS 的 `encoding/family/series/shape` 四段身份；字号保留编译器输出的十进制字符串，不转换为浮点数。例如，`analysis` 中的相关字段：
+The font uses NFSS's `encoding/family/series/shape` four-segment identity; the font size retains the decimal string output by the compiler and is not converted to a floating point number. For example, the relevant fields in `analysis`:
 
 ```json
 {
@@ -64,17 +64,17 @@
 }
 ```
 
-同一替换在不同位置或文件中出现时合并，按字段元组排序；两类各最多 128 条。每个字体身份最多 256 个 Unicode 字符，字号最多 128 个 ASCII 字符。超出预算时省略完整记录，并设置 `analysis.truncated: true`，不截短名称。
+When the same substitution appears in different locations or files, it is merged and sorted by field tuples; each of the two categories has a maximum of 128 entries. Maximum 256 Unicode characters per font identity and 128 ASCII characters per font size. Omit full records when over budget and set `analysis.truncated: true` without truncating the name.
 
-恢复引擎按字节折行的长字体名和字号，保留名称内部原有的空白、Unicode 和括号；无法确认完整警告时不推测替换关系。仅有 “Some font shapes…” 或 “Size substitutions…” 等汇总警告不产生具体记录。低于 LaTeX `fontsubfuzz` 阈值而未报警的字号替换也不会被推断。
+The recovery engine wraps long font names and sizes in bytes, retaining the original whitespace, Unicode, and parentheses within the name; does not speculate on substitution relationships when the complete warning cannot be confirmed. Only summary warnings such as “Some font shapes…” or “Size substitutions…” do not generate specific records. Font size substitutions below the LaTeX `fontsubfuzz` threshold without warning will also not be inferred.
 
-两类替换本身不设置 `rerunRequired`，不改变构建成功状态或警告数。`latex/buildFinished` 和 `latex.buildStatus` 返回相同摘要，只采用本次最终日志；修复后两数组恢复为 `[]`，早期编译轮次中的替换不保留。取消、超时或过期等结果继续按[结果分析](build-analysis.md)返回 `analysis: null`。
+The two types of substitutions themselves do not set `rerunRequired` and do not change the build success status or the number of warnings. `latex/buildFinished` and `latex.buildStatus` return the same summary, and only this final log is used; after repair, the two arrays are restored to `[]`, and the substitutions in earlier compilation rounds are not retained. For results such as cancellation, timeout or expiration, continue to press [Result Analysis](build-analysis.md) to return to `analysis: null`.
 
-## 缺字摘要
+## Missing word summary
 
-`analysis.missingCharacters` 汇总最终日志中的缺字错误和警告，按字符码点排序。兼容警告和错误的字节折行，不在字体名称中插入空格。同一字符在不同位置、文件或字体中出现时合并为一项；`fonts` 保留去重并排序后的引擎字体描述，去掉引擎添加的一枚结尾标点，保留字体本身的标点；服务器附加的辅助文件行号说明不进入字体描述。`severity` 使用 LSP 级别：`1` 为错误，`2` 为警告；同一字符兼有两种级别时保留错误。摘要不改变逐位置诊断及构建错误数。
+`analysis.missingCharacters` summarizes missing word errors and warnings in the final log, sorted by character code point. Compatible with warning and error byte wrapping, does not insert spaces in font names. When the same character appears in different locations, files or fonts, it is merged into one item; `fonts` retains the deduplicated and sorted engine font description, removes an ending punctuation added by the engine, and retains the punctuation of the font itself; the line number description of the auxiliary file attached to the server does not enter the font description. `severity` uses LSP levels: `1` is an error, `2` is a warning; errors are reserved when the same character has both levels. Summary does not change position-by-position diagnostics and build error numbers.
 
-例如 `analysis` 中的相关字段：
+For example, the relevant fields in `analysis`:
 
 ```json
 {
@@ -90,15 +90,15 @@
 }
 ```
 
-仅收录字面字符与合法 Unicode 码点一致的缺字消息；无法确认源码位置时仍可汇总日志确认的字符和字体，定位是否可靠继续由诊断表达。每次编译重新生成摘要，缺字解决后返回空数组；较早编译轮次的输出不会保留到最终日志的摘要中。
+Only missing character messages whose literal characters are consistent with legal Unicode code points are included; when the source code location cannot be confirmed, the characters and fonts confirmed by the log can still be summarized, and whether the positioning is reliable will continue to be expressed by diagnostics. The summary is regenerated for each compilation, and an empty array is returned after the missing words are resolved; the output of earlier compilation rounds will not be retained in the summary of the final log.
 
-最多保留 128 个字符，每个字符最多 8 个字体描述，每个描述最多 256 个 Unicode 字符。超出限制的字符或字体描述会被省略，并设置 `analysis.truncated`；不会截短名称。某个字符的字体描述全部超长时，仍保留字符、级别及空的 `fonts` 数组。已收录字符的后续错误仍会提升其级别，即使新字体描述超出限制。
+A maximum of 128 characters is reserved, with a maximum of 8 font descriptions per character and a maximum of 256 Unicode characters per description. Characters or font descriptions that exceed the limit are omitted and `analysis.truncated` is set; the name is not truncated. When the font description of a certain character is all too long, the character, level and empty `fonts` array are still retained. Subsequent errors for an already included character will still increase its level, even if the new font description exceeds the limit.
 
-LaTeX 未设置 Unicode 字符映射的错误单独记录到 `analysis.unsupportedUnicodeCharacters`；与字体缺字的区别和处理方式见[Unicode 输入错误](unicode-errors.md)。
+The error that LaTeX does not set the Unicode character mapping is recorded separately in `analysis.unsupportedUnicodeCharacters`; for the difference and handling method of missing characters in the font, see [Unicode input error](unicode-errors.md).
 
-## 缺字定位
+## Missing word positioning
 
-来源和行号已确认，且缺字消息中的字面字符与合法 Unicode 码点一致时，诊断附带 `missing-character` 代码及 `character`、`codepoint` 数据。源码回显能唯一核对到连续的直接字面文本时，精确标出其中缺字的每个位置，支持子文件、UTF-16、CRLF 和缩短回显。例如 `中😀中` 的三个缺字即使共用相同回显，也保留三个范围并计入三个错误；重复日志不会重复增加同一位置的诊断。
+When the source and line number are confirmed, and the literal characters in the missing character message are consistent with legal Unicode code points, the diagnostics is accompanied by the `missing-character` code and `character`, `codepoint` data. Source code echo can uniquely check the continuous direct literal text, accurately mark each position of the missing word, and support sub-file, UTF-16, CRLF and shortened echo. For example, even if the three missing characters of `中😀中` share the same echo, three ranges will be retained and three errors will be counted; duplicate logs will not repeatedly add diagnoses at the same location.
 
-定位不跨实际空白借用前一个词的字符。控制词后会被 TeX 忽略的空白不能确认文本片段边界；此类情况及宏展开、生成字符、忽略区域、不明确的回显和无效行号保留行级位置，不根据附近的同名字符推测来源。同次日志解析复用相同缺字上下文的定位结果，保留不同文件、行号、回显和字体的诊断。
+Locates characters that do not borrow from the previous word across actual whitespace. Whitespace after control words, which TeX ignores, does not confirm text fragment boundaries; such cases, as well as macro expansion, generated characters, ignored regions, ambiguous echoes, and invalid line numbers, retain line-level positions and do not infer the source based on nearby characters of the same name. The same log parsing reuses the positioning results of the same missing word context, and retains the diagnostics of different files, line numbers, echoes and fonts.
 

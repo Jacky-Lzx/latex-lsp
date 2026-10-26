@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 const COMMANDS: &[&str] = &["ifentryexists", "ifentryinbib"];
 
@@ -161,7 +161,7 @@ fn entry_queries_complete_single_keys_and_hint_all_three_parameters() {
         for snippets in [false, true] {
             for tail in ["", "{alpha}{yes}{no}"] {
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         snippets,
                         ..Default::default()
                     },

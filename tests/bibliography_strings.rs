@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     editing,
     language::features,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn workspace(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///strings/refs.bib").unwrap();

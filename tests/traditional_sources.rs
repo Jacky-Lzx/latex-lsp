@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
+use texquill::{compilation::build_log, text::Text};
 
 #[test]
 fn warning_prose_can_mention_missing_files_without_becoming_a_source_entry() {

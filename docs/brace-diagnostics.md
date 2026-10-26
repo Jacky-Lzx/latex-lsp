@@ -1,17 +1,17 @@
-# 静态花括号诊断
+# Static brace diagnostics
 
-[返回文档目录](README.md) · [命令名操作数与声明](declaration-operands.md) · [编译器的多余右花括号诊断](extra-braces.md)
+[Back to documentation](README.md) · [Command-name operands and declarations](declaration-operands.md) ·[Compiler's redundant right curly brace diagnostics](extra-braces.md)
 
-编辑时检查源码中的花括号配对，无需启动编译。诊断的来源为 `latex-lsp`，代码为 `syntax`。
+Check source code for brace pairings while editing, without starting compilation. The source of the diagnostics is `texquill` and the code is `syntax`.
 
-| 诊断 | 快速修复 |
+| Diagnostics | Quick Fixes |
 | --- | --- |
-| `Unclosed brace` | 在文档末尾插入缺少的 `}`；末尾为注释时先换行 |
-| `Unexpected closing brace` | 删除选中的多余 `}` |
+| `Unclosed brace` | Insert the missing `}` at the end of the document; if there is a comment at the end, break the line first |
+| `Unexpected closing brace` | Delete the selected redundant `}` |
 
-## let 的单 token 来源
+## Single token source for let
 
-原始 `let` 读取一个来源 token。下面的两个花括号用于赋值，不开启或关闭分组：
+Raw `let` reads a source token. The following two curly braces are used for assignment and do not turn grouping on or off:
 
 ```tex
 \let\opening={
@@ -19,20 +19,20 @@
 {Ordinary text.}
 ```
 
-这两处赋值不会触发花括号诊断或插入、删除修复，后面的普通分组仍正常检查。支持省略 `=`、操作数之间的空白和注释，以及显式 `expandafter` 展开的静态 `csname` 目标：
+These two assignments will not trigger curly brace diagnostics or insertion or deletion repair, and subsequent ordinary groupings will still be checked normally. Supports static `csname` targets omitting `=`, whitespace and comments between operands, and explicit `expandafter` expansion:
 
 ```tex
 \expandafter\let\csname closing\endcsname=}
 ```
 
-复制之后实际出现的宏声明仍进入索引。`futurelet` 会继续执行前瞻 token，其后花括号仍参与配对，详见[前瞻目标](futurelet.md)。
+Macro declarations that actually occur after copying still go into the index. `futurelet` will continue to execute the look-ahead token, and then the curly braces will still participate in the matching. For details, see [Look-ahead Target](futurelet.md).
 
-原始 `meaning` 同样读取一个 token。`\meaning{`、`\meaning}` 的来源花括号不参与配对；连续查看及与 `let` 混用时，已消费的花括号不会被后续命令误当成分组参数。命令名引用和文件依赖的处理见[meaning 操作数](meaning.md)。
+The original `meaning` also reads a token. The source curly braces of `\meaning{` and `\meaning}` do not participate in pairing; when viewed continuously and mixed with `let`, the consumed curly braces will not be mistaken as group parameters by subsequent commands. For the handling of command name references and file dependencies, see [meaning operands](meaning.md).
 
-## 宏正文与参数
+## Macro text and parameters
 
-宏定义正文和分组实参在读取时按字面花括号配对。正文中出现 `let` 不会跳过这些花括号；未闭合正文和多余闭合字符仍报告错误。宏参数分隔文本中的 `let` 也不会消费定义正文的起始花括号。
+The macro definition body and grouping arguments are literal brace-paired when read. Occurrences of `let` in the body do not skip these curly braces; unclosed body and extra closed characters still report errors. `let` in macro argument-delimited text also does not consume the opening curly brace that defines the body.
 
-检查覆盖传统声明、xparse、环境正文、静态 `csname` 目标和内置命令的分组参数。未知参数结构采取保守的字面配对，不执行任意宏展开、类别码变更或别名调用。本文件前文已显式改写 `let` 时，不再按原语规则确认后续来源；不模拟分组结束后的含义恢复。
+Checks grouped arguments covering legacy declarations, xparse, environment body, static `csname` targets, and built-in commands. Unknown argument structures take a conservative literal pairing and do not perform any macro expansion, category code changes, or alias calls. When the previous text of this document has been explicitly rewritten as `let`, the subsequent source will no longer be confirmed according to the primitive rules; the recovery of meaning after the end of the grouping will not be simulated.
 
-编译器错误可能来自执行、宏展开或其他定界符，相关日志定位与删除建议见[多余右花括号](extra-braces.md)。
+Compiler errors may come from execution, macro expansion, or other delimiters. For relevant log location and deletion suggestions, see [Excess Right Curly Brace](extra-braces.md).

@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace};
 
 #[path = "support/completion.rs"]
 mod completion;
@@ -373,7 +373,7 @@ fn alias_spelling_repairs_share_the_certified_owner_and_member_candidate_context
         .filter(|d| d.code == Some(NumberOrString::String("undefined-citation".into())))
     {
         let range = diagnostic.range;
-        let actions = latex_lsp::editing::code_actions(
+        let actions = texquill::editing::code_actions(
             &ws,
             &main,
             range,

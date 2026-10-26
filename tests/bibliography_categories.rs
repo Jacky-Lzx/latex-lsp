@@ -1,5 +1,5 @@
-use latex_lsp::{editing, language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{editing, language::features, project::workspace::Workspace, text::Text};
 fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("untitled:categories.tex").unwrap();
     let mut ws = Workspace::default();

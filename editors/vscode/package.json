@@ -1,13 +1,13 @@
 {
-  "name": "latex-lsp",
-  "displayName": "LaTeX LSP",
-  "description": "LaTeX language support powered by the latex-lsp Rust language server.",
+  "name": "texquill",
+  "displayName": "TeXquill",
+  "description": "LaTeX language support powered by the texquill Rust language server.",
   "version": "0.1.0",
   "publisher": "Jacky-Lzx",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Jacky-Lzx/latex-lsp.git",
+    "url": "https://github.com/Jacky-Lzx/texquill.git",
     "directory": "editors/vscode"
   },
   "engines": { "vscode": "^1.85.0" },
@@ -18,7 +18,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": false,
-      "description": "LaTeX LSP starts a local language server and can run TeX tools."
+      "description": "TeXquill starts a local language server and can run TeX tools."
     },
     "virtualWorkspaces": { "supported": false }
   },
@@ -28,26 +28,26 @@
       { "id": "bst", "aliases": ["BibTeX Style", "bst"], "extensions": [".bst"] }
     ],
     "configuration": {
-      "title": "LaTeX LSP",
+      "title": "TeXquill",
       "properties": {
-        "latex-lsp.serverPath": {
+        "texquill.serverPath": {
           "type": "string",
-          "default": "latex-lsp",
+          "default": "texquill",
           "scope": "machine",
-          "markdownDescription": "Path to the separately installed `latex-lsp` executable, or its name on PATH. Use an absolute path when VS Code cannot find your shell's tools."
+          "markdownDescription": "Path to the separately installed `texquill` executable, or its name on PATH. Use an absolute path when VS Code cannot find your shell's tools."
         },
-        "latex-lsp.serverEnvironment": {
+        "texquill.serverEnvironment": {
           "type": "object",
           "default": {},
           "additionalProperties": { "type": "string" },
           "scope": "machine",
           "markdownDescription": "Environment variables added to the language server process. Set `PATH` here if TeX tools are unavailable to VS Code. Restarted automatically when changed."
         },
-        "latex-lsp.settings": {
+        "texquill.settings": {
           "type": "object",
           "default": {},
           "scope": "window",
-          "markdownDescription": "Server settings sent as initializationOptions and updated live. Supports `build`, `formatting`, `diagnostics`, `distribution`, `indexing`, and `inlayHints`. Omitted values use server defaults. Use `.latex-lsp.json` for settings specific to a project or workspace folder.",
+          "markdownDescription": "Server settings sent as initializationOptions and updated live. Supports `build`, `formatting`, `diagnostics`, `distribution`, `indexing`, and `inlayHints`. Omitted values use server defaults. Use `.texquill.json` for settings specific to a project or workspace folder.",
           "additionalProperties": false,
           "properties": {
             "build": { "type": "object", "description": "Build tools, engine, paths, arguments, timeout, and onSave." },
@@ -58,23 +58,23 @@
             "inlayHints": { "type": "object", "description": "Reference and citation inlay hints." }
           }
         },
-        "latex-lsp.trace.server": {
+        "texquill.trace.server": {
           "type": "string",
           "enum": ["off", "messages", "verbose"],
           "default": "off",
           "scope": "window",
-          "description": "Trace language server communication in the LaTeX LSP trace output."
+          "description": "Trace language server communication in the TeXquill trace output."
         }
       }
     },
     "commands": [
-      { "command": "latex-lsp.build", "title": "Build", "category": "LaTeX LSP" },
-      { "command": "latex-lsp.rebuild", "title": "Rebuild", "category": "LaTeX LSP" },
-      { "command": "latex-lsp.cancelBuild", "title": "Cancel Build", "category": "LaTeX LSP" },
-      { "command": "latex-lsp.buildStatus", "title": "Show Build Status", "category": "LaTeX LSP" },
-      { "command": "latex-lsp.openPdf", "title": "Open PDF", "category": "LaTeX LSP" },
-      { "command": "latex-lsp.restart", "title": "Restart Server", "category": "LaTeX LSP" },
-      { "command": "latex-lsp.showOutput", "title": "Show Output", "category": "LaTeX LSP" }
+      { "command": "texquill.build", "title": "Build", "category": "TeXquill" },
+      { "command": "texquill.rebuild", "title": "Rebuild", "category": "TeXquill" },
+      { "command": "texquill.cancelBuild", "title": "Cancel Build", "category": "TeXquill" },
+      { "command": "texquill.buildStatus", "title": "Show Build Status", "category": "TeXquill" },
+      { "command": "texquill.openPdf", "title": "Open PDF", "category": "TeXquill" },
+      { "command": "texquill.restart", "title": "Restart Server", "category": "TeXquill" },
+      { "command": "texquill.showOutput", "title": "Show Output", "category": "TeXquill" }
     ]
   },
   "scripts": {
@@ -82,7 +82,7 @@
     "check": "tsc -p . --noEmit",
     "watch": "tsc -p . --watch",
     "vscode:prepublish": "npm run compile",
-    "package": "vsce package --out latex-lsp.vsix",
+    "package": "vsce package --out texquill.vsix",
     "test": "npm run compile && node scripts/test.cjs"
   },
   "dependencies": { "vscode-languageclient": "^9.0.1" },

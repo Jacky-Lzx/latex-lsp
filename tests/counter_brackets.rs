@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///counter-brackets/{name}")).unwrap();
@@ -210,7 +210,7 @@ fn protected_counter_errors_select_the_name_inside_the_required_brace_layers() {
             main.display(),
             source.trim_end()
         );
-        let diagnostics = latex_lsp::compilation::build_log::parse(&main, &log);
+        let diagnostics = texquill::compilation::build_log::parse(&main, &log);
         let items = &diagnostics[&uri];
         assert_eq!(items.len(), 1, "{call}: {items:?}");
         let start = source.find("counter]missing").unwrap();
@@ -276,8 +276,8 @@ fn a_theorem_reset_counter_with_insufficient_braces_does_not_refer_to_the_whole_
 #[test]
 #[ignore = "requires pdflatex"]
 fn repeated_bracket_counter_renames_preserve_real_theorem_numbering() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
@@ -338,8 +338,8 @@ fn repeated_bracket_counter_renames_preserve_real_theorem_numbering() {
 #[test]
 #[ignore = "requires pdflatex"]
 fn completing_a_bracket_reset_counter_preserves_real_numbering_through_existing_groups() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");

@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::build,
     editing::file_operations,
     language::{features, navigation, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -304,7 +304,7 @@ fn unsafe_or_nonexistent_checks_and_nonfilename_arguments_do_not_offer_file_edit
 fn existence_check_command_snippets_and_signatures_show_the_two_branches() {
     let main = Url::parse("file:///file-exists/main.tex").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },
@@ -371,7 +371,7 @@ fn real_file_checks_match_recorder_inputs_preserve_branch_behavior_and_never_exe
         }
         source.push_str("\\IfFileExists{missing.xyz}{\\typeout{CHECK-WRONG-BRANCH}}{\\typeout{CHECK-MISSING}}\nHello.\\end{document}\n");
         std::fs::write(root.join("main.tex"), &source).unwrap();
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: engine.into(),
             ..Default::default()
         };

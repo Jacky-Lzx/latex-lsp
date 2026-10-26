@@ -1,19 +1,19 @@
-# 字符串测试
+# String tests
 
-[返回文档目录](README.md) · [符号与重命名](symbols.md) · [布尔表达式诊断](boolean-expressions.md)
+[Return to Documentation](README.md) · [Symbols and Renaming](symbols.md) · [Boolean Expression Diagnostics](boolean-expressions.md)
 
-etoolbox 的下列测试将参数作为未展开的 token 数据处理，再选择条件分支：
+The following test of etoolbox handles the parameters as unexpanded token data and then selects the conditional branch:
 
-| 命令 | 数据参数 | 判断 |
+| Command | Data parameters | Judgment |
 | --- | --- | --- |
-| `ifstrequal` | 两个字符串 | 未展开内容的字符形式相同 |
-| `ifstrempty` | 一个字符串 | 空字符串；普通空格仍属于内容 |
-| `ifblank` | 一个字符串 | 空字符串或仅含空格 |
-| `notblank` | 一个字符串 | 含非空格 token |
+| `ifstrequal` | Two strings | Character forms of unexpanded content are the same |
+| `ifstrempty` | A string | Empty string; ordinary spaces still belong to the content |
+| `ifblank` | A string | Empty string or spaces only |
+| `notblank` | A string | Contains non-space token |
 
-每个命令随后接受 `{then}{else}`。提供命令补全片段和参数提示；字符串内显示外层测试命令的提示，分支内可继续显示嵌套命令的提示。
+Each command subsequently accepts `{then}{else}`. Provides command completion fragments and signature help; prompts for outer test commands are displayed within the string, and prompts for nested commands can continue to be displayed within the branch.
 
-## 数据与引用
+## Data and References
 
 ```tex
 \newbool{draft}
@@ -22,34 +22,34 @@ etoolbox 的下列测试将参数作为未展开的 token 数据处理，再选�
   {Different.\booltrue{draft}}
 ```
 
-此处两个字符串按原样比较。将 boolean `draft` 重命名为 `release` 时，声明和分支中的 `booltrue` 参数会更新，两个用于比较的字符串保留原文，结果仍为 `Different`。
+Here the two strings are compared as-is. When the boolean `draft` is renamed to `release`, the `booltrue` parameters in the declaration and branch are updated, the two strings used for comparison retain the original text, and the result is still `Different`.
 
-字符串中的宏、`newbool` 等声明、标签、引用、环境和 `input` 等文件命令均为数据，不建立对应的符号、引用或项目依赖。数据区域不提供定义、重命名、悬停和名称补全，并按字符串进行语义高亮。两个分支仍按源码建立索引，支持普通导航、补全及版本化跨文件重命名；服务器不模拟条件求值。
+Macros, statements such as `newbool`, labels, references, environments, and file commands such as `input` in the string are all data, and no corresponding symbols, references or project dependencies are established. The data area does not provide definition, renaming, hover and name completion, and semantic highlighting by string. Both branches are still indexed according to the source code and support normal navigation, completion and versioned cross-file renaming; the server does not simulate conditional evaluation.
 
-## 读取边界
+## Read boundaries
 
-支持完整的花括号参数和可确认边界的单 token 参数，例如 `\ifstrempty\macro{Empty}{Nonempty}`。参数之间的注释、CRLF、转义字符和嵌套花括号保留原文。数据中的 `verb` 等命令也只作为 token 读取，花括号仍遵循普通 TeX 参数分组规则。
+Supports complete brace parameters and single-token parameters with confirmable boundaries, such as `\ifstrempty\macro{Empty}{Nonempty}`. Comments, CRLFs, escape characters, and nested braces between parameters retain their original text. Commands such as `verb` in the data are only read as tokens, and the curly braces still follow the ordinary TeX parameter grouping rules.
 
-未闭合的数据参数保持字面状态，并保留缺失花括号诊断。若文件末尾是参数内的 `%` 注释，插入缺失 `}` 的修复会先换行，确保括号生效。
+Unclosed data parameters remain literal, and missing brace diagnostics are preserved. If the end of the file is the `%` comment in the parameter, the repair of the insertion and deletion of `}` will first wrap the line to ensure that the brackets take effect.
 
-未被赋值的直接调用按内置命令语法解析；[静态副本调用](string-test-copy-calls.md)使用复制时保存的含义和数据参数数量。当前文件和先前加载的本地依赖中的显式重定义会停止使用该命令的内置数据边界；加载顺序、未保存内容、共享文件的编辑限制与静态支持边界见[跨文件上下文](string-test-projects.md)。
+Unassigned direct calls are parsed according to the built-in command syntax; [Static copy call](string-test-copy-calls.md) uses the meaning and number of data parameters saved during copying. Explicit redefinitions in the current file and previously loaded local dependencies stop using the command's built-in data boundaries; see [Cross-file context](string-test-projects.md) for loading order, unsaved content, editing restrictions on shared files, and static support boundaries.
 
-用户宏将测试命令读取为未展开的控制词参数时，该位置不执行字符串测试语法，后续代码按实际参数边界解析；跨文件声明、未知宏及共享文件的处理见[作为宏参数的字符串测试命令](string-test-operands.md)。
+When the user macro reads the test command as an unexpanded control word parameter, the string test syntax is not executed at this location, and the subsequent code is parsed according to the actual parameter boundary; for the processing of cross-file declarations, unknown macros, and shared files, see [String test command as macro parameter](string-test-operands.md).
 
-## 布尔表达式诊断
+## Boolean expression diagnostics
 
-`test {\ifstrequal{\input{ghost}}{A}}` 中的 `input` 仍是字符串数据。已确认的这些测试参数包含命令 token 时，外层 `bool` / `togl` 操作数仍可获得[精确诊断与拼写修复](boolean-expressions.md)。表达式定位要求测试命令的字符串参数使用完整花括号，并检查项目内的测试命令重定义；任意用户测试宏继续保留行级诊断。
+`input` in `test {\ifstrequal{\input{ghost}}{A}}` is still string data. When these confirmed test parameters contain command tokens, the outer `bool` / `togl` operands can still get [accurate diagnostics and spelling fix](boolean-expressions.md). Expression positioning requires the use of full curly braces for test command string parameters and checks for test command redefinitions within the project; any user test macros continue to retain line-level diagnostics.
 
-## 验证
+## verify
 
-默认回归覆盖索引、依赖、名称编辑、补全、参数提示、单 token、注释、未闭合参数和本文件重定义。跨文件重定义的回归命令见[项目上下文验证](string-test-projects.md#验证)。下列协议回归检查字面数据、版本化跨文件编辑和增量修改：
+The default regression covers indexing, dependencies, name editing, completion, signature help, single tokens, comments, unclosed parameters and this file redefinition. For cross-file redefined regression commands, see [Project Context Verification](string-test-projects.md#verify). The following protocol regressions check literal data, versioned cross-file edits, and incremental modifications:
 
 ```sh
 cargo test --locked --test string_predicates
 cargo test --locked --test protocol string_predicates
 ```
 
-真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox。分别重命名 boolean 与 toggle 后，核对字符串、条件分支及 PDF；再引入表达式拼写错误，检查精确修复和重新编译后的相同结果：
+True regression requires pdfLaTeX, XeLaTeX, LuaLaTeX and etoolbox. After renaming boolean and toggle respectively, check the string, conditional branch and PDF; then introduce the expression spelling error and check the same result after accurate repair and recompilation:
 
 ```sh
 cargo test --locked --test string_predicates -- --include-ignored

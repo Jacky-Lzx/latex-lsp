@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     language::{features, semantic},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 #[path = "support/completion.rs"]
 mod completion;
@@ -69,7 +69,7 @@ fn custom_type_identifiers_preserve_metadata_and_versioned_cross_file_renames() 
         for (open, close) in [('{', '}'), ('(', ')')] {
             let old = "book(old)";
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },

@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///entrydata/{name}")).unwrap();
@@ -237,7 +237,7 @@ fn context_signatures_track_key_code_and_waiting_parameters_and_respect_user_sig
     for snippets in [false, true] {
         for tail in ["", "{alpha}{code}", "*{alpha}{code}"] {
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     snippets,
                     ..Default::default()
                 },

@@ -1,16 +1,16 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::sync::atomic::AtomicBool;
+use texquill::{
     compilation::build,
     language::features,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::sync::atomic::AtomicBool;
 
 fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///saved-text/main.tex").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },
@@ -461,7 +461,7 @@ fn real_saved_key_renames_keep_compilation_and_literal_bodies_intact() {
                 };
                 let source = format!("\\documentclass{{article}}\r\n\\usepackage{{fancyvrb}}\r\n\\begin{{document}}\\label{{kept}}\r\n{saved}\r\nReal.\\ref{{kept}}\\end{{document}}\r\n");
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         ..Default::default()
                     },
@@ -483,7 +483,7 @@ fn real_saved_key_renames_keep_compilation_and_literal_bodies_intact() {
                     std::fs::write(root.join("main.tex"), content).unwrap();
                     let outcome = build::run(
                         &root.join("main.tex"),
-                        &latex_lsp::config::BuildConfig {
+                        &texquill::config::BuildConfig {
                             executable: engine.into(),
                             ..Default::default()
                         },
@@ -495,7 +495,7 @@ fn real_saved_key_renames_keep_compilation_and_literal_bodies_intact() {
                         outcome.output
                     );
                     let aux =
-                        std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                        std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                     assert_eq!(aux.matches("newlabel{kept}").count(), 1, "{aux}");
                     assert!(!aux.contains("newlabel{phantom}"), "{aux}");
                 }

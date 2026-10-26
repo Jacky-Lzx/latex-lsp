@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing::{self, file_operations},
     language::{features, navigation},
     project::workspace::{Document, Workspace},
 };
-use lsp_types::*;
 
 fn call(form: &str, loader: &str) -> String {
     match form {
@@ -133,7 +133,7 @@ fn indirect_class_errors_repair_literal_names_preserving_options_comments_and_ve
                 );
                 assert_eq!(diagnostic.data.as_ref().unwrap()["loaderCommand"], loader);
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         code_action_literals: true,
                         versioned_edits: true,
                         ..Default::default()
@@ -210,7 +210,7 @@ fn class_dependencies_links_completion_and_rename_preserve_single_filename_seman
             std::fs::write(class.to_file_path().unwrap(), r"\def\readpart{\input}").unwrap();
             std::fs::write(part.to_file_path().unwrap(), "Part").unwrap();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -304,7 +304,7 @@ fn legacy_class_repairs_revalidate_alias_definitions_without_parent_version_chan
         .unwrap();
         std::fs::write(root.join("fixture.cls"), "Class").unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 apply_edits: true,
                 versioned_edits: true,
                 ..Default::default()

@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::{build, build_log},
     editing,
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 const STYLE: &str = r#"ENTRY { title } {} {}
 FUNCTION {book} { "\bibitem{" write$ cite$ write$ "}" write$ newline$ title write$ newline$ }
@@ -177,7 +177,7 @@ fn style_fixes_preserve_comments_commas_and_suffixes_and_legacy_edits_revalidate
             format!("% emoji😀 keep\r\n\\bibliographystyle{{% header\r\n  {name}% tail\r\n}}\r\n");
         std::fs::write(root.join("main.tex"), &source).unwrap();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 apply_edits: true,
                 versioned_edits: true,
@@ -251,7 +251,7 @@ fn style_suggestions_are_bounded_and_reject_invalid_spaced_or_other_extension_ca
     let source = r"\bibliographystyle{styles/localstylex}";
     std::fs::write(root.join("main.tex"), source).unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             versioned_edits: true,
             ..Default::default()
@@ -310,8 +310,8 @@ fn real_missing_style_errors_locate_only_read_sources_and_compile_after_versione
             let main = uri(root, "main.tex");
             let settings = uri(root, "settings.tex");
             let unread = uri(root, "unread.tex");
-            let config = latex_lsp::config::BuildConfig {
-                engine: latex_lsp::config::Engine::from_program(engine),
+            let config = texquill::config::BuildConfig {
+                engine: texquill::config::Engine::from_program(engine),
                 ..Default::default()
             };
             let outcome = build::run(&root.join("main.tex"), &config, &Default::default());
@@ -335,7 +335,7 @@ fn real_missing_style_errors_locate_only_read_sources_and_compile_after_versione
                 Text::new(source.clone()).range(start, start + name.len())
             );
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     versioned_edits: true,
                     ..Default::default()
@@ -362,7 +362,7 @@ fn real_missing_style_errors_locate_only_read_sources_and_compile_after_versione
                     .is_some_and(|inputs| inputs.contains(&uri(root, "styles/local,style.bst"))),
                 "{engine} suffix={suffix:?}, inputs={:?}, log={}",
                 outcome.bibliography_inputs,
-                std::fs::read_to_string(root.join("build/latex-lsp/main.blg"))
+                std::fs::read_to_string(root.join("build/texquill/main.blg"))
                     .unwrap_or_default()
                     .lines()
                     .take(12)

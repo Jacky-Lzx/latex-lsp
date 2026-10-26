@@ -1,24 +1,31 @@
-# 安装与启动
+# Installation and startup
 
-[返回 README](../README.md) · [编辑器配置](editors.md)
+[Back to README](../README.md) · [Editor configuration](editors.md)
 
-安装当前稳定版 Rust。编辑功能无需 TeX 发行版；编译需要相应工具位于服务器的 `PATH` 中，默认使用 latexmk 与 pdfLaTeX，配置见[编译指南](build.md)。
+Install the current stable Rust toolchain. Editing features do not require a TeX distribution. Builds require the relevant tools on the server's `PATH`, defaulting to latexmk and pdfLaTeX; see the [build guide](build.md).
 
-从源码构建并启动：
+Build and launch from source:
 
 ```sh
 cargo build --release --locked
-./target/release/latex-lsp --stdio
+./target/release/texquill --stdio
 ```
 
-服务器直接使用 Tokio 实现 stdio JSON-RPC 运行层，`lsp-types` 提供协议数据类型。请求超时或取消时会移除响应接收端，迟到和重复的客户端回复会安全忽略。
+The server implements stdio JSON-RPC directly with Tokio and uses `lsp-types` for protocol data types. Timed-out or cancelled requests drop their response receivers; late or duplicate client replies are safely ignored.
 
-服务器收到 `shutdown`、`exit`，或 stdio 输入流关闭时，会取消并回收编译与 SyncTeX 进程组，避免编辑器断开后遗留外部工具。未先完成 `shutdown` 就发送 `exit` 时，仍按 LSP 返回退出码 `1`。
+On `shutdown`, `exit`, or closed standard input, the server cancels and reaps build and SyncTeX process groups so external tools do not remain after the editor disconnects. As required by LSP, `exit` without a completed `shutdown` still returns exit code `1`.
 
-进程从标准输入读取 LSP 消息，并向标准输出写入带 `Content-Length` 的 JSON-RPC 消息；通常由编辑器启动。直接运行时等待输入属于正常行为。也可以安装到 Cargo 的可执行文件目录：
+The process reads LSP messages from standard input and writes JSON-RPC messages with `Content-Length` headers to standard output. Editors normally launch it; waiting for input when run directly is expected. To install it in Cargo's executable directory:
 
 ```sh
 cargo install --path . --locked
-latex-lsp --version
+texquill --version
 ```
 
+## Migrating from latex-lsp
+
+TeXquill was previously named `latex-lsp`. Rebuild or reinstall the server, then update editor launch commands to `texquill --stdio`. The Rust crate is now `texquill`; the Neovim configuration name and VS Code extension settings use `texquill` as well.
+
+Rename project configuration files from `.latex-lsp.json` to `.texquill.json`. The default output directory is now `build/texquill/`; update any custom PDF or log paths, or set `build.outputDirectory` explicitly. Repackage the VS Code extension as `texquill.vsix` and migrate its settings to `texquill.*`.
+
+Server extension commands and notifications retain their `latex.*` and `latex/…` protocol names, and the optional `latex` settings wrapper retains its name. Historical benchmark JSON files retain the original executable paths and metadata from each measurement.

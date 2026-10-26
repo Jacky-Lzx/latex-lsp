@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     editing::file_operations,
     language::{features, navigation},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -445,7 +445,7 @@ fn signatures_follow_the_single_group_and_optional_star() {
         let offset = marked.find('¦').unwrap();
         let source = marked.replace('¦', "");
         workspace.open(main.clone(), source.clone(), 1);
-        let help = latex_lsp::language::signature::help(
+        let help = texquill::language::signature::help(
             &workspace,
             &main,
             Text::new(source).position(offset),
@@ -463,7 +463,7 @@ fn signatures_follow_the_single_group_and_optional_star() {
         let source = marked.replace('¦', "");
         workspace.open(main.clone(), source.clone(), 1);
         assert!(
-            latex_lsp::language::signature::help(
+            texquill::language::signature::help(
                 &workspace,
                 &main,
                 Text::new(source).position(offset)
@@ -472,7 +472,7 @@ fn signatures_follow_the_single_group_and_optional_star() {
             "{marked}"
         );
     }
-    assert!(latex_lsp::project::catalog::COMMANDS
+    assert!(texquill::project::catalog::COMMANDS
         .iter()
         .any(
             |(name, snippet, _)| *name == "verbatiminput" && *snippet == "verbatiminput{${1:file}}"

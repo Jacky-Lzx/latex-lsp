@@ -1,8 +1,6 @@
-use latex_lsp::{
-    compilation::build, language::features, project::workspace::Workspace, text::Text,
-};
 use lsp_types::*;
 use std::{path::Path, sync::atomic::AtomicBool};
+use texquill::{compilation::build, language::features, project::workspace::Workspace, text::Text};
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -258,7 +256,7 @@ fn real_environment_copy_renames_preserve_both_commands_and_defaults_after_sourc
             let body = "\\begin{panelcopy}Default.\\end{panelcopy}\\begin{panelcopy}[red]Explicit.\\end{panelcopy}\\panelcopy Literal.\\endpanelcopy\\csname panelcopy\\endcsname Named.\\csname endpanelcopy\\endcsname\n% \\panelcopy\n\\verb|\\panelcopy|\n";
             let workspace = project(root, &[("main.tex", "\\documentclass{article}\\input{definitions}\\begin{document}\\input{content}\\end{document}\n"), ("definitions.tex", &definitions), ("content.tex", body)]);
             let main = root.join("main.tex");
-            let config = latex_lsp::config::BuildConfig { executable: "pdflatex".into(), ..Default::default() };
+            let config = texquill::config::BuildConfig { executable: "pdflatex".into(), ..Default::default() };
             let before = build::run(&main, &config, &Default::default());
             assert_eq!(before.status, "success", "{copy}: {}", before.output);
             let child = uri(root, "content.tex");
@@ -290,7 +288,7 @@ fn real_copied_theorems_keep_the_original_counter_when_either_environment_is_ren
         ("definitions.tex", "\\newtheorem{originalpanel}{Original}\\NewEnvironmentCopy{panelcopy}{originalpanel}\n"),
         ("content.tex", "\\begin{originalpanel}First.\\end{originalpanel}\\begin{panelcopy}Second.\\end{panelcopy}\\panelcopy Third.\\endpanelcopy\\typeout{ENV-COUNT:\\arabic{originalpanel}}\n"),
     ]);
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -505,7 +503,7 @@ fn renamed_direct_and_csname_environment_calls_compile_with_preserved_arguments(
             )
             .unwrap();
         }
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: "pdflatex".into(),
             ..Default::default()
         };

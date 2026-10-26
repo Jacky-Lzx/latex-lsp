@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::build,
     editing::file_operations,
     language::{features, navigation, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -285,7 +285,7 @@ fn conditional_inputs_ignore_unexpanded_paths_and_unsupported_star_and_option_sy
 fn conditional_input_command_completion_and_signature_describe_the_pre_input_hook() {
     let main = Url::parse("file:///conditional-input/main.tex").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },
@@ -349,7 +349,7 @@ fn real_conditional_inputs_match_filename_selection_and_keep_hooks_after_file_re
             "\\InputIfFileExists{missing}{}{\\typeout{CONDITIONAL-MISSING}}\n\\end{document}\n",
         );
         std::fs::write(root.join("main.tex"), &source).unwrap();
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: engine.into(),
             ..Default::default()
         };
@@ -420,7 +420,7 @@ fn real_conditional_child_errors_keep_the_loaded_source_and_missing_files_use_th
         std::fs::write(root.join("main.tex"), "\\documentclass{article}\\begin{document}\n\\InputIfFileExists{child}{}{\\typeout{CONDITIONAL-FALLBACK}Fallback.}\n\\end{document}\n").unwrap();
         let child = "Child.\n\\conditionalundefined\n";
         std::fs::write(root.join("child.tex"), child).unwrap();
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: engine.into(),
             ..Default::default()
         };

@@ -1,6 +1,6 @@
-# 索引预算与缓存
+# Indexing budgets and caches
 
-初始化的文件读取和语法分析在受限后台工作线程中执行，初始化响应返回前完成索引，以便首次导航与补全使用一致的项目快照。扫描期间不会占用 Tokio 执行线程；断开连接后在扫描目录和文件的边界检查取消。
+Initial file reading and parsing are performed in a restricted background worker thread, and indexing is completed before the initial response is returned so that first navigation and completion use a consistent project snapshot. The Tokio execution thread will not be occupied during scanning; boundary checks on scanned directories and files are canceled after disconnection.
 
 ```json
 {
@@ -17,14 +17,14 @@
 }
 ```
 
-这些是服务器级配置，不能写入项目 `.latex-lsp.json`。隐藏目录默认跳过；`exclude` 按目录名称匹配。磁盘索引受文件数量、单文件字节数、总字节数和目录/依赖深度限制，编辑器已打开的缓冲区仍可使用。
+These are server-level configurations and cannot be written to project `.texquill.json`. Hidden directories are skipped by default; `exclude` matches by directory name. Disk indexing is limited by the number of files, single file bytes, total bytes, and directory/dependency depth. Buffers opened by the editor can still be used.
 
-`workspace/executeCommand` 的 `latex.indexingStatus` 返回 `files`、`truncated` 和 `limits`，无需 URI 参数。`truncated` 列出触及的限制，补全达到数量上限或索引被截断时返回 `CompletionList`，并设置 `isIncomplete: true`。`latex.reindex` 在后台工作线程中重建磁盘索引并返回相同状态，保留未保存的缓冲区。通过配置通知修改预算后会自动重建索引。
+`latex.indexingStatus` of `workspace/executeCommand` returns `files`, `truncated`, and `limits` without URI parameters. `truncated` lists the hit limits, returns `CompletionList` when the completion limit is reached or the index is truncated, and sets `isIncomplete: true`. `latex.reindex` Rebuilds the disk index in a background worker thread and returns to the same state, preserving unsaved buffers. Indexes will be automatically rebuilt after modifying the budget through configuration notifications.
 
-每个文档版本缓存其完整语义令牌结果；仅变更的文档重新生成。跨文件语义变化重新解析相应文档时会清除该缓存。已有的有界 LSP delta 缓存继续用于计算差量；该语义结果缓存共保留至多 65536 个令牌，预算不足时直接返回结果，不额外保留副本。当前仍以整篇文档为语法重解析单位。
+Each document version caches its full semantic token results; only changed documents are regenerated. This cache is cleared when the corresponding document is reparsed across file semantic changes. The existing bounded LSP delta cache continues to be used to calculate the difference; the semantic result cache retains a total of up to 65536 tokens, and when the budget is insufficient, the results are returned directly without retaining additional copies. Currently, the entire document is still used as the syntax reparsing unit.
 
-同一次依赖遍历复用根文档的输入解释；加载新文件、变更解析类型及刷新磁盘内容后重新分析。项目归属优先使用已确认的源码依赖，图片依赖按实际调用解析。宏定义正文使用合并区间查询，命令名称导航直接进入其符号分析。打开、修改及关闭未保存缓冲区时采用本次文档内容重新计算相应上下文。
+The same dependency traversal reuses the input interpretation of the root document; re-analyzes after loading new files, changing parsing types, and refreshing disk content. Project ownership gives priority to confirmed source code dependencies, and image dependencies are resolved based on actual calls. The macro definition text uses merge interval query, and the command name navigation directly enters its symbol analysis. When opening, modifying, and closing unsaved buffers, the content of this document is used to recalculate the corresponding context.
 
-旧客户端的平面大纲和工作区符号搜索构造并共享源码大纲缓存，层次化大纲在已有缓存时复用；初次层次化请求直接返回新结果，避免为了建立缓存再复制整个树。缓存按文档内容与语言角色绑定；修改、重新打开、改变解析角色或移动文档后重新构造。后台快照可继续持有旧版本，旧版本的内存预算在最后一个引用释放后归还。缓存的容器、名称和范围均来自单份源码，不缓存项目解析结果或文件 URI。
+The flat outline and workspace symbol search of the old client construct and share the source code outline cache, and the hierarchical outline is reused when the cache already exists; the first hierarchical request directly returns new results, avoiding the need to copy the entire tree in order to create a cache. The cache is bound to the language role according to the document content; it is reconstructed after modifying, reopening, changing the parsing role, or moving the document. The background snapshot can continue to hold the old version, and the memory budget of the old version is returned after the last reference is released. Cached containers, names, and scopes are all from a single copy of the source code, and no project parsing results or file URIs are cached.
 
-该大纲缓存在整个进程内最多保留约 4 MiB 堆数据，按向量容量、名称／说明字符串容量和快照开销估算；超限仍返回完整结果，仅放弃额外缓存。工作区搜索遍历借用的大纲，用至多 256 项的候选队列排名，只为进入候选集的条目分配协议结果；保留原有匹配优先级、容器及相同位置的稳定顺序。超限未缓存的大纲在处理完每份文档后释放。缓存只使用内存，不生成磁盘文件。
+The outline cache retains a maximum of approximately 4 MiB of heap data across the entire process, estimated by vector capacity, name/description string capacity, and snapshot overhead; full results are still returned when exceeded, and only the additional cache is discarded. The workspace search traverses the borrowed syllabus, ranking it with a candidate queue of up to 256 entries, assigning protocol results only to entries that entered the candidate set; retaining the original stable ordering of match priorities, containers, and colocations. Overrun uncached synopses are released after each document is processed. The cache only uses memory and does not generate disk files.

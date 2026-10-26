@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     editing::file_operations,
     language::{features, navigation},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -274,7 +274,7 @@ fn command_completion_and_signature_follow_one_optional_argument_without_a_star(
         let offset = marked.find('¦').unwrap();
         let source = marked.replace('¦', "");
         workspace.open(main.clone(), source.clone(), 1);
-        let help = latex_lsp::language::signature::help(
+        let help = texquill::language::signature::help(
             &workspace,
             &main,
             Text::new(source).position(offset),
@@ -290,7 +290,7 @@ fn command_completion_and_signature_follow_one_optional_argument_without_a_star(
         let offset = marked.find('¦').unwrap();
         let source = marked.replace('¦', "");
         workspace.open(main.clone(), source.clone(), 1);
-        assert!(latex_lsp::language::signature::help(
+        assert!(texquill::language::signature::help(
             &workspace,
             &main,
             Text::new(source).position(offset)

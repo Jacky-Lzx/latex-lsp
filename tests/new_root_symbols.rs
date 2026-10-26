@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace, text::Text};
 
 struct Project {
     _dir: tempfile::TempDir,
@@ -42,7 +42,7 @@ impl Project {
     fn open_other(&mut self, source: String) {
         self.ws.open(self.other.clone(), source, 7);
     }
-    fn rename(&self) -> latex_lsp::rpc::Result<Option<WorkspaceEdit>> {
+    fn rename(&self) -> texquill::rpc::Result<Option<WorkspaceEdit>> {
         features::rename(&self.ws, &self.common, self.position(), "fresh")
     }
 }

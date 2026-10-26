@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeMap, path::Path};
+use texquill::{
     editing::file_operations,
     language::{features, navigation},
     project::{graphics, workspace::Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::{collections::BTreeMap, path::Path};
 
 const PNG: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0,
@@ -273,7 +273,7 @@ fn shared_roots_keep_their_own_settings_and_reject_conflicting_path_edits() {
 fn real_declared_extensions_keep_the_selected_images_after_batched_moves() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -283,7 +283,7 @@ fn real_declared_extensions_keep_the_selected_images_after_batched_moves() {
         r"\documentclass{article}\begin{document}Figure\end{document}",
     )
     .unwrap();
-    let outcome = latex_lsp::compilation::build::run(
+    let outcome = texquill::compilation::build::run(
         &drawing.path().join("drawing.tex"),
         &config,
         &Default::default(),
@@ -330,7 +330,7 @@ fn real_declared_extensions_keep_the_selected_images_after_batched_moves() {
             targets(&workspace, &uri(root, "child.tex")).as_slice(),
             std::slice::from_ref(&selected)
         );
-        let outcome = latex_lsp::compilation::build::run(
+        let outcome = texquill::compilation::build::run(
             &main.to_file_path().unwrap(),
             &config,
             &Default::default(),
@@ -565,7 +565,7 @@ fn uncertain_globaldefs_assignments_and_deferred_scope_changes_do_not_guess() {
 #[ignore = "requires pdflatex, graphicx and etoolbox"]
 fn real_global_settings_match_tex_and_preserve_images_after_renaming() {
     let drawing = tempfile::tempdir().unwrap();
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -574,7 +574,7 @@ fn real_global_settings_match_tex_and_preserve_images_after_renaming() {
         r"\documentclass{article}\begin{document}Figure\end{document}",
     )
     .unwrap();
-    let graphic = latex_lsp::compilation::build::run(
+    let graphic = texquill::compilation::build::run(
         &drawing.path().join("drawing.tex"),
         &config,
         &Default::default(),
@@ -662,7 +662,7 @@ fn real_global_settings_match_tex_and_preserve_images_after_renaming() {
                 std::slice::from_ref(&selected),
                 "{setting}"
             );
-            let outcome = latex_lsp::compilation::build::run(
+            let outcome = texquill::compilation::build::run(
                 &root.join("main.tex"),
                 &config,
                 &Default::default(),

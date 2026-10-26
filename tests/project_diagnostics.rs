@@ -1,6 +1,6 @@
-use latex_lsp::project::workspace::{Document, Workspace};
 use lsp_types::*;
 use std::path::Path;
+use texquill::project::workspace::{Document, Workspace};
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -282,7 +282,7 @@ fn duplicate_label_diagnostics_agree_with_real_compilation_and_clear_after_repai
     let child = uri(root, "chapter.tex");
     assert_eq!(cross_file(&workspace, &main).len(), 1);
     assert_eq!(cross_file(&workspace, &child).len(), 1);
-    let first = latex_lsp::compilation::build::run(
+    let first = texquill::compilation::build::run(
         &root.join("main.tex"),
         &Default::default(),
         &Default::default(),
@@ -301,7 +301,7 @@ fn duplicate_label_diagnostics_agree_with_real_compilation_and_clear_after_repai
     workspace.reload(&child);
     assert!(cross_file(&workspace, &main).is_empty());
     assert!(cross_file(&workspace, &child).is_empty());
-    let repaired = latex_lsp::compilation::build::run(
+    let repaired = texquill::compilation::build::run(
         &root.join("main.tex"),
         &Default::default(),
         &Default::default(),
@@ -331,7 +331,7 @@ fn local_duplicate_diagnostics_link_first_declarations_with_distinct_namespaces(
         .filter(|diagnostic| diagnostic.message == "Duplicate key `键`")
         .collect();
     assert_eq!(duplicates.len(), 3, "{diagnostics:?}");
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     for (code, command) in [
         ("duplicate-label", "label"),
         ("duplicate-bibliography-key", "bibitem"),

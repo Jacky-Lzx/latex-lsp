@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "undefined-bibliography-entry-type";
 
@@ -230,7 +230,7 @@ fn unknown_style_types_do_not_offer_unverified_spelling_edits() {
     let target = uri(root, "refs.bib");
     let item = diagnostic(&found, &target);
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },

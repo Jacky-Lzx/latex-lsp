@@ -1,6 +1,6 @@
-# TeX 发行版与宏包
+# TeX distributions and packages
 
-服务器启动后在后台调用 `kpsewhich --expand-path=$TEXMFDBS`，读取返回目录的 `ls-R` 文件名数据库；发行版发现和文件监听注册不会阻塞文档打开、编辑或正向搜索。数据库就绪前，相关补全和文件跳转先使用项目内文件及内置元数据。`usepackage`、`RequirePackage`、文档类和 `bibliographystyle` 的补全与文件跳转会查找发行版；同名项目文件优先。删除或移动后已不存在的文件不会作为结果返回。发行版源文件不会自动加入项目符号、重命名或诊断范围。
+After the server is started, `kpsewhich --expand-path=$TEXMFDBS` is called in the background and the `ls-R` file name database of the returned directory is read; distribution discovery and file monitor registration will not block document opening, editing or forward search. Before the database is ready, related completion and file jumps first use the files in the project and built-in metadata. Completions and file jumps for `usepackage`, `RequirePackage`, document classes, and `bibliographystyle` will look for releases; project files with the same name take precedence. Files that no longer exist after being deleted or moved are not returned as results. Release source files are not automatically bulleted, renamed, or diagnostic scoped.
 
 ```json
 {
@@ -14,8 +14,8 @@
 }
 ```
 
-`roots` 是额外的 TeX 树根目录，每个目录需包含 `ls-R`，优先于自动发现目录。没有 `kpsewhich` 或数据库时仍可使用项目内功能。发现进程最多运行两秒；最多读取 64 个目录、每个数据库 32 MiB、共 100000 个文件名。修改配置或重启服务器可刷新数据库。
+`roots` is an additional TeX tree root directory. Each directory needs to contain `ls-R`, taking precedence over automatically discovered directories. In-project functionality can still be used without `kpsewhich` or database. The discovery process runs for a maximum of two seconds; reads a maximum of 64 directories, 32 MiB per database, and 100,000 filenames in total. Modify the configuration or restart the server to refresh the database.
 
-随服务器发布的 `assets/packages.json` 提供可扩展的宏包描述和命令参数元数据。当前涵盖 amsmath、mathtools、amsfonts、amssymb、booktabs、geometry、graphicx 的常用命令，以及 hyperref、fontspec、tikz、pgfplots、biblatex 的宏包说明。项目源码中的静态宏包加载及元数据声明的依赖关系决定命令补全、参数提示和悬停文档；用户声明优先。悬停提供 texdoc.org 文档链接。
+`assets/packages.json` released with the server provides extensible package description and command parameter metadata. It currently covers common commands for amsmath, mathtools, amsfonts, amssymb, booktabs, geometry, and graphicx, as well as package instructions for hyperref, fontspec, tikz, pgfplots, and biblatex. The dependencies of static package loading and metadata declaration in the project source code determine command completion, signature help and hover documents; user declarations take precedence. A link to the texdoc.org documentation is provided on hover.
 
-这是一份精选元数据，不会执行宏包或自动分析发行版全部宏定义。动态加载、条件加载和文档类内部的隐式宏包依赖可能需要显式加载或补充元数据。`\input` 发行版内部文件的任意搜索路径暂不由此索引提供。
+This is a curated set of metadata and does not execute packages or automatically analyze all macro definitions in a distribution. Dynamic loading, conditional loading, and implicit package dependencies within document classes may require explicit loading or supplemental metadata. Any search paths for files within the `\input` distribution are not currently provided by this index.

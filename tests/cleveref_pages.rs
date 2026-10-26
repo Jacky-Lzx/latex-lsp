@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 const COMMANDS: &[&str] = &["cpageref", "Cpageref", "cref", "Cref"];
 
@@ -79,7 +79,7 @@ fn label_lists_navigate_and_rename_each_key_preserving_separators_and_ignored_ca
 #[test]
 fn label_list_completion_edits_one_key_and_signatures_keep_a_single_list_parameter() {
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },
@@ -189,7 +189,7 @@ fn label_list_warnings_fix_each_matching_occurrence_without_changing_other_keys(
         let diagnostics = build_log::parse(&main, &log);
         assert_eq!(diagnostics[&uri].len(), 3);
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },

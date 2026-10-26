@@ -1,9 +1,9 @@
 #[path = "support/biber.rs"]
 mod biber;
 
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "invalid-bibliography-set";
 fn uri(root: &Path, name: &str) -> Url {
@@ -128,7 +128,7 @@ fn unknown_or_unreadable_history_and_canonical_key_collisions_keep_root_diagnost
         format!("{}{}{warning}", found("refs.data"), found("missing.data")),
         format!("{}ERROR - Unknown failure\n{warning}", found("refs.data")),
         format!(
-            "{}[latex-lsp: middle of compiler output omitted]\n{warning}",
+            "{}[texquill: middle of compiler output omitted]\n{warning}",
             found("refs.data")
         ),
         format!("{}{}{warning}", found("refs.data"), found("duplicate.data")),

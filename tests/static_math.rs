@@ -1,5 +1,5 @@
-use latex_lsp::{config::Config, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{config::Config, project::workspace::Workspace, text::Text};
 
 fn enabled() -> Config {
     Config::parse(
@@ -18,7 +18,7 @@ fn setup(source: &str) -> (Workspace, Url) {
 }
 fn math(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
     ws.diagnostics(uri).into_iter().filter(|item| {
-        item.source.as_deref() == Some("latex-lsp") && matches!(item.code.as_ref(),
+        item.source.as_deref() == Some("texquill") && matches!(item.code.as_ref(),
             Some(NumberOrString::String(code)) if ["unclosed-math", "nested-math", "mismatched-math", "unexpected-math-end"].contains(&code.as_str()))
     }).collect()
 }
@@ -228,7 +228,7 @@ fn directory_settings_enable_checks_and_imported_redefinitions_disable_them() {
     let uri = Url::from_file_path(&root).unwrap();
     let local_uri = Url::from_file_path(&local).unwrap();
     std::fs::write(
-        dir.path().join(".latex-lsp.json"),
+        dir.path().join(".texquill.json"),
         r#"{"diagnostics":{"mathDelimiters":true}}"#,
     )
     .unwrap();

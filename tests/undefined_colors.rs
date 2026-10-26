@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::collections::BTreeMap;
+use texquill::{
     compilation::{build, build_log},
     config::BuildConfig,
     editing,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::collections::BTreeMap;
 
 const MESSAGE: &str = "Package xcolor Error: Undefined color `accnet'.";
 const HELP: &str = "See the xcolor package documentation for explanation.\nType  H <return>  for immediate help.\n ...\n\n";
@@ -27,7 +27,7 @@ fn setup(source: &str, definitions: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///color-fixes/main.tex").unwrap();
     let palette = Url::parse("file:///color-fixes/palette.tex").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             versioned_edits: true,
             ..Default::default()
@@ -472,7 +472,7 @@ fn real_undefined_color_repairs_compile_all_direct_call_forms() {
                 "{engine}/{call}: {error:?}"
             );
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     code_action_literals: true,
                     ..Default::default()

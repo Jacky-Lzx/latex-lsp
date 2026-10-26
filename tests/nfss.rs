@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 const DECLARATIONS: &[(&str, &[&str])] = &[
     ("DeclareFontEncoding", &["LSP", "", ""]),
@@ -30,7 +30,7 @@ const SELECTORS: &[(&str, &[&str])] = &[
 fn setup(source: &str, snippets: bool) -> (Workspace, Url) {
     let uri = Url::parse("file:///nfss-tests/lsplsptest.fd").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets,
             ..Default::default()
         },

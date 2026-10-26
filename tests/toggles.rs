@@ -1,8 +1,6 @@
-use latex_lsp::{
-    compilation::build, language::features, project::workspace::Workspace, text::Text,
-};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path, sync::atomic::AtomicBool};
+use texquill::{compilation::build, language::features, project::workspace::Workspace, text::Text};
 
 fn setup(root: &Path, files: &[(&str, &str)]) -> Workspace {
     for (name, source) in files {
@@ -320,7 +318,7 @@ fn real_toggle_renames_preserve_boolean_independence_and_finite_expression_loops
             &[("main.tex", source), ("definitions.tex", &definitions)],
         );
         let main = root.join("main.tex");
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: "pdflatex".into(),
             timeout_seconds: 5,
             ..Default::default()

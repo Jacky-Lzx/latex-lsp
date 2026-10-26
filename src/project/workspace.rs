@@ -428,7 +428,7 @@ impl Workspace {
                     diagnostics.push(lsp_types::Diagnostic {
                         range: Default::default(),
                         severity: Some(lsp_types::DiagnosticSeverity::WARNING),
-                        source: Some("latex-lsp".into()),
+                        source: Some("texquill".into()),
                         code: Some(lsp_types::NumberOrString::String(
                             "project-configuration".into(),
                         )),
@@ -1195,7 +1195,7 @@ impl Workspace {
     pub(crate) fn refresh_paths(&mut self, paths: &[PathBuf]) -> BTreeSet<Url> {
         if paths.iter().any(|path| {
             path.file_name()
-                .is_some_and(|name| name == ".latex-lsp.json")
+                .is_some_and(|name| name == ".texquill.json")
         }) {
             crate::config::project_config::invalidate();
             self.project.lint_diagnostics.clear();

@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, navigation, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn uri() -> Url {
     Url::parse("file:///listings-inline/main.tex").unwrap()
@@ -300,7 +300,7 @@ fn ordinary_groups_and_consumed_formatter_controls_keep_source_catcodes() {
 fn headers_have_signatures_hover_snippets_and_preserve_existing_code() {
     let main = uri();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },
@@ -536,9 +536,9 @@ fn real_inline_forms_preserve_native_labels_inputs_and_header_commands_after_ren
             assert!(updated.contains(literal));
             assert!(updated.contains("\\ref{renamedlabel}"));
             std::fs::write(root.join("main.tex"), &updated).unwrap();
-            let outcome = latex_lsp::compilation::build::run(
+            let outcome = texquill::compilation::build::run(
                 &root.join("main.tex"),
-                &latex_lsp::config::BuildConfig {
+                &texquill::config::BuildConfig {
                     executable: engine.into(),
                     ..Default::default()
                 },
@@ -553,7 +553,7 @@ fn real_inline_forms_preserve_native_labels_inputs_and_header_commands_after_ren
                 assert!(outcome.output.contains("HEADER-RAN"));
             }
             assert!(!outcome.inputs.unwrap().contains(&fake));
-            let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+            let aux = std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
             assert!(aux.contains("newlabel{renamedlabel}"));
             assert!(aux.contains("newlabel{tail}"));
             assert!(

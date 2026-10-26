@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeMap, path::Path};
+use texquill::{
     editing::file_operations,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::{collections::BTreeMap, path::Path};
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -213,7 +213,7 @@ fn includeonly_paths_are_linked_and_renamed_without_becoming_input_dependencies(
     workspace.add_root(root.into());
     let main = uri(root, "main.tex");
     assert_eq!(workspace.project_documents(&main), [main.clone()].into());
-    let links = latex_lsp::language::navigation::document_links(&workspace, &main);
+    let links = texquill::language::navigation::document_links(&workspace, &main);
     assert_eq!(links.len(), 2);
     assert_eq!(links[0].target, Some(uri(root, "chapters/old.tex")));
     let edits = edits(
@@ -329,7 +329,7 @@ fn changing_source_extensions_preserves_input_includeonly_and_magic_root_compila
             .unwrap(),
         paper
     );
-    let outcome = latex_lsp::compilation::build::run(
+    let outcome = texquill::compilation::build::run(
         &root.join("paper.ltx"),
         &Default::default(),
         &Default::default(),
@@ -354,7 +354,7 @@ fn selected_chapters_still_compile_after_includeonly_references_are_renamed() {
     let mut workspace = Workspace::default();
     workspace.add_root(root.into());
     for renamed in [false, true] {
-        let outcome = latex_lsp::compilation::build::run(
+        let outcome = texquill::compilation::build::run(
             &root.join("main.tex"),
             &Default::default(),
             &Default::default(),
@@ -539,7 +539,7 @@ fn file_urls_preserve_percent_encoding_when_assets_are_renamed() {
     let source = apply(&source, edits[&main].clone());
     assert_eq!(source, format!("\\url{{{new}}}"));
     let document = Document::new(&main, source, Some(2));
-    assert!(latex_lsp::language::features::diagnostics(&document).is_empty());
+    assert!(texquill::language::features::diagnostics(&document).is_empty());
 }
 
 #[test]
@@ -632,16 +632,13 @@ fn real_file_url_renames_preserve_pdf_link_destinations() {
     std::fs::write(root.join("main.tex"), &source).unwrap();
     let mut workspace = Workspace::default();
     workspace.add_root(root.into());
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
     for target in [&old, &new] {
-        let outcome = latex_lsp::compilation::build::run(
-            &root.join("main.tex"),
-            &config,
-            &Default::default(),
-        );
+        let outcome =
+            texquill::compilation::build::run(&root.join("main.tex"), &config, &Default::default());
         assert_eq!(outcome.status, "success", "{}", outcome.output);
         let data =
             std::fs::read(config.artifact_path(&root.join("main.tex"), "pdf").unwrap()).unwrap();
@@ -790,7 +787,7 @@ fn renamed_projects_still_compile_after_root_and_dependency_moves() {
             .unwrap(),
         main
     );
-    let outcome = latex_lsp::compilation::build::run(
+    let outcome = texquill::compilation::build::run(
         &main.to_file_path().unwrap(),
         &Default::default(),
         &std::sync::atomic::AtomicBool::new(false),
@@ -858,7 +855,7 @@ fn shared_file_links_do_not_choose_arbitrary_targets_and_build_inputs_use_the_ca
     let root = directory.path();
     let mut workspace = shared_inputs_project(root);
     let shared = uri(root, "shared.tex");
-    assert!(latex_lsp::language::navigation::document_links(&workspace, &shared).is_empty());
+    assert!(texquill::language::navigation::document_links(&workspace, &shared).is_empty());
     for (name, other) in [("a", "b"), ("b", "a")] {
         let inputs = workspace.project_files(&uri(root, &format!("{name}/main.tex")));
         assert!(inputs.contains(&uri(root, &format!("{name}/plot.pdf"))));
@@ -871,7 +868,7 @@ fn shared_file_links_do_not_choose_arbitrary_targets_and_build_inputs_use_the_ca
     workspace
         .documents
         .insert(shared.clone(), Document::new(&shared, source, Some(1)));
-    let links = latex_lsp::language::navigation::document_links(&workspace, &shared);
+    let links = texquill::language::navigation::document_links(&workspace, &shared);
     assert_eq!(links.len(), 1);
     assert_eq!(
         links[0].target.as_ref().unwrap().as_str(),
@@ -881,7 +878,7 @@ fn shared_file_links_do_not_choose_arbitrary_targets_and_build_inputs_use_the_ca
     let position = doc
         .text
         .position(doc.text.source.find("setup").unwrap() + 3);
-    let items = latex_lsp::language::features::completion(&workspace, &shared, position);
+    let items = texquill::language::features::completion(&workspace, &shared, position);
     assert!(items.iter().any(|item| item.label == "setup.tex"));
 }
 
@@ -956,7 +953,7 @@ fn both_projects_compile_after_shared_input_and_image_paths_are_rebased() {
         "\\documentclass{article}\\begin{document}Image\\end{document}",
     )
     .unwrap();
-    let image_build = latex_lsp::compilation::build::run(
+    let image_build = texquill::compilation::build::run(
         &image.path().join("image.tex"),
         &Default::default(),
         &Default::default(),
@@ -1002,7 +999,7 @@ fn both_projects_compile_after_shared_input_and_image_paths_are_rebased() {
         "\\input{../config}\n\\includegraphics[width=1cm]{../plot}\n"
     );
     for name in ["a", "b"] {
-        let outcome = latex_lsp::compilation::build::run(
+        let outcome = texquill::compilation::build::run(
             &root.join(format!("{name}/book/main.tex")),
             &Default::default(),
             &Default::default(),
@@ -1043,7 +1040,7 @@ fn package_and_class_links_always_append_the_loader_suffix() {
             let mut workspace = Workspace::default();
             workspace.add_root(root.into());
             let main = uri(root, "main.tex");
-            let links = latex_lsp::language::navigation::document_links(&workspace, &main);
+            let links = texquill::language::navigation::document_links(&workspace, &main);
             assert_eq!(links.len(), 1, "{command}/{name}: {links:?}");
             assert_eq!(
                 links[0].target,
@@ -1054,7 +1051,7 @@ fn package_and_class_links_always_append_the_loader_suffix() {
             assert!(dependencies.contains(&uri(root, &expected)));
             assert!(!dependencies.contains(&uri(root, &name)));
             std::fs::remove_file(root.join(&expected)).unwrap();
-            assert!(latex_lsp::language::navigation::document_links(&workspace, &main).is_empty());
+            assert!(texquill::language::navigation::document_links(&workspace, &main).is_empty());
         }
     }
 }
@@ -1087,7 +1084,7 @@ fn loader_renames_strip_the_appended_suffix_and_completion_avoids_doubled_extens
     );
     let source = r"\usepackage{pkg.st";
     workspace.open(main.clone(), source.into(), 2);
-    let items = latex_lsp::language::features::completion(
+    let items = texquill::language::features::completion(
         &workspace,
         &main,
         Text::new(source.into()).position(source.len()),
@@ -1121,17 +1118,14 @@ fn actual_package_and_class_loading_matches_navigation_and_renamed_base_names() 
     }
     let mut workspace = Workspace::default();
     workspace.add_root(root.into());
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
     let main = uri(root, "main.tex");
     for renamed in [false, true] {
-        let outcome = latex_lsp::compilation::build::run(
-            &root.join("main.tex"),
-            &config,
-            &Default::default(),
-        );
+        let outcome =
+            texquill::compilation::build::run(&root.join("main.tex"), &config, &Default::default());
         assert_eq!(outcome.status, "success", "{}", outcome.output);
         assert!(
             outcome.output.contains("EXPECTED CLASS"),
@@ -1144,7 +1138,7 @@ fn actual_package_and_class_loading_matches_navigation_and_renamed_base_names() 
             outcome.output
         );
         let inputs = outcome.inputs.unwrap();
-        let links = latex_lsp::language::navigation::document_links(&workspace, &main);
+        let links = texquill::language::navigation::document_links(&workspace, &main);
         for name in if renamed {
             ["new-class.cls", "new-package.sty"]
         } else {

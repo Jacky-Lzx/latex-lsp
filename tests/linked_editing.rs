@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     editing,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn document(source: &str, extension: &str) -> Document {
     let uri = Url::parse(&format!("file:///linked-editing/main.{extension}")).unwrap();

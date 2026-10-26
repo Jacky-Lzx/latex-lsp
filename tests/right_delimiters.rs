@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const ERROR: &str = r"Extra \right.";
 const CODE: &str = "unmatched-right-delimiter";
@@ -228,7 +228,7 @@ fn workspace(source: &str, log: &str) -> (tempfile::TempDir, Workspace, Url, Vec
     let parsed = build_log::parse(&main, log);
     let items = parsed.get(&root).cloned().unwrap_or_default();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             versioned_edits: true,
             ..Default::default()
@@ -536,8 +536,8 @@ fn math_symbols_do_not_consume_following_right_calls_but_local_redefinitions_can
 #[cfg(unix)]
 #[test]
 fn loaded_macro_parameters_are_used_and_rechecked_before_right_delimiter_edits() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
     for definition in [
         r"\def\consume{}",
         r"\def\consume#1{#1}",
@@ -563,7 +563,7 @@ fn loaded_macro_parameters_are_used_and_rechecked_before_right_delimiter_edits()
         let precise = definition == r"\def\consume{}";
         assert_eq!(item.code.is_some(), precise, "{definition}: {item:?}");
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -597,8 +597,8 @@ fn loaded_macro_parameters_are_used_and_rechecked_before_right_delimiter_edits()
 #[cfg(unix)]
 #[test]
 fn missing_right_repairs_recheck_loaded_parameter_and_primitive_definitions() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
     for definition in [
         r"\def\consume{}",
         r"\def\consume#1{#1}",
@@ -624,7 +624,7 @@ fn missing_right_repairs_recheck_loaded_parameter_and_primitive_definitions() {
         let precise = definition == r"\def\consume{}";
         assert_eq!(item.code.is_some(), precise, "{definition}: {item:?}");
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -655,8 +655,8 @@ fn missing_right_repairs_recheck_loaded_parameter_and_primitive_definitions() {
 #[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX and LuaLaTeX"]
 fn real_missing_right_repairs_compile_in_all_engines_and_recover_nested_groups() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
     let cache = tempfile::tempdir().unwrap();
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for width in [60, 79] {
@@ -693,7 +693,7 @@ fn real_missing_right_repairs_compile_in_all_engines_and_recover_nested_groups()
                 for round in 0..=12 {
                     let outcome = build::run(&main, &config, &Default::default());
                     let mut workspace = Workspace {
-                        client: latex_lsp::project::state::ClientCapabilities {
+                        client: texquill::project::state::ClientCapabilities {
                             code_action_literals: true,
                             versioned_edits: true,
                             ..Default::default()
@@ -761,8 +761,8 @@ fn real_missing_right_repairs_compile_in_all_engines_and_recover_nested_groups()
 #[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX and LuaLaTeX"]
 fn real_right_delimiter_fixes_preserve_symbols_and_compile_in_all_engines() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
     let cache = tempfile::tempdir().unwrap();
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for width in [60, 79] {
@@ -840,7 +840,7 @@ fn real_right_delimiter_fixes_preserve_symbols_and_compile_in_all_engines() {
                     outcome.diagnostics
                 );
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         code_action_literals: true,
                         versioned_edits: true,
                         ..Default::default()

@@ -1,8 +1,8 @@
-use latex_lsp::{
+use lsp_types::Url;
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
 };
-use lsp_types::Url;
 
 #[test]
 fn navigation_and_rename_follow_unsaved_dependency_changes() {

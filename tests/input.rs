@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::build,
     editing::{self, file_operations},
     language::{features, navigation},
     project::workspace::Workspace,
 };
-use lsp_types::*;
-use std::path::Path;
 
 const SOURCE: &str = "\\documentclass{article}\n\\begin{document}\n\\input chapter.tex\n\\input\"my file\"\n{\\input chapter }\n% \\input ignored\n\\verb|\\input ignored|\n\\input % comment before filename\n  chapter\n\\end{document}\n";
 
@@ -28,7 +28,7 @@ fn real_missing_include_spelling_fixes_read_the_intended_chapter_after_recompili
         .unwrap();
         let source = format!("\\documentclass{{article}}\\begin{{document}}Start.\n\\include % keep\r\n{{sections/my chapetr{extension}}}\r\nEnd.\\end{{document}}\n");
         std::fs::write(&main, &source).unwrap();
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: "pdflatex".into(),
             ..Default::default()
         };
@@ -46,7 +46,7 @@ fn real_missing_include_spelling_fixes_read_the_intended_chapter_after_recompili
             .unwrap()
             .clone();
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },
@@ -75,7 +75,7 @@ fn real_missing_include_spelling_fixes_read_the_intended_chapter_after_recompili
         assert_eq!(changes[&main_uri].len(), 1);
         let edit = &changes[&main_uri][0];
         assert_eq!(edit.new_text, format!("sections/my chapter{extension}"));
-        let updated = latex_lsp::text::Text::new(source.clone())
+        let updated = texquill::text::Text::new(source.clone())
             .changed(vec![TextDocumentContentChangeEvent {
                 range: Some(edit.range),
                 range_length: None,
@@ -211,7 +211,7 @@ fn bare_input_renames_add_braces_for_spaces_and_preserve_existing_quotes() {
 fn bare_input_selection_ranges_respect_utf16_and_eof_and_macro_paths_remain_unresolved() {
     for source in ["😀 \\input 中文", "\\input\"中文 file\"", "{\\input 中文 }"] {
         let uri = Url::parse("file:///input/main.tex").unwrap();
-        let doc = latex_lsp::project::workspace::Document::new(&uri, source.into(), Some(1));
+        let doc = texquill::project::workspace::Document::new(&uri, source.into(), Some(1));
         let offset = source.find("中文").unwrap();
         let selections = editing::selection_ranges(&doc, &[doc.text.position(offset)]).unwrap();
         let mut current = &selections[0];
@@ -232,8 +232,8 @@ fn bare_input_selection_ranges_respect_utf16_and_eof_and_macro_paths_remain_unre
         "\\input\"chapter\".tex",
         "{\\input chapter}",
     ] {
-        let text = latex_lsp::text::Text::new(source.into());
-        let syntax = latex_lsp::parser::syntax::Syntax::latex(&text);
+        let text = texquill::text::Text::new(source.into());
+        let syntax = texquill::parser::syntax::Syntax::latex(&text);
         assert!(
             syntax
                 .commands
@@ -253,7 +253,7 @@ fn bare_and_quoted_inputs_still_compile_after_file_renames_introduce_spaces_and_
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let mut workspace = project(root);
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -304,7 +304,7 @@ fn unicode_input_filename_renames_read_the_moved_file_for_bare_and_quoted_forms(
                 .unwrap();
                 let mut workspace = Workspace::default();
                 workspace.add_root(root.into());
-                let config = latex_lsp::config::BuildConfig {
+                let config = texquill::config::BuildConfig {
                     executable: engine.into(),
                     ..Default::default()
                 };

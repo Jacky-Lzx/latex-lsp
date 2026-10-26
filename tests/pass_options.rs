@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::build,
     editing::file_operations,
     language::{features, navigation, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -241,7 +241,7 @@ fn forwarding_commands_offer_two_required_arguments_and_explain_loading_order() 
     let main = Url::parse("file:///pass-options/main.tex").unwrap();
     for command in ["PassOptionsToPackage", "PassOptionsToClass"] {
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 snippets: true,
                 ..Default::default()
             },
@@ -331,7 +331,7 @@ fn real_package_and_class_renames_preserve_forwarded_options_in_main_and_support
                 )
             };
             std::fs::write(root.join("main.tex"), &source).unwrap();
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable: engine.into(),
                 ..Default::default()
             };

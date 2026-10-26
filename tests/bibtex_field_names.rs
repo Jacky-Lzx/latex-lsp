@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, semantic},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn workspace(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///bibtex-field-names/refs.bib").unwrap();

@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build, language::features, project::workspace::Workspace};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build, language::features, project::workspace::Workspace};
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -258,7 +258,7 @@ fn numbered_theorem_renames_preserve_real_shared_and_nested_counter_numbering() 
         &Default::default(),
     );
     assert_eq!(before.status, "success", "{}", before.output);
-    let expected_aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+    let expected_aux = std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
     for (key, number) in [
         ("first", "3"),
         ("shared", "4"),
@@ -280,7 +280,7 @@ fn numbered_theorem_renames_preserve_real_shared_and_nested_counter_numbering() 
     );
     assert_eq!(after.status, "success", "{}", after.output);
     assert_eq!(
-        std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap(),
+        std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap(),
         expected_aux
     );
     assert!(!after
@@ -308,7 +308,7 @@ fn shared_and_starred_theorem_renames_compile_without_changing_independent_count
             &Default::default(),
         );
         assert_eq!(before.status, "success", "{}", before.output);
-        let auxiliary = root.join("build/latex-lsp/main.aux");
+        let auxiliary = root.join("build/texquill/main.aux");
         let labels = std::fs::read_to_string(&auxiliary).unwrap();
         for (uri, source) in renamed(&workspace, root, old, new) {
             std::fs::write(uri.to_file_path().unwrap(), source).unwrap();

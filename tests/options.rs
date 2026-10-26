@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace, text::Text};
 fn complete(marked: &str) -> Vec<CompletionItem> {
     let uri = Url::parse("file:///project/main.tex").unwrap();
     let mut ws = Workspace::default();

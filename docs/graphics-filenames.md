@@ -1,10 +1,10 @@
-# 图片文件名
+# Graphics filenames
 
-[返回文档目录](README.md) · [图片解析与移动](graphics.md)
+[Back to documentation](README.md) · [Image analysis and movement](graphics.md)
 
-## 引号与空白
+## Quotes and whitespace
 
-图片跳转、补全、依赖跟踪、文件移动和缺图修复支持 graphicx 的完整及分段双引号文件名。以下写法均指向 `plot image.png`：
+Image jump, completion, dependency tracking, file movement and missing image repair support graphicx's complete and segmented double-quoted file names. The following writing methods all point to `plot image.png`:
 
 ```tex
 \includegraphics{"plot image.png"}
@@ -13,33 +13,33 @@
 \includegraphics{ "plot  image.png" }
 ```
 
-双引号用于包裹文件名，不属于磁盘文件名。普通空格、制表符和单次换行按 TeX 的规则合并，首尾空白被忽略；引号内也遵循这些规则。因此，`"plot  image.png"` 查找的是只有一个空格的 `plot image.png`。
+Double quotes are used to wrap file names and do not belong to disk file names. Ordinary spaces, tabs, and single newlines are combined according to TeX's rules, and leading and trailing whitespace are ignored; these rules are also followed within quotation marks. Therefore, `"plot  image.png"` looks for `plot image.png` with only one space.
 
-省略扩展名的 `\includegraphics{"plot image"}` 仍按调用位置的图片目录和扩展名顺序搜索，详见[图片解析与移动](graphics.md)。[静态别名与命名调用](graphics-calls.md)使用相同规则。
+`\includegraphics{"plot image"}` that omits the extension is still searched in the order of the image directory and extension at the calling location. For details, see [Image Analysis and Movement](graphics.md). [Static aliases and named calls](graphics-calls.md) use the same rules.
 
-## 搜索目录中的引号
+## Search for quotes in directories
 
-项目使用默认参数的 pdfLaTeX，或使用 pdfLaTeX 引擎的 latexmk 时，也支持 `\graphicspath` 的完整及分段引号目录：
+When the project uses pdfLaTeX with default parameters, or uses latexmk of the pdfLaTeX engine, the complete and segmented quotation mark directory of `\graphicspath` is also supported:
 
 ```tex
 \graphicspath{{"figure files/"}{"other figures"/}}
 \includegraphics{"plot image"}
 ```
 
-服务器合并目录中的普通空白，并按当前有效设置进行跳转、补全、图片依赖跟踪和缺图修复。目录声明的静态别名、局部及全局作用域继续适用。目录或主文档移动后，保留引号、绝对路径及适用的 `./` 前缀；分段引号可整理为一对完整引号。移动后的路径若会因 TeX 合并空白而改变目标，则拒绝编辑。
+The server merges ordinary blanks in the directory and performs jumps, completions, image dependency tracking and missing image repairs according to the currently effective settings. Static aliases, local and global scopes for directory declarations continue to apply. After a directory or main document is moved, quotes, absolute paths, and the applicable `./` prefix are retained; segmented quotes can be organized into a pair of complete quotes. Editing of a moved path that would change the target due to TeX merging whitespace is rejected.
 
-目录必须以 `/` 结尾，结束引号可以包住该斜杠；斜杠后不能添加空白，即使空白位于引号内。例如 `{"figure files/" }` 与 `{"figure files/ "}` 不作静态目录推断。
+The directory must end with `/`, and the closing quotation mark can enclose the slash; no whitespace can be added after the slash, even if the whitespace is within the quotation marks. For example, `{"figure files/" }` and `{"figure files/ "}` do not perform static directory inference.
 
-XeLaTeX、LuaLaTeX 对目录引号的存在性检查与读取规则不同；在这些引擎或无法确认引擎的自定义编译配置下，服务器不推断带引号目录的图片目标或移动编辑。目录名含空格时可直接写 `\graphicspath{{figure files/}}`，无需添加引号。服务器按根文档的实际编译配置判断，包括适用的 `% !TeX program` 指令；图片文件名参数中的引号继续按上文规则处理。
+XeLaTeX, LuaLaTeX's existence checks for directory quotes differ from the read rules; under these engines or in custom compilation configurations where the engine cannot be confirmed, the server does not infer image targets or mobile edits for quoted directories. If the directory name contains spaces, you can directly write `\graphicspath{{figure files/}}` without adding quotation marks. The server determines based on the actual compilation configuration of the root document, including the applicable `% !TeX program` directive; quotation marks in the image file name parameter continue to be processed according to the above rules.
 
-## 补全、移动与缺图修复
+## Completion, movement and missing image repair
 
-补全支持尚未闭合的引号，以及跨单次换行的文件名。光标位于名称中间时会替换剩余名称；目录补全保留已有的路径后缀。
+Completion supports unclosed quotes, and filenames that span a single newline. Remaining names are replaced when the cursor is in the middle of a name; directory completion preserves existing path suffixes.
 
-图片移动和缺图修复保留文件名引号、命令调用形式、星号及选项。需要修改分段引号写法时，可以将其整理为一对完整引号，例如移动 `plot image.png` 后，把 `"plot image".png` 更新为 `"assets/chart image.png"`。
+Image movement and missing image repair preserve file name quotes, command calling forms, asterisks, and options. When you need to modify the writing of segmented quotation marks, you can organize them into a pair of complete quotation marks. For example, after moving `plot image.png`, update `"plot image".png` to `"assets/chart image.png"`.
 
-编译器报告的文件名可能不带引号，诊断仍标出源码中的完整带引号名称；拼写建议沿用该图片调用的搜索目录和扩展名设置。只有编译器确认缺图且能可靠对应源码时才提供修复，详见[编译诊断](diagnostics.md)。
+The file name reported by the compiler may not be quoted, and the diagnostic still indicates the full quoted name in the source code; spelling suggestions follow the search directory and extension settings of the image call. Repairs are only provided when the compiler confirms that the missing image can reliably correspond to the source code. For details, see [Build diagnostics](diagnostics.md).
 
-## 支持边界
+## Support boundaries
 
-完整路径中的引号必须成对。含任意宏展开、空段落或文件名内部注释的路径不作静态目标推断。未完成引号可用于输入时的补全，但不会作为已解析的图片依赖参与导航和文件移动。编译输入检查观察实际选中的图片及更高优先级候选，规则见[编译输入与过期结果](build-inputs.md)。
+Quotes in the full path must be in pairs. Static target inference is not performed for paths containing any macro expansion, empty paragraphs, or internal comments in the file name. Uncompleted quotes can be used for completion during typing, but will not participate in navigation and file movement as a dependency on the parsed image. The compilation input check observes the actual selected images and higher priority candidates. For rules, see [Compilation Input and Expired Results](build-inputs.md).

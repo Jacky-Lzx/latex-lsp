@@ -1,12 +1,12 @@
-# 编辑时引用、文献字段、数学定界符诊断与 ChkTeX
+# Static diagnostics and ChkTeX
 
-未定义的静态标签引用和文献引用在编辑时即可显示警告，无需运行 TeX。检查使用当前项目的源码和文献数据库，支持引用列表、范围引用、结构化 biblatex 引用及 IDS 别名。动态键、注释和逐字代码不会作为静态键检查。修正名称或增加声明后，警告随编辑更新；可使用项目内名称的拼写修复。同一位置已有编译器确认的引用警告时，省略重复静态警告。
+Undefined static tag references and bibliographic references display warnings when editing without running TeX. Check source code and bibliographic databases using the current project, supporting reference lists, range references, structured biblatex references, and IDS aliases. Dynamic keys, comments, and verbatim codes are not checked as static keys. When you correct a name or add a statement, the warning is updated with the edit; you can use the spelling fix for the name within the project. Duplicate static warnings are omitted when there is already a compiler-acknowledged reference warning at the same location.
 
-引用位置复用项目级命令与参数语义。重新定义的引用命令、用户宏的参数数据、声明正文、字面转换／测试和单 token 操作数不作为实际引用；普通文本样式参数中的引用继续检查。使用相关文件的未保存定义，独立项目的重定义互不影响。这里不展开用户宏，因此不会预测其调用时由替换正文产生的引用。项目索引不完整，或分析超过 16 MiB 源码、100000 个命令、4096 个声明时，跳过这类静态诊断；编译器结果保持可见。
+Reference locations reuse project-level command and parameter semantics. Redefined reference commands, parameter data for user macros, declaration bodies, literal conversions/tests, and single-token operands are not treated as actual references; references in normal text-style parameters continue to be checked. Using unsaved definitions of related files, redefinitions of independent projects do not affect each other. User macros are not expanded here, so references resulting from the replacement body when they are called are not predicted. When the project index is incomplete, or when analyzing more than 16 MiB of source code, 100,000 commands, or 4096 declarations, this type of static diagnostic is skipped; the compiler results remain visible.
 
-静态 `csuse` 与字面 `csname` 的引用调用使用相同检查，例如 `\csuse{ref}{missing}`、`\csname cite\endcsname[说明]{paper}`。键范围只覆盖实际参数中的名称，引用列表、范围、可选说明和结构化 biblatex 引用沿用直接调用的规则。命名接口或目标命令被项目重定义时跳过相应语义；动态命令名和动态键不作展开。
+Reference calls to static `csuse` and literal `csname` use the same check, for example `\csuse{ref}{missing}`, `\csname cite\endcsname[description]{paper}`. Key scopes only cover names in actual arguments, reference lists, ranges, optional descriptions, and structured biblatex references follow the rules of direct calls. When the named interface or target command is redefined by the project, the corresponding semantics will be skipped; dynamic command names and dynamic keys will not be expanded.
 
-同一文档中的重复标签、文献键与 PDF 目标继续报告 `Duplicate key`，并分别使用稳定代码 `duplicate-label`、`duplicate-bibliography-key` 和 `duplicate-pdf-destination`。每个重复位置通过 `relatedInformation` 链接本命名空间的首次声明，支持未保存文档、Unicode 和 CRLF。删除或修改首次声明后，关联位置随缓冲区更新；同名的不同命名空间互不冲突。项目内跨文件冲突仍由现有 `duplicate-definition` 诊断报告。
+Duplicate tags, citation keys, and PDF targets in the same document continue to report `Duplicate key` and use the stable codes `duplicate-label`, `duplicate-bibliography-key`, and `duplicate-pdf-destination` respectively. Each duplicate position links to the first declaration of this namespace via `relatedInformation`, supporting unsaved documents, Unicode and CRLF. After the first declaration is deleted or modified, the associated position is updated with the buffer; different namespaces with the same name do not conflict with each other. Cross-file conflicts within the project are still reported by the existing `duplicate-definition` diagnostic.
 
 ```json
 {
@@ -27,33 +27,33 @@
 }
 ```
 
-文献缓冲区中的重复字段默认在编辑时显示警告，代码为 `repeated-bibliography-field`，来源为 `latex-lsp`。同一条目内的字段名按 ASCII 大小写不敏感比较；每个重复赋值标记字段名称，并通过相关信息链接第一次有效赋值。不同条目中的同名字段互不影响，不检查字段值中的示例或特殊条目的正文。
+Duplicate fields in the document buffer display a warning when editing by default with code `repeated-bibliography-field` and source `texquill`. Field names within the same entry are compared ASCII case-insensitively; each repeated assignment tags the field name and links the first valid assignment with related information. Fields with the same name in different entries do not affect each other, and examples in field values or the body of special entries are not checked.
 
-检查要求字段名、赋值和表达式完整；条目的关闭定界符尚未输入时，已完整的赋值仍可检查。修正字段名或删除重复赋值后立即清除诊断。已有精确定位的编译器重复字段警告时，省略对应静态警告；只定位到行或来源尚未确认的编译器消息不会遮挡编辑检查。设置 `diagnostics.duplicateBibliographyFields: false` 可关闭静态检查，编译器结果继续显示。
+The check requires that the field name, assignment, and expression be complete; complete assignments can still be checked when the entry's closing delimiter has not been entered. Clear diagnostics immediately after correcting field names or removing duplicate assignments. When there is already a precisely located compiler duplicate field warning, the corresponding static warning is omitted; compiler messages that only target lines or whose sources have not been confirmed will not block editing checks. Setting `diagnostics.duplicateBibliographyFields: false` turns off static checking and compiler results continue to be displayed.
 
-此检查只报告重复，不推断字段值或不同文献后端的保留规则，也不自动删除赋值。支持编辑器指定的文献语言类型、未命名缓冲区，以及项目确认的文献输入角色。单行包含大量 Unicode 字段时采用一次位置扫描，避免逐个字段重复计算 UTF-16 坐标。
+This check only reports duplicates and does not infer field values or retention rules for different document backends, nor does it automatically remove assignments. Supports editor-specified documentation language types, unnamed buffers, and project-confirmed documentation input roles. When a single row contains a large number of Unicode fields, a position scan is used to avoid repeatedly calculating UTF-16 coordinates field by field.
 
-验证：
+verify:
 
 ```sh
 cargo test --locked --test static_bibliography_fields
 cargo test --locked --test protocol bibliography_field
 ```
 
-数学定界符检查通过 `diagnostics.mathDelimiters: true` 开启，默认关闭。检查当前 LaTeX 缓冲区中的 `$`、`$$`、`\(` / `\)` 和 `\[` / `\]`，在编辑时报告以下警告（来源为 `latex-lsp`）：
+Math delimiter checking is enabled via `diagnostics.mathDelimiters: true` and is disabled by default. Checking the current LaTeX buffer for `$`, `$$`, `\(` / `\)` and `\[` / `\]` reports the following warning when editing (source: `texquill`):
 
-- `unclosed-math`：根文件结束前仍未关闭的公式。
-- `unexpected-math-end`：没有对应起点的显式关闭定界符。
-- `mismatched-math`：行内公式与显示公式的定界符错配，关联起始位置。
-- `nested-math`：公式内直接使用显式起始定界符，关联已有起点。
+- `unclosed-math`: A formula that is not closed before the end of the root file.
+- `unexpected-math-end`: There is no explicit closing delimiter corresponding to the starting point.
+- `mismatched-math`: The delimiter of the inline formula and the displayed formula are mismatched, and the associated starting position is associated.
+- `nested-math`: Use the explicit start delimiter directly in the formula, and the association already has a starting point.
 
-检查复用项目中的已知参数语法：用户宏读作参数的美元、数学控制符及静态命名调用不会作为公式边界，普通文本样式中的公式继续检查。无参数纯转发的数学控制符、别名链、`csuse` 与字面 `csname` 调用按最终内置意义配对；诊断标记实际调用，错配时关联实际开启位置。相关跨文件未保存定义参与分析，独立项目互不影响。
+Checks known parameter syntax in reused projects: dollar, math control characters, and static named calls read as parameters by user macros are not used as formula boundaries, and formulas in normal text styles continue to be checked. The mathematical control character, alias chain, `csuse` and literal `csname` call without parameters are paired according to the final built-in meaning; the diagnostic mark is actually called, and the actual opening position is associated with the mismatch. Related cross-file unsaved definitions participate in the analysis, and independent projects do not affect each other.
 
-检查按行内／显示模式配对。基础 LaTeX 接受 `$x\)`、`\(x$`、`$$x\]` 和 `\[x$$`；不同宏包可改变这些命令的含义，相关额外约束由实际编译器检查。注释、逐字代码、字面量转换／测试、token 操作数、命令／环境定义的参数头和替换正文、受支持的 expl3 定义、`csname` 名称及文件／引用参数不作为公式正文扫描。已有数学环境、`ensuremath` 以及公式中的文本盒内容独立选择数学模式，按不透明区域处理。
+Check pairing by inline/display mode. Basic LaTeX accepts `$x\)`, `\(x$`, `$$x\]`, and `\[x$$`; different packages can change the meaning of these commands, and the relevant additional constraints are checked by the actual compiler. Comments, verbatim codes, literal conversions/tests, token operands, command/environment defined parameter headers and replacement bodies, supported expl3 definitions, `csname` names, and file/reference parameters are not scanned as formula bodies. The existing math environment, `ensuremath`, and text box content in formulas independently select math mode and process them as opaque areas.
 
-跨文件输入及其静态纯转发别名构成不确定边界；共享文件取所有消费项目的边界并集。检查不推断子文件开头和结尾的数学模式，因此不报告可能跨文件的孤立起止；边界内明确写出的显式错配仍可报告。项目中存在字符类别修改或定界符重定义时跳过检查。共享来源的数学调用或参数解释在消费者之间不一致时，跳过该来源的检查。条件分支会使当前模式失效。每个文档最多报告 128 项，相关索引只在启用检查时建立。项目索引不完整，或单个项目超过 16 MiB 源码、100000 个命令、4096 个声明时跳过；单个来源的定界符参数查询限制为 4000000 个命令访问估算量，超出时保留编译器诊断。
+Cross-file input and its static pure forwarding aliases form an indeterminate boundary; the shared file is the union of the boundaries of all consumer items. The check does not infer mathematical patterns at the beginning and end of subfiles, so isolated starts and stops that may span files are not reported; explicit mismatches written out clearly within boundaries are still reported. Skip checking if character class modification or delimiter redefinition exists in the project. Skip checking for a shared source when its math calls or parameter interpretations are inconsistent between consumers. Conditional branches invalidate the current pattern. A maximum of 128 items are reported per document, and related indexes are only built when checking is enabled. Skip if the project index is incomplete, or if a single project exceeds 16 MiB of source code, 100,000 commands, and 4,096 declarations; the delimiter parameter query for a single source is limited to an estimate of 4,000,000 command accesses, and compiler diagnostics are retained when exceeded.
 
-此检查不展开任意宏，不检查宏包内部实现，也不自动修复定界符。通过运行时宏开启／关闭数学模式的项目可保持关闭。修复缓冲区或关闭设置后，推送及拉取诊断随即清除。
+This check does not expand arbitrary macros, does not check package internal implementations, and does not automatically repair delimiters. Projects that turn math mode on/off via runtime macros can remain turned off. Once you fix the buffer or turn off the settings, push and pull diagnostics clear.
 
 ```sh
 cargo test --locked --test static_math
@@ -62,10 +62,10 @@ cargo test --locked --test protocol math_semantics_diagnostics
 cargo test --locked --test static_math -- --include-ignored
 ```
 
-最后一项使用 pdfLaTeX 和 amsmath，对照合法混合写法、定义参数数据和实际拒绝的公式。共享文件、目录配置、UTF-16／CRLF 定位与即时清除由默认测试覆盖。
+The last one uses pdfLaTeX and amsmath to compare legal mixtures of notations, defined parameter data, and actual rejected formulas. Shared files, directory configuration, UTF-16/CRLF positioning and on-the-fly cleanup are covered by default tests.
 
-ChkTeX 默认关闭，开启后在保存时检查当前缓冲区，以文档所在目录运行，因此可以读取本地 `.chktexrc`。`arguments` 用于附加警告开关或 rc 文件参数。服务器随后追加输出格式、`-I0` 和 `TabSize=1`，不跟随 `input` 读取其他文件。输出转换为 UTF-16 范围，诊断来源为 `chktex`。
+ChkTeX is turned off by default. When turned on, it checks the current buffer when saving and runs in the directory where the document is located, so the local `.chktexrc` can be read. `arguments` is used to append warning switches or rc file parameters. The server then appends the output formats, `-I0` and `TabSize=1`, and does not follow `input` to read other files. The output is converted to UTF-16 range and the diagnostic source is `chktex`.
 
-超时、关闭连接或关闭服务器会终止检查进程。检查期间继续编辑、关闭文档或修改配置后，旧结果会被丢弃；编辑时立即清除先前 ChkTeX 结果，下一次保存重新检查。未安装工具时通过日志报告错误，其他诊断继续可用。
+A timeout, closing the connection, or shutting down the server terminates the checking process. If you continue to edit, close the document, or modify the configuration during the check, the old results will be discarded; the previous ChkTeX results will be cleared immediately when editing and rechecked next time. Errors are reported via logs when the tool is not installed, other diagnostics continue to be available.
 
-静态诊断不会执行宏展开或判断条件分支。由运行时宏或外部项目动态生成的键可能需要关闭对应静态检查；发行版文件名数据库本身不引入标签或文献定义。
+Static diagnostics do not perform macro expansion or conditional branching. Keys dynamically generated by runtime macros or external projects may require corresponding static checking to be turned off; the distribution filename database itself does not introduce tag or document definitions.

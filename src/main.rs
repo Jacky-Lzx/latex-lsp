@@ -1,18 +1,18 @@
 #[tokio::main]
 async fn main() {
     if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
-        println!("latex-lsp {}", env!("CARGO_PKG_VERSION"));
+        println!("texquill {}", env!("CARGO_PKG_VERSION"));
         return;
     }
     if std::env::args().any(|arg| arg == "--help" || arg == "-h") {
-        println!("latex-lsp {}\n\nLaTeX language server over stdio.\n\nUsage: latex-lsp [--stdio]\n       latex-lsp --version", env!("CARGO_PKG_VERSION"));
+        println!("texquill {}\n\nLaTeX language server over stdio.\n\nUsage: texquill [--stdio]\n       texquill --version", env!("CARGO_PKG_VERSION"));
         return;
     }
     let status =
-        match latex_lsp::server::protocol::serve(tokio::io::stdin(), tokio::io::stdout()).await {
+        match texquill::server::protocol::serve(tokio::io::stdin(), tokio::io::stdout()).await {
             Ok(status) => status,
             Err(error) => {
-                eprintln!("latex-lsp: {error}");
+                eprintln!("texquill: {error}");
                 1
             }
         };

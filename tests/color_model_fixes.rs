@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::collections::BTreeMap;
+use texquill::{
     compilation::{build, build_log},
     config::BuildConfig,
     editing,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::collections::BTreeMap;
 
 const MESSAGE: &str = "Package xcolor Error: Undefined color model `rbg'.";
 const HELP: &str = "See the xcolor package documentation for explanation.\nType  H <return>  for immediate help.\n ...\n\n";
@@ -27,7 +27,7 @@ fn setup(source: &str, definitions: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///model-fixes/main.tex").unwrap();
     let palette = Url::parse("file:///model-fixes/palette.tex").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             versioned_edits: true,
             ..Default::default()
@@ -191,7 +191,7 @@ fn model_errors_select_only_the_misspelled_model_and_restore_literal_color_previ
                 assert!(repair(&workspace, &uri, &error, "rpb").is_none());
                 let doc = Document::new(&uri, updated, Some(8));
                 if !call.starts_with("\\providecolor") && !call.starts_with("\\xdefinecolor") {
-                    let colors = latex_lsp::language::colors::document_colors(&doc);
+                    let colors = texquill::language::colors::document_colors(&doc);
                     assert!(
                         colors.iter().any(|c| c.color.red == 0.2
                             && c.color.green == 0.4
@@ -353,7 +353,7 @@ fn real_model_spelling_repairs_compile_and_preserve_color_specifications() {
                 "{engine}/{call}: {error:?}"
             );
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     code_action_literals: true,
                     ..Default::default()

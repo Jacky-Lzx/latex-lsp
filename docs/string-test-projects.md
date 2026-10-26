@@ -1,12 +1,12 @@
-# 字符串测试的跨文件上下文
+# String tests across files
 
-[返回文档目录](README.md) · [字符串测试](string-tests.md) · [项目与文件](projects.md)
+[Back to documentation](README.md) · [String test](string-tests.md) · [Projects and files](projects.md)
 
-## 加载顺序
+## Loading order
 
-`ifstrequal`、`ifstrempty`、`ifblank` 和 `notblank` 的数据边界按直接调用处的上下文确定。当前文件或已加载的本地依赖显式重定义该命令后，后续调用停止使用内置字符串语法，参数中的符号按普通源码建立索引。
+Data boundaries for `ifstrequal`, `ifstrempty`, `ifblank`, and `notblank` are determined by the context of the direct call. After the current file or loaded local dependency explicitly redefines the command, subsequent calls stop using the built-in string syntax, and the symbols in the parameters are indexed as normal source code.
 
-例如主文件：
+For example main file:
 
 ```tex
 \documentclass{article}
@@ -25,33 +25,33 @@
 \renewcommand{\ifblank}[1]{#1}
 ```
 
-将 boolean `draft` 改名时，声明和第二次调用中的 `booltrue` 会更新；第一次调用的 `boolfalse` 仍是字符串数据，保留原文。
+When the boolean `draft` is renamed, `booltrue` in the declaration and the second call will be updated; `boolfalse` in the first call is still string data and the original text is retained.
 
-支持直接源码包含及本地宏包、文档类的嵌套加载。[章节选择](selected-string-tests.md)按加载顺序过滤 `include` 的语义传播，被排除章节中的重定义不会影响后续字符串调用。父文件中先前的重定义传给子文件，子文件的重定义也影响返回父文件后的调用；原生字符串中的加载命令不生效。宏正文中仅声明、尚未调用的加载和重定义不会在声明处传播。
+Supports direct source code inclusion and nested loading of local packages and document classes. [Chapter Selection](selected-string-tests.md) Filters the semantic propagation of `include` according to loading order. Redefinitions in excluded chapters will not affect subsequent string calls. The previous redefinition in the parent file is passed to the child file, and the redefinition of the child file also affects the call after returning to the parent file; the load command in the native string does not take effect. Loads and redefinitions that are only declared but not yet called in the macro body will not be propagated at the point of declaration.
 
-依赖使用编辑器中的未保存内容。打开、增量编辑、关闭依赖缓冲区及磁盘变更通知都会更新相关解析；关闭时恢复磁盘内容，主文档的版本号保持不变。自定义调用暴露的新静态输入也会载入，包括工作区目录外的文件，遵守[文件索引限制](projects.md#工作区索引与项目隔离)。
+Rely on unsaved content in the editor. Opening, incremental editing, closing dependency buffers and disk change notifications will update the relevant parsing; when closing, the disk content is restored, and the version number of the main document remains unchanged. New static input exposed by custom calls will also be loaded, including files outside the workspace directory, subject to [File Index Restrictions](projects.md#workspace-index-and-project-isolation).
 
-[保存与显式恢复](string-test-copies.md)说明命令副本捕获的含义、跨文件参数边界，以及恢复前后的重命名规则。
+[Save and Explicit Restore](string-test-copies.md) explains the meaning of command copy capture, cross-file parameter boundaries, and renaming rules before and after restore.
 
-## 宏补丁与延迟代码
+## Macro patches and deferral codes
 
-`pretocmd`、`apptocmd`、`patchcmd`、`appto`／`preto` 的展开／全局形式和对应的 `cs...` 接口可能修改现有字符串读者，而不新增源码声明。服务器按调用顺序撤销目标的原生字符串认证，不预测补丁是否成功或替换后的宏正文。静态命名调用及可能的纯转发／复制别名同样参与保护，包括来自未保存提供文件的别名；这些可能关系只用于拒绝不完整编辑。动态目标或未认证的补丁前缀会使相关字符串含义保持未知。
+The expanded/global form of `pretocmd`, `apptocmd`, `patchcmd`, `appto`/`preto` and the corresponding `cs...` interface may modify existing string readers without adding new source code declarations. The server revokes the target's native string authentication in the order in which it was called, without predicting the success of the patch or the replaced macro text. Static named calls and possibly pure forwarding/copying aliases also participate in protection, including aliases from unsaved serving files; these possible relationships are only used to reject incomplete edits. Dynamic targets or uncertified patch prefixes leave the meaning of the associated strings unknown.
 
-例如 `\pretocmd{\ifblank}{#1}{}{}` 会使原本的字符串参数实际执行。此时只改声明和两个分支中的宏名称会漏改一个真实调用；服务器拒绝这种部分编辑，无关标签仍可完整改名。移除补丁，或明确恢复一个已确认的原生副本后，可恢复对应交互。
+For example, `\pretocmd{\ifblank}{#1}{}{}` will cause the original string parameters to be actually executed. At this time, only changing the declaration and the macro names in the two branches will miss a real call; the server rejects this partial edit, and irrelevant labels can still be completely renamed. Corresponding interactions can be restored after removing the patch, or explicitly restoring a confirmed native copy.
 
-补丁的替换代码、成功／失败回调及钩子或脚注中的潜在修改也纳入持续保护。代码可能在恢复操作以后再次执行，不能仅因看到一次恢复就重新确认原生含义。代码参数在立即执行分析中保留边界，结构编辑仍能识别其中的宏和静态引用。尚未调用的普通宏正文不在声明位置执行。
+Potential modifications in patched replacement code, success/failure callbacks, and hooks or footers are also included in ongoing protection. The code may be executed again after the recovery operation, and the original meaning cannot be reconfirmed just because you see a recovery. Code parameters retain bounds in immediate execution analysis, and structure editors still recognize macros and static references within them. Ordinary macro bodies that have not yet been called are not executed at the declaration position.
 
-上述补丁／追加接口提供参数提示；`patchcmd[prefix]{command}{search}{replacement}{success}{failure}` 的前缀可选，命令操作数可直接写为控制序列。命令补全片段保留 TeX 反斜线和已有参数，不将搜索文字当成执行代码。
+The above patch/addition interface provides signature help; the prefix of `patchcmd[prefix]{command}{search}{replacement}{success}{failure}` is optional, and the command operands can be written directly as control sequences. Command completion snippets preserve TeX backslashes and existing arguments, and do not treat search text as executable code.
 
-## 共享文件与支持边界
+## Shared files and support boundaries
 
-同一源码在多个主文档中，或在一个主文档中被多次加载时，可能同时存在字符串数据与可执行参数两种解释。这种参数不提供单一导航或准备重命名结果；从声明发起的重命名若会修改它，也会被拒绝。同文件中语义一致的其他符号仍可重命名。
+When the same source code is loaded multiple times in multiple main documents or in one main document, there may be two interpretations of string data and executable parameters at the same time. Such parameters do not provide single navigation or prepare rename results; renames initiated from the declaration that would modify it will also be rejected. Other symbols with the same semantics as in the file can still be renamed.
 
-采用静态分析，此处的上下文传播限于直接文件加载和显式命令赋值。`InputIfFileExists` / `IfFileExists` 的本地条件选择、前置钩子和文件事件更新见[条件文件钩子](conditional-string-tests.md)。不推断其他 TeX 条件、加载别名、动态命令名、用户宏调用后的副作用或分组结束后的命令恢复，也不依赖 TeX 发行版内部的宏包实现。条件分支仍按源码索引；循环、递归深度或分析次数超限时不选择任意的字符串解释，相关编辑会受到保守限制。
+With static analysis, context propagation here is limited to direct file loading and explicit command assignment. For the local condition selection, pre-hook and file event update of `InputIfFileExists` / `IfFileExists`, see [Conditional File Hook](conditional-string-tests.md). It does not infer other TeX conditions, load aliases, dynamic command names, side effects after user macro calls or command recovery after grouping, and does not rely on package implementations within the TeX distribution. Conditional branches are still indexed according to the source code; when the loop, recursion depth or number of analyzes exceeds the limit, no arbitrary string interpretation will be selected, and relevant editing will be conservatively restricted.
 
-## 验证
+## verify
 
-默认回归覆盖加载顺序、嵌套源码与宏包、未保存内容、外部依赖、共享文件、重复加载，以及字面命令和延迟宏正文的边界。stdio 回归检查增量编辑、关闭恢复、磁盘通知和主文档版本化编辑：
+Default regression covers load order, nested source code and packages, unsaved content, external dependencies, shared files, repeated loading, and boundaries between literal commands and deferred macro bodies. stdio regression checks for incremental edits, shutdown recovery, disk notifications, and main document versioned edits:
 
 ```sh
 cargo test --locked --test string_test_projects
@@ -60,7 +60,7 @@ cargo test --locked --test patched_string_tests -- --include-ignored
 cargo test --locked --test protocol macro_patch_guards_
 ```
 
-三引擎回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox，核对导入重定义前后的字符串原文、实际 boolean 状态、重命名结果及 PDF 页数：
+The three-engine regression requires pdfLaTeX, XeLaTeX, LuaLaTeX and etoolbox. Check the original string text, actual boolean status, renaming result and PDF page number before and after import redefinition:
 
 ```sh
 cargo test --locked --test string_test_projects -- --include-ignored

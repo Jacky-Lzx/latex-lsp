@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeSet, path::Path};
+use texquill::{
     language::features,
     project::workspace::{DocumentKind, Workspace},
 };
-use lsp_types::*;
-use std::{collections::BTreeSet, path::Path};
 
 const COMMANDS: [&str; 5] = [
     "bibliography",
@@ -37,7 +37,7 @@ fn project(root: &Path, source: &str, name: &str) -> Workspace {
     )
     .unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },

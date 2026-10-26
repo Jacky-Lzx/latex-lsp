@@ -1,134 +1,134 @@
-# 文献
+# Bibliography
 
-[文档目录](README.md) · [编辑功能](editing.md) · [编译诊断](diagnostics.md)
+[Documentation](README.md) · [Editing features](editing.md) · [Build diagnostics](diagnostics.md)
 
-文献键支持补全、悬停、定义跳转、引用查找、高亮和跨文件重命名。直接调用与静态命名调用遵循相同的项目命令意义；被重定义引用的普通参数保留，参数数据或共享来源歧义会阻止部分重命名。编辑只使用可确认的静态源码范围，保留同名正文、说明文字、注释和逐字文本。
+Citation keys support completion, hover, definition jump, citation search, highlighting and cross-file renaming. Direct calls follow the same project command meaning as statically named calls; ordinary parameters referenced by the redefinition are preserved, and parameter data or shared source ambiguities prevent partial renaming. Editors only use identifiable static source code ranges, retaining text with the same name, captions, comments, and verbatim text.
 
-- [文献键与列表](#文献键与列表)
-- [文献大纲](#文献大纲)
-- [条目类型与字段补全](completion.md#bibtex-条目与字段)
-- [引用命令](#引用命令)
-- [biblatex 文献资源](biblatex-resources.md)
-- [biblatex 引用](biblatex.md)
-- [biblatex 文献分类](bibliography-categories.md)
-- [手写文献](#手写文献)
-- [条目关系与重命名](#条目关系与重命名)
-- [字符串缩写](#字符串缩写)
-- [URL 与 DOI 链接](#url-与-doi-链接)
+- [Citation keys and lists](#citation-keys-and-lists)
+- [Bibliography outline](#bibliography-outline)
+- [Entry type and field completion](completion.md#bibtex-entries-and-fields)
+- [Citation commands](#citation-commands)
+- [biblatex literature resources](biblatex-resources.md)
+- [biblatex reference](biblatex.md)
+- [biblatex Bibliography categories](bibliography-categories.md)
+- [Manual bibliographies](#manual-bibliographies)
+- [Item relationship and renaming](#entry-relationships-and-rename)
+- [String abbreviations](#string-abbreviations)
+- [URL and DOI links](#url-and-doi-links)
 
-## 文献键与列表
+## Citation keys and lists
 
-引用补全的文档预览与文献悬停显示完整的 BibTeX 原始条目，保留字段顺序、缩进、换行和注释，不附加目录路径。预览使用 BibTeX 代码块，不展开字符串宏、拼接表达式或继承字段。条目列表仍使用标题、作者和年份摘要；引用补全也保留按这些元数据搜索的能力。
+Document preview and document hover for citation completion show the complete original BibTeX entry, preserving field order, indentation, line breaks, and comments, without appending the directory path. The preview uses BibTeX code blocks and does not expand string macros, splice expressions, or inherited fields. The entry list still uses title, author, and year summaries; citation completion also retains the ability to search by these metadata.
 
-文献键支持普通圆括号，包括不配对括号，例如 `book(old)`、`book(old` 和 `book)old`。`\bibitem`、引用命令及两种条目定界形式的 BibTeX 数据库统一支持补全、跳转、语义标记和重命名；跨条目引用与元数据使用完整键，编辑保留注释及正文。
+Citation keys support ordinary parentheses, including unpaired parentheses, such as `book(old)`, `book(old`, and `book)old`. `\bibitem`, the citation command, and the BibTeX database in two forms of entry delimitation uniformly support completion, jump, semantic markup, and renaming; cross-entry references and metadata use complete keys, and editing retains comments and text.
 
-文献引用的键列表也支持跨行补全，包括普通 `cite`、natbib 和 biblatex 的已支持命令；只替换当前键，保留其他文献键、说明参数、换行和列表空白。
+The key list of citations also supports cross-line completion, including the supported commands of ordinary `cite`, natbib and biblatex; only the current key is replaced, and other citation keys, description parameters, newlines and list blanks are retained.
 
-键名前后的 TeX 注释会保留，注释里的逗号和括号不参与键名解析。宏展开、嵌套分组和由注释拼接的非连续键名不作静态推断。
+TeX comments before and after the key name will be retained, and commas and brackets in the comments will not participate in key name resolution. Macro expansion, nested grouping, and non-contiguous key names spliced by comments are not statically inferred.
 
-BibTeX 条目键后的逗号可以另起一行；支持 LF、CRLF 和缩进，导航与重命名保留键后的原始空白及元数据。
+A comma after a BibTeX entry key can start a new line; LF, CRLF, and indentation are supported, and navigation and renaming preserve the original whitespace and metadata after the key.
 
-BibTeX 的 `@` 与条目类型之间也允许普通空白、换行和缩进，例如 `@ book{key, ...}`；特殊条目和字段内容仍按完整条目边界处理。
+Ordinary whitespace, line breaks, and indentation are also allowed between BibTeX's `@` and entry types, such as `@ book{key, ...}`; special entries and field contents are still treated as full entry boundaries.
 
-BibTeX 自定义条目类型支持数字后缀、下划线、连字符等合法标识符，例如 `@custom1` 和 `@custom_type`，参与索引、元数据和重命名。编译器关于未知样式类型的标准两行警告会定位到对应 `.bib` 条目的类型名称；使用明确报告的数据库、键名与行号，类型与键分行也能定位，详见[条目类型诊断](bibliography-diagnostics.md#未定义条目类型)。
+BibTeX custom entry types support legal identifiers such as numeric suffixes, underscores, and hyphens, such as `@custom1` and `@custom_type`, and participate in indexing, metadata, and renaming. The compiler's standard two-line warning about unknown style types will be located to the type name corresponding to the `.bib` entry; using the explicitly reported database, key name and line number, the type and key branch can also be located, see [Entry Type Diagnostics](bibliography-diagnostics.md#undefined-entry-type) for details.
 
-## 文献大纲
+## Bibliography outline
 
-文献条目的大纲范围覆盖从 `@` 到正文结束的整个构造，选择范围仍是文献键；`@string` 缩写的范围覆盖完整赋值，选择范围是缩写名。条目继续显示标题、作者、年份预览，保留自定义类型及键中的 Unicode、引号和圆括号。
+The outline range of the document entry covers the entire structure from `@` to the end of the text, and the selection range is still the citation key; the range of the abbreviation `@string` covers the complete assignment, and the selection range is the abbreviation name. Entries continue to show title, author, year preview, retaining Unicode, quotes, and parentheses in custom types and keys.
 
-支持层级符号的客户端在条目下显示字段，字段名保留原始大小写，选择后可直接导航到该字段。字段范围覆盖名称、赋值和原始值表达式，支持多行字面量、嵌套分组、宏及 `#` 拼接；重复字段分别列出，注释和字面值内部的字段样式文本不会成为额外符号。`@comment` 和 `@preamble` 的内容不提供条目或字段符号。
+Clients that support hierarchical notation display the field below the entry, with the field name retaining its original case and allowing direct navigation to the field when selected. The field range covers names, assignments and primitive value expressions, and supports multi-line literals, nested grouping, macros and `#` splicing; repeated fields are listed separately, and field style text inside comments and literal values will not become additional symbols. The contents of `@comment` and `@preamble` do not provide entry or field symbols.
 
-编辑未完成的正文、赋值或字段名时，大纲使用解析器当前确认的范围；尚未闭合的构造仍可显示大纲，折叠继续要求完整构造。未命名文档和通过 `bib` / `bibtex` 语言类型识别的其他扩展名文件同样支持大纲，增量编辑立即更新条目及字段。
+When editing unfinished text, assignments, or field names, the outline uses the scope currently recognized by the parser; constructions that have not yet been closed can still display the outline, and folding continues to require a complete construction. Unnamed documents and other extension files identified by the `bib` / `bibtex` language type also support outlines, and incremental editing updates entries and fields immediately.
 
-静态 `ids` 别名作为键符号列在所属字段下，显示所属主键，选择范围精确覆盖别名本身。重复别名分别保留；宏、拼接、重复字段及其他无法确认的声明不生成推测符号。
+The static `ids` alias is listed under the corresponding field as a key symbol, showing the corresponding primary key, and the selection range accurately covers the alias itself. Duplicate aliases are retained separately; macros, splices, repeated fields, and other unconfirmed declarations do not generate speculative symbols.
 
-旧式客户端得到平铺符号，字段的 `containerName` 指向所属文献键，别名的容器是原始 `ids` 字段名；跳转范围保留实际名称。工作区符号搜索支持文献键、静态别名和字符串缩写，字段名本身不参与搜索。增量编辑即时更新别名与范围，关闭缓冲区后恢复磁盘内容。
+Legacy clients get tile notation, the field's `containerName` points to the owning citation key, and the alias's container is the original `ids` field name; the jump range retains the actual name. Workspace symbol search supports citation keys, static aliases, and string abbreviations. The field name itself does not participate in the search. Incremental editing updates aliases and ranges instantly, and restores disk content after closing the buffer.
 
-无字段的花括号条目 `@misc{key}` 也参与大纲、文献键导航及重命名，键后允许换行再闭合。BibTeX 的圆括号条目需要逗号，空字段形式应写作 `@misc(key,)`。
+The field-less brace entry `@misc{key}` also participates in outline, citation key navigation and renaming, and allows line breaks and closing after the key. BibTeX requires commas for parenthesized entries, and the empty field form should be written `@misc(key,)`.
 
-## 引用命令
+## Citation commands
 
-普通 `cite`、`nocite`、natbib 和已支持的 biblatex 命令共用文献键索引。
+Common `cite`, `nocite`, natbib and supported biblatex commands share the citation key index.
 
-传统 LaTeX／BibTeX 的平面 `bibcite` 编译记录可在输出引用旁显示文献标签，支持独立开关、请求范围与辅助文件更新；结构化 natbib 和 biblatex 专用记录暂不推断。配置和边界见[辅助文件引用](auxiliary-references.md)。
+The flat `bibcite` compilation record of traditional LaTeX/BibTeX can display the bibliographic label next to the output citation, and supports independent switches, request ranges and auxiliary file updates; structured natbib and biblatex special records are not inferred yet. See [Auxiliary Document Reference](auxiliary-references.md) for configuration and boundaries.
 
-natbib 的 `citealt` / `citealp`、`citenum`、`citeyearpar`、`citefullauthor` 及 `Citet` / `Citep` / `Citealt` / `Citealp` / `Citeauthor` 支持文献键补全、导航、引用、语义高亮、安全重命名、编译警告定位及拼写修复，并提供命令片段与参数提示。识别支持的星号形式及星号前后的空白和注释，保留引用列表、注释参数和正文。
+natbib's `citealt` / `citealp`, `citenum`, `citeyearpar`, `citefullauthor` and `Citet` / `Citep` / `Citealt` / `Citealp` / `Citeauthor` supports citation key completion, navigation, citations, semantic highlighting, safe renaming, compilation warning location and spelling repair, and provides command snippets and signature help. Identifies supported asterisk forms and whitespace and comments before and after the asterisk, preserving reference lists, comment parameters, and text.
 
-biblatex 的单次、多组和卷号引用及其星号形式见 [biblatex 引用指南](biblatex.md)，包括标题、日期、URL、脚注和仅记录文献键的说明引用。
+Single, multiple group, and volume number citations to biblatex and their asterisk forms are provided in [biblatex Citation Guide](biblatex.md), including title, date, URL, footnotes, and descriptive citations recording only the citation key.
 
-`\entrydata{key}{code}` 及其星号形式支持单个静态文献键的导航、补全和重命名，保留执行代码中的同名文字；详见[条目数据上下文](biblatex.md#条目数据上下文)。
+`\entrydata{key}{code}` and its asterisk form support navigation, completion, and renaming of a single static citation key, preserving text of the same name in the execution code; see [Entry Data Context](biblatex.md#entry-data-context) for details.
 
-`\ifentryexists{key}{true}{false}` 和 `\ifentryinbib{key}{true}{false}` 的单键检查同样参与文献编辑，保留两个分支中的同名文字；详见[条目条件检查](biblatex.md#条目条件检查)。
+The single-key checks of `\ifentryexists{key}{true}{false}` and `\ifentryinbib{key}{true}{false}` also participate in document editing, retaining the text with the same name in the two branches; see [Entry Condition Check](biblatex.md#entry-condition-check) for details.
 
-`bibentry` 宏包的 `\bibentry{key}` 正文内文献引用支持导航、悬停、引用查找、补全、参数提示、语义高亮和跨文件重命名；实际编译的缺失文献警告可定位到键名并提供拼写修复。按单个文献键处理，保留注释、条目正文和同名标签；不把键列表、动态名称或不支持的星号、可选说明当作可编辑键。
+Citations in running text through the `bibentry` package's `\bibentry{key}` support navigation, hover, references, completion, signature help, semantic highlighting, and cross-file rename. Missing-citation warnings from actual builds can identify the key and offer spelling fixes. The argument is treated as one citation key; comments, entry text, and unrelated labels with the same name are preserved. Key lists, dynamic names, unsupported stars, and optional notes are not treated as editable keys.
 
-接受可选说明的普通引用命令最多识别两个说明参数；出现多余说明时，后面的正文不会参与文献键补全、导航、重命名或精确编译警告定位。说明参数按 TeX 规则在首个未受花括号保护的 `]` 处结束；文字中的 `[`、受花括号保护的方括号、空白和注释仍会保留，参数提示也遵循相同边界。
+Ordinary citation commands that accept optional descriptions recognize at most two description parameters; when redundant descriptions occur, the following text will not participate in citation key completion, navigation, renaming, or accurate compilation warning positioning. The description parameter ends at the first unprotected `]` according to TeX rules; `[` in the text, brace-protected square brackets, whitespace, and comments are still preserved, and the signature help follow the same boundaries.
 
-natbib 的 `defcitealias{键}{显示文字}` 使用单个静态文献键，`citetalias` / `citepalias` 引用相同的键。重命名同步维护别名设置与引用，保留键前后的注释及显示文字；逗号列表、含语义空白、宏或由注释拼接的动态键不作推断。别名设置本身不产生缺失文献键警告，不会领取同一行其他引用的编译诊断。
+natbib's `defcitealias{key}{display text}` uses a single static citation key, and `citetalias` / `citepalias` reference the same key. Renaming maintains alias settings and references synchronously, retaining comments and display text before and after the key; comma lists, semantic blanks, macros, or dynamic keys spliced by comments are not inferred. The alias setting itself does not generate missing citation key warnings, and does not receive compilation diagnostics for other references in the same line.
 
-## 手写文献
+## Manual bibliographies
 
-手写文献 `\bibitem[label]{key}` 提示可选显示标签与必选文献键。最多读取一个可选标签，在首个未受花括号保护的 `]` 处结束，保留其中的字面量 `[`；键后的正文、多余或未闭合标签及不支持的星号不会触发文献键编辑或提示。
+Manual bibliographies `\bibitem[label]{key}` prompts optional display labels and required citation keys. Read at most one optional tag, ending at the first unprotected brace `]`, retaining the literal `[`; text after the key, redundant or unclosed tags, and unsupported asterisks will not trigger citation key editing or prompts.
 
-声明识别键前后的注释，引用可导航到实际键名并参与重命名、语义高亮、重复定义检查和拼写修复。编辑保留可选文献标签和条目正文，跳过需要宏展开或含语义空白的声明。
+Annotations before and after declaring an identified key, references navigate to the actual key name and participate in renaming, semantic highlighting, duplicate definition checking and spelling fixes. Editors retain optional documentation tags and article bodies, and skip statements that require macro expansion or contain semantic gaps.
 
-## 条目关系与重命名
+## Entry relationships and rename
 
-`\defbibentryset{set key}{member keys}` 支持动态集合键声明及成员引用的导航、补全和独立重命名；详见[文献集合](bibliography-sets.md)。集合键与数据库条目及别名共用文献命名空间，存在冲突时拒绝歧义编辑。
+`\defbibentryset{set key}{member keys}` supports navigation, completion and independent renaming of dynamic collection key declarations and member references; see [Document Collection](bibliography-sets.md) for details. Collection keys share the document namespace with database entries and aliases, and ambiguous edits are rejected when conflicts exist.
 
-biblatex 的静态 `ids` 字段可为条目声明多个文献别名，例如 `@book{main,ids={old,legacy},title={Example}}`。在 `\cite{old}` 或关系字段中可补全、跳转到别名声明、查看所属主键、查找引用、高亮并重命名。别名与主键独立：重命名 `old` 只更新该别名及其引用，重命名 `main` 保留 `ids` 和别名引用。别名声明也支持语义高亮和选择范围。
+The static `ids` field of biblatex can declare multiple bibliographic aliases for an entry, such as `@book{main,ids={old,legacy},title={Example}}`. In `\cite{old}` or relationship fields, you can complete, jump to alias declaration, view the associated primary key, find references, highlight and rename. Aliases are independent of the primary key: renaming `old` updates only the alias and its references, renaming `main` retains `ids` and the alias references. Alias declarations also support semantic highlighting and selection ranges.
 
-`ids` 字段名按 ASCII 忽略大小写，接受完整条目中唯一的花括号或双引号字面列表，保留逗号两侧空白。列表使用默认逗号分隔，不读取 Biber 自定义 `xsvsep` 配置。字符串宏、拼接、嵌套分组、TeX 命令、重复字段及未闭合条目不生成推测别名。重复别名或别名与实际主键冲突时可查看全部定义，重命名会拒绝歧义；含双引号的新别名会把双引号列表转为花括号。编译诊断的主键定位继续使用数据库实际条目。
+`ids` field names ignore case as per ASCII, accept a literal list of curly braces or double quotes unique to the complete entry, and retain white space on either side of the comma. The list is comma separated by default and Biber custom `xsvsep` configuration is not read. String macros, concatenation, nested grouping, TeX commands, repeated fields, and unclosed entries do not generate speculative aliases. You can view all definitions when a duplicate alias or an alias conflicts with the actual primary key. Renaming will reject the ambiguity; new aliases containing double quotes will convert the double quote list into curly braces. Primary key positioning of compile diagnostics continues to use actual database entries.
 
-字段名补全和悬停说明包含 `ids`，无需先在项目中使用该字段。也提供 `ismn`、`label`、`options`、`presort`、`shorthand`、`shorteditor`、`sortname` 和 `sorttitle` 的内置提示；这些提示不作为数据模型校验规则。
+Field name completion and hover instructions include `ids` without first using the field in the project. Also available in `ismn`, `label`, `options`, `presort`, `shorthand`, `shorteditor`, `sortname` and `sorttitle` built-in hints; these hints do not serve as data model validation rules.
 
-后记、批注、评论、前言、引言作者、专利持有人，原版语言、出版地、出版社，以及标准 `namea`–`namec` / `lista`–`listf` 槽位也提供说明；这些描述与 biblatex 数据访问命令的对应名称补全和悬停共用。
+Postscript, annotations, comments, foreword, introduction Author, patent holder, original language, place of publication, publisher, and descriptions are also provided for the standard `namea`–`namec` / `lista`–`listf` slots; these descriptions are shared with corresponding name completion and hover for biblatex data access commands.
 
-文献条目间引用支持 `crossref`、`xref`、`xdata`、`related` 和 `entryset`，包含花括号或双引号形式，以及后三类字段的逗号分隔列表；可补全、跳转、查找引用、高亮和重命名父条目。字段名不区分大小写，补全也支持尚未闭合的值。字符串宏、`#` 拼接或含 TeX 命令的值需要求值，暂不自动修改；标题和注释中的同名文本会保留。文献键不能重命名为 `*`，以免改变 `\nocite{*}` 的全选含义。
+References between document entries support `crossref`, `xref`, `xdata`, `related` and `entryset`, including curly braces or double quotes, and comma-separated lists of the latter three types of fields; you can complete, jump, find references, highlight and rename parent entries. Field names are not case-sensitive, and completion also supports unclosed values. String macros, `#` splicing, or values containing TeX commands need to be evaluated and will not be automatically modified for the time being; the same-named text in titles and comments will be retained. The citation key cannot be renamed to `*` to avoid changing the select-all meaning of `\nocite{*}`.
 
-项目按 `refsection` 选择资源时，数据库中的条目主键及静态 `ids` 声明跳转到自身，悬停显示该声明的元数据。关系字段只在所有包含当前库的分区及共享项目中指向同一声明时提供目标；同名父条目分属默认库与选中库时分别导航，不把两库合并。有效资源中的真实重复声明保留多个目标且不显示任意预览；未知执行路径、未闭合条目、重复关系字段和索引不完整时不猜测目标。引用查找与高亮使用完整静态身份图，覆盖 TeX 引用、五类关系字段及所有共享消费者；主键和 IDS 各自保持独立身份，重复输入的同一源码范围只返回一次。尚未保存的新根同样参与核验，同一源码绑定冲突、延迟代码或分析不完整时不返回部分结果。可认证的声明支持准备改名和完整、版本化的工作区编辑；只更改该主键或 IDS 的完整引用，保留其他分区中的同名声明。改名拒绝同区主键或别名冲突，也检查新名称是否捕获已有 TeX 引用及关系字段；带引号的新键会合并整值编辑并转换为花括号。
+When the project selects resources by `refsection`, the entry primary key and static `ids` declaration in the database jump to itself, and the metadata of the declaration is displayed on hover. The relationship field only provides targets when pointing to the same statement in all partitions and shared projects containing the current library; when the parent entries with the same name belong to the default library and the selected library, they are navigated separately, and the two libraries are not merged. True duplicate declarations in valid resources preserve multiple targets and do not show any previews; targets are not guessed for unknown execution paths, unclosed entries, duplicate relationship fields, and incomplete indexes. Reference search and highlighting use a complete static identity graph, covering TeX references, five types of relationship fields and all shared consumers; primary keys and IDS maintain independent identities, and the same source code range that is entered repeatedly is returned only once. New roots that have not yet been saved are also included in the verification. Partial results will not be returned when there are binding conflicts with the same source code, delayed code, or incomplete analysis. Certifiable claims support preparation for renames and full, versioned workspace editing; only the full reference to that primary key or IDS is changed, preserving claims of the same name in other partitions. Renaming rejects primary key or alias conflicts in the same region, and also checks whether the new name captures existing TeX references and relational fields; quoted new keys are merged into integer edits and converted to curly braces.
 
-关系字段补全也按这些分区和共享消费者过滤：只建议在每个相关资源集合中都对应同一声明的键，排除默认库独有的键和有冲突的候选。支持未闭合条目及字面值，替换完整当前列表项并保留相邻成员、空白和换行；选中带引号的键时保留原有的整值花括号转换。`xdata` 仅建议 `@xdata` 条目及其静态 IDS 别名，别名的类型来自所属条目，所属主键也必须唯一并在各分区保持一致；普通书籍、手写文献和源码集合不会被当作 XDATA 数据源。类型过滤与分区身份核验同时生效，未保存的条目类型修改会立即刷新候选。普通项目中的静态命名集合覆盖也按执行顺序核验；执行、消费者或完整索引无法确认时，不回退到数据库中的旧类型。含实际源码集合的 XDATA 补全继续沿用 IDS、动态执行等源码命名空间保护。
+Relational field completion is also filtered by these partitions and shared consumers: only keys corresponding to the same declaration in each related resource collection are proposed, keys unique to the default library and conflicting candidates are excluded. Supports unclosed items and literal values, replaces the entire current list item and preserves adjacent members, whitespace and newlines; preserves the original integer curly brace conversion when a quoted key is selected. `xdata` only recommends the `@xdata` entry and its static IDS alias. The type of the alias comes from the entry, and the primary key must be unique and consistent in each partition; ordinary books, handwritten documents, and source code collections will not be used as XDATA data sources. Type filtering and partition identity verification take effect at the same time, and unsaved entry type modifications will immediately refresh the candidates. Static named collection coverage in normal projects is also verified in execution order; there is no fallback to the old type in the database when the execution, consumer or full index cannot confirm it. XDATA completion containing actual source code collections continues to use source code namespace protection such as IDS and dynamic execution.
 
-动态集合可能替换数据库中同名条目。含资源选择的分区项目中，完整静态 `defbibentryset` 的声明、成员和 TeX 引用支持按数字分区及执行顺序跳转和悬停。相同资源列表的新分区仍有独立集合；前言定义属于分区 0，分组内的定义在该分区持续生效。先显式引用再定义集合时，继续指向原先的数据库条目；单独的 `nocite{*}` 不锁定该条目。普通及静态命名调用遵循相同规则，重复输入和全部共享消费者必须给出一致目标。
+Dynamic collections may replace entries with the same name in the database. In partitioned projects with resource selection, the declarations, members and TeX references of the complete static `defbibentryset` support jump and hover by numerical partition and execution order. New partitions with the same resource list still have independent collections; the preface definition belongs to partition 0, and the definitions in the group continue to take effect in this partition. When an explicit reference is first made and then the collection is defined, it continues to point to the original database entry; a standalone `nocite{*}` does not lock the entry. Normal and static named calls follow the same rules, duplicate entries and all shared consumers must give the same target.
 
-关系字段也支持跳转和悬停到有效的源码集合。五类关系均先核验完整条目、唯一字面字段及数据库父键，再比较该数据库在全部数字分区与共享消费者中的目标；同一数据库在两个分区分别指向集合和书籍时，不返回任意目标。显式早引用锁定书籍时，关系继续显示书籍元数据。
+Relationship fields also support jump and hover to valid source collections. All five types of relationships first verify complete entries, unique literal fields and database parent keys, and then compare the database's targets in all digital partitions and shared consumers; the same database does not return any targets when two partitions point to collections and books respectively. When a book is locked by an explicit early reference, the relationship continues to display book metadata.
 
-关系字段补全比较全部数字分区及消费者中的候选声明；源码集合覆盖同名书籍时显示集合元数据，早显式请求锁定书籍时保留书籍信息。静态命名集合也提供自身的候选元数据，同一物理声明的重复执行合并为一个候选。`crossref`／`xref` 的源码集合候选还须有一致的底层数据库父条目；仅有源码声明的集合不能供 Biber 数据库关系使用。活动源码集合不作为 `xdata`、默认 `related` 或嵌套 `entryset` 的候选，避免类型错误、缺失集合克隆或成员关系损坏。不同分区的声明身份冲突时排除该候选，公共条目继续可用；未完成关系值、完整后缀替换及列表和引号编辑规则保持可用。
+Relational field completion compares candidate claims in all number partitions and consumers; collection metadata is displayed when the source collection covers a book with the same name, and book information is retained when a book is explicitly requested to be locked. Static named collections also provide their own candidate metadata, and repeated executions of the same physical declaration are merged into a single candidate. Source code collection candidates for `crossref`/`xref` must also have consistent underlying database parent entries; collections with only source code declarations cannot be used by Biber database relationships. Active source collections are not candidates for `xdata`, default `related`, or nested `entryset` to avoid type errors, missing collection clones, or corrupted memberships. This candidate is excluded when declaration identities of different partitions conflict, and common entries continue to be available; unfinished relationship values, full suffix replacement, and list and quote editing rules remain available.
 
-完整引用和文档高亮按源码 URI、范围及数字分区区分集合、成员和同名数据库条目，覆盖全部已保存与未保存消费者及数据库关系。重复执行同一物理声明只返回一处声明；先引用再定义时，未使用的集合只返回自身，书籍引用保持独立。共享物理引用在不同分区或消费者中绑定冲突时，不返回部分图；仅有源码集合而缺少数据库父键的关系也不认证为完整图。
+Full reference and document highlighting distinguishes collections, members, and database entries with the same name by source URI, range, and numeric partitioning, covering all saved and unsaved consumer and database relationships. Repeated execution of the same physical declaration returns only one declaration; when referenced first and then defined, the unused collection only returns itself, and the book reference remains independent. When shared physical references have binding conflicts in different partitions or consumers, partial graphs are not returned; relationships that only have source code collections but lack database parent keys are not certified as complete graphs.
 
-完整身份得到认证后，独立源码集合和数据库成员支持准备改名与版本化工作区编辑，只更新该身份的声明和引用。新名称须在全部相关数字分区中没有主键、别名或源码声明冲突，也不能捕获已有请求、集合成员或数据库关系；互不相交的数字分区可保留同名声明。静态命名、重复输入、未保存消费者及引号值整组编辑沿用相同校验。
+After the complete identity is authenticated, independent source code collections and database members support preparation for renaming and versioned workspace editing, updating only claims and references for that identity. The new name must have no primary key, alias, or source code declaration conflicts in all related numeric partitions, nor must it capture existing requests, collection members, or database relationships; disjoint numeric partitions can retain declarations of the same name. Static naming, repeated input, unsaved consumers, and entire set of quoted values use the same validation.
 
-涉及 `crossref`／`xref` 的源码集合在双重依赖得到认证后支持完整改名：同名数据库父键必须唯一，原始库的全部消费者及每个相关数字分区都必须由同一集合覆盖，编辑同时更新集合、引用、关系值与隐含父条目主键。独立书籍消费者、其他集合身份、未知消费者及 `xdata`／`related`／`entryset` 关系继续拒绝。早请求锁定书籍后未使用的源码声明也不改名，避免使 Biber 新增集合及成员；`nocite{*}` 下覆盖同名数据库条目的集合不改名，避免暴露原先被覆盖的书籍。被活动集合覆盖的数据库主键同样不进行部分编辑。
+Source code collections involving `crossref`/`xref` support complete renaming after the dual dependencies are certified: the database parent key of the same name must be unique, all consumers of the original library and each related numeric partition must be covered by the same collection, and the editor updates the collection, reference, relationship value and implicit parent entry primary key at the same time. Independent book consumers, other collective identities, unknown consumers and `xdata`/`related`/`entryset` relationships continue to be rejected. Unused source code statements after locking books with early requests will not be renamed to avoid adding new collections and members to Biber; collections covering database entries with the same name under `nocite{*}` will not be renamed to avoid exposing previously covered books. Database primary keys covered by active collections are also not partially edited.
 
-TeX 引用和集合成员补全按实际输入位置及全部消费者认证候选，保留元数据搜索、完整后缀替换、Unicode、静态命名及当前未闭合字面值。接受较早的引用候选可能把该名称锁定为书籍，补全显示的是接受后实际使用的书籍或集合元数据；同一物理引用的重复执行也采用首次请求身份。仅有源码声明的集合可作为 TeX 引用候选，集合成员不建议其他源码集合，避免形成未支持的嵌套关系。候选在不同数字分区或共享消费者中绑定冲突时排除该名称，仍保留身份一致的公共条目；未保存提供文件和新消费者立即刷新结果，达到配置上限时报告未完整列表。
+TeX quotation and set member completion is based on the actual input position and all consumer authentication candidates, preserving metadata search, full suffix substitution, Unicode, static naming and currently unclosed literals. Accepting an earlier citation candidate may lock the name as a book, with completion showing the book or collection metadata actually used after acceptance; repeated executions of the same physical citation also assume the first request identity. Only collections declared by source code can be used as TeX reference candidates. Collection members do not recommend other source code collections to avoid forming unsupported nested relationships. Candidates exclude the name when there is a binding conflict in different number partitions or shared consumers, and still retain public entries with consistent identities; unsaved provision files and new consumers refresh the results immediately, and report an incomplete list when the configuration limit is reached.
 
-可认证源码集合项目的 TeX 引用和活动集合成员支持缺失引用警告与拼写修复；全部数字执行及已保存、未保存消费者必须一致。早期源码-only 请求即使随后定义同名集合仍缺失，已有数据库书籍则保留书籍身份。未被早期请求压制的集合会处理成员，即使尚未显式引用；被压制声明的成员不误报警告。修复按接受编辑后的请求位置认证源码集合及数据库候选，不受补全数量上限影响，编译器确认的引用警告沿用相同过滤并避免重复报告。
+TeX citations and active collection members of certifiable source code collection projects support missing reference warnings and spelling fixes; all digital executions and saved and unsaved consumers must be consistent. Early source-only requests are missing even if a collection with the same name is subsequently defined, and existing database books retain book identity. Collections that have not been suppressed by earlier requests have members processed even if they have not been explicitly referenced; members that are suppressed by declarations do not falsely raise warnings. Fixed the problem of authenticating source code collections and database candidates according to the requested location after accepting edits, which is not affected by the upper limit on the number of completions. Reference warnings confirmed by the compiler continue to use the same filtering and avoid repeated reporting.
 
-可认证的源码集合项目支持互不相交的静态 IDS：别名及其所属主键均须唯一，且不与任一已跟踪的源码集合名称相交。完整字面 IDS 列表通过全部已加载资源核验后，集合、成员、别名和数据库关系支持精确导航、独立改名、补全及缺失引用修复；别名预览附带所属主键的元数据，XDATA 别名继续按所属类型过滤。未保存的提供文件和新消费者参与认证，关闭后恢复磁盘上下文。非字面、重复、不完整或有冲突的 IDS、`@set` 所属别名以及别名名称与集合名称交叉的情况继续保护；不会因未生成静态别名就把 `ids=宏名` 当成安全命名空间。
+Certifiable source code collection projects support disjoint static IDS: the alias and its associated primary key must be unique and not intersect with any tracked source code collection name. After the complete literal IDS list has been verified by all loaded resources, collections, members, aliases and database relationships support precise navigation, independent renaming, completion and missing reference repair; alias previews are accompanied by metadata of their primary keys, and XDATA aliases continue to be filtered by their type. Unsaved provision files and new consumers participate in authentication and restore disk context after shutdown. Non-literal, duplicate, incomplete or conflicting IDS, aliases to which `@set` belongs, and cases where alias names intersect with collection names continue to be protected; `ids=macro name` will not be regarded as a safe namespace just because a static alias is not generated.
 
-唯一静态 IDS 的所属主键被源码集合覆盖时，普通完整项目与显式资源分区均支持只读定义跳转及悬停。引用别名仍跳转到 IDS 声明，预览显示所属关系，避免展示已被集合覆盖的原书籍信息；早期别名请求不会像早期主键请求那样锁定书籍身份。完整引用查找、高亮、别名自身改名及缺失键诊断共用全部消费者的完整身份图；引用键候选预览所属关系；候选字段另外验证实际加载后的类型，避免把别名间接用作动态集合成员。源码所属主键改名同时移动唯一数据库主键，即使没有关系字段直接引用该主键；全部原始库消费者和数字分区必须一致绑定当前集合。早期主键请求或独立书籍消费者继续拒绝这类改名。把别名间接用作另一个动态集合的成员、别名名称本身与集合相交，以及相交的 XDATA／`@set` 所属键继续保护。
+When the primary key of a unique static IDS is covered by the source code collection, both ordinary complete projects and explicit resource partitions support read-only definition jump and hover. Reference aliases still jump to the IDS statement, and the preview shows the ownership relationship to avoid displaying the original book information that has been overwritten by the collection; early alias requests will not lock the book identity like early primary key requests. Full reference search, highlighting, alias self-renaming, and missing key diagnostics share the complete identity graph of all consumers; reference key candidate preview affiliations; candidate fields also verify the actual loaded type to avoid indirect use of aliases as dynamic collection members. The primary key to which the source code belongs is renamed and the unique database primary key is moved at the same time, even if there is no relationship field directly referencing the primary key; all original database consumers and digital partitions must be bound to the current collection consistently. Early primary key requests or independent book consumers continue to reject such name changes. Use of an alias indirectly as a member of another dynamic collection, intersection of the alias name itself with the collection, and continued protection of the intersecting XDATA/`@set` owning key.
 
-完整普通项目也按执行顺序认证源码集合，无须使用 refsection 或切换资源。早期请求锁定数据库书籍或缺失身份，晚期请求绑定已声明集合；导航、补全、引用图、缺失诊断和改名使用同一规则，输入文件及未保存消费者参与认证。只有前言、尚无文档正文的片段保留原有编辑行为。移走早期书籍键可能激活被压制的同名集合并新增成员，因此这种准备改名和改名会拒绝。无法解析的命名调用也视为潜在源码声明，不回退同名数据库并集；字面示例和不相关的静态调用保持既有行为。
+Complete normal projects also certify source code collections in order of execution, without using refsection or switching resources. Early requests lock database books or missing identities, and late requests bind declared collections; navigation, completion, reference maps, missing diagnostics and renaming use the same rules, and input files and unsaved consumers participate in authentication. Only the preface and no document body fragments retain the original editing behavior. Removing an earlier book key may activate a suppressed collection of the same name and add new members, so such preparations and renames will be rejected. Unresolvable named calls are also treated as potential source declarations and do not fall back on database unions with the same name; literal examples and unrelated static calls retain the existing behavior.
 
-动态或延迟执行、同一数字分区中不同位置的同名集合声明、嵌套集合、含未认证 IDS、可执行 `@preamble` 或条目 `execute` 字段的资源、手写 `bibitem`、未认证的数据查询以及分析不完整时不猜测目标；显式早引用与通配加载混用的情况也暂不认证。数据库声明自身仍可查看，资源标签及字面示例保持独立处理。数据库 `@preamble` 及条目 `execute` 字段可通过生成的 BBL 注入集合。包含这些记录的 biblatex 项目会撤下数据库模型的引用身份认证、键候选和完整键改名，即使没有显式引用分区或源码集合声明；静态命名、纯转发包加载及传统 `bibliography` 资源声明同样纳入认证。同时抑制无法证明的缺失文献诊断。数据库声明自身仍可查看，传统 BibTeX、独立数据库草稿和无关项目保持原有行为。未保存数据库的新增、移除及关闭均重新认证。
+Dynamic or deferred execution, collection declarations with the same name in different locations in the same number partition, nested collections, resources with uncertified IDS, executable `@preamble` or entry `execute` fields, handwritten `bibitem`, unauthenticated data queries and not guessing the target when the analysis is incomplete; the mixing of explicit early references and wildcard loading is also not certified for the time being. The database declaration itself can still be viewed, and resource tags and literal examples remain processed independently. The database `@preamble` and entry `execute` fields can be injected into the collection via the generated BBL. A biblatex project containing these records will remove reference authentication, key candidates, and full key renaming from database models even without explicit reference partition or source collection declarations; static naming, pure forward package loading, and legacy `bibliography` resource declarations are also included in the authentication. Also suppress unproven missing documentation diagnoses. The database declaration itself can still be viewed, and legacy BibTeX, standalone database drafts, and unrelated projects retain their original behavior. The addition, removal and closing of unsaved databases are all re-certified.
 
-文献键允许字面双引号，例如 `@misc{O"Connor}` 与 `\cite{O"Connor}`。普通引用、natbib 别名、biblatex 多组/卷号/数据引用、分类分配及手写文献共用这一规则，支持完整键的导航、补全、语义高亮、重命名和缺失引用修复。补全或重命名把带双引号的键写入双引号字段时，会把整个值转为花括号，例如 `crossref="old"` 改为 `crossref={O"Connor}`；保留列表其他成员、空白和字段外注释，同一列表的多处重命名合并为一个编辑。多行字段补全使用请求行上的主编辑和互不重叠的附加编辑，保留原有换行。含宏、嵌套分组、语义空白或由注释拼接的键仍不作推断。
+Citation keys allow literal double quotes, such as `@misc{O"Connor}` and `\cite{O"Connor}`. Common citations, natbib aliases, biblatex multi-group/volume/data citations, classification assignments and handwritten documents share this rule, supporting full key navigation, completion, semantic highlighting, renaming and missing citation repair. When completing or renaming a double-quoted key into a double-quoted field, the entire value will be converted into curly braces, for example, `crossref="old"` is changed to `crossref={O"Connor}`; other members of the list, blanks, and comments outside the field will be retained, and multiple renames in the same list will be merged into one edit. Multi-line field completion uses the main edit and non-overlapping additional edits on the request line, preserving original line breaks. Keys containing macros, nested groupings, semantic gaps, or spliced by comments are still not inferred.
 
-BibTeX 编译报告无效 `crossref` 时，错误定位到子条目的字面字段值，并链接实际读取数据库中的父条目。相关位置会提示前置且未显式引用的父条目可能被 BibTeX 跳过，详见 [crossref 编译诊断](bibliography-diagnostics.md#无效的-crossref)。
+When BibTeX compilation reports invalid `crossref`, the error is localized to the literal field value of the child entry, and the link actually reads the parent entry in the database. Relevant locations will prompt that parent entries that are preceded and not explicitly referenced may be skipped by BibTeX. For details, see [crossref compilation diagnostics](bibliography-diagnostics.md#invalid-crossref).
 
-编译器报告嵌套 `crossref` 时，警告同样定位到字段值，并链接引用链中的父条目。自引用和循环保持编译器的警告级别，缺失上级条目的错误单独显示；详见[嵌套引用诊断](bibliography-diagnostics.md#嵌套的-crossref)。
+When the compiler reports nested `crossref`, the warning also targets the field value and links to the parent entry in the reference chain. Self-references and loops maintain the compiler's warning level, and errors with missing parent entries are displayed separately; see [Nested Reference Diagnostics](bibliography-diagnostics.md#nested-crossref) for details.
 
-Biber 报告普通或 XDATA 循环继承时，诊断关联所报告的两个条目，并在可确认时标记具体 `crossref` 目标；详见[循环继承诊断](bibliography-diagnostics.md#biber-循环继承)。
+When Biber reports an ordinary or XDATA inheritance cycle, diagnostics link the two reported entries and, where it can be confirmed, mark the specific `crossref` target. See [inheritance cycle diagnostics](bibliography-diagnostics.md#biber-circular-inheritance).
 
-Biber 报告集合中多余的 `crossref`、成员中多余的 `entryset` 或集合缺少 `entryset` 时，诊断分别定位到原始字段名或条目键；详见[文献集合诊断](bibliography-diagnostics.md#biber-文献集合)。
+When Biber reports excess `crossref` in a collection, excess `entryset` in a member, or missing `entryset` in a collection, the diagnostics is located at the original field name or entry key respectively; see [Document Collection Diagnostics](bibliography-diagnostics.md#biber-bibliography-entry-sets) for details.
 
-共享文献库的重命名覆盖使用它的各个主文档；其他项目中的同名条目保持独立。存在定义歧义、名称冲突或共享引用含义不一致时拒绝编辑。支持版本化工作区编辑；具体规则见[符号与重命名](symbols.md)。
+Renaming a shared library covers every root document that uses it; entries with the same name in other projects remain independent. Reject edits if there is definition ambiguity, name conflict, or shared reference meaning inconsistency. Supports versioned workspace editing; see [Symbols and Renaming](symbols.md) for specific rules.
 
-## 字符串缩写
+## String abbreviations
 
-`@string` 声明及字段值、其他字符串声明和 `@preamble` 中的缩写引用支持补全、定义跳转、悬停、引用查找、高亮与跨文件重命名。名称按 BibTeX 规则比较，ASCII 大小写不敏感；文献键继续区分大小写，两个命名空间互不影响。
+`@string` declarations and field values, other string declarations, and abbreviated references in `@preamble` support completion, definition jump, hover, reference lookup, highlighting, and cross-file renaming. Names are compared according to BibTeX rules, and ASCII is not case-sensitive; citation keys continue to be case-sensitive, and the two namespaces do not affect each other.
 
 ```bibtex
 @string{Journal = {Journal of Examples}}
@@ -141,15 +141,15 @@ Biber 报告集合中多余的 `crossref`、成员中多余的 `entryset` 或集
 }
 ```
 
-在 `publisher = JO` 中选择 `Journal` 会替换完整缩写名，也支持 `=` 后和 `#` 后的空值位置。候选采用纯文本，保留拼接符号、字面值、注释和换行。常见的 `jan` 至 `dec` 提供补全及月份说明；实际展开由文献样式决定。
+Selecting `Journal` in `publisher = JO` will replace the full abbreviation name, and also supports the null value position after `=` and `#`. Candidates are in plain text, preserving splice symbols, literal values, comments, and line breaks. Common `jan` to `dec` provide completion and month description; the actual expansion is determined by the document style.
 
-声明显示为常量文档符号，声明和裸引用均提供变量语义高亮。悬停预览原始赋值表达式并限制长度，不执行字符串展开。数字、花括号和双引号内的文本、注释及 `@comment` 正文不会被当作缩写引用；两种条目定界符、UTF-16、CRLF、未完成表达式和未保存编辑均使用同一索引。
+Declarations appear as constant documentation symbols, and variable semantic highlighting is provided for both declarations and bare references. Hover preview of the original assignment expression and limit the length, no string expansion is performed. Numbers, text within curly braces and double quotes, comments, and the body of `@comment` are not referenced as abbreviations; both entry delimiters, UTF-16, CRLF, unfinished expressions, and unsaved edits use the same index.
 
-重命名复用项目隔离和共享文献库的检查，支持版本化编辑及只改变名称大小写。多个大小写等价声明、共享引用在其他论文中指向不同或缺失定义，以及新名称会捕获已有引用时，拒绝修改。月份名作为常用缩写保留，不提供重命名。编辑导航不解析 `.bst` 中的宏定义或推断跨数据库执行顺序；无法解析的多 token 表达式不生成缩写引用。
+Rename reuse project isolation and shared library check, support version editing and only change the name case. Modifications are rejected when there are multiple case equivalence declarations, when shared references point to different or missing definitions in other papers, and when the new name would capture an existing citation. Month names are reserved as common abbreviations and do not offer renaming. Edit Navigation does not parse macro definitions in `.bst` or infer cross-database execution order; unresolved multi-token expressions do not generate abbreviated references.
 
-编译发现未定义缩写时，提供精确警告及最多 5 个拼写建议；修复按日志中的数据库读取顺序，只建议此前已生效的有效声明。输入变化或定位有歧义时不提供编辑，详见[未定义字符串缩写诊断](bibliography-diagnostics.md#未定义字符串缩写)。
+When an undefined abbreviation is found during compilation, a precise warning and up to 5 spelling suggestions are provided; the database reading order in the log is fixed, and only valid statements that have been in effect before are suggested. Editing is not provided when the input changes or the positioning is ambiguous. For details, see [Undefined String Abbreviation Diagnostics](bibliography-diagnostics.md#undefined-string-abbreviation).
 
-验证：
+verify:
 
 ```sh
 cargo test --locked --test bibliography_strings --test semantic
@@ -157,11 +157,11 @@ cargo test --locked --test protocol bibliography_abbreviations_
 cargo test --locked --test bibliography_strings real_bibtex -- --include-ignored
 ```
 
-真实 BibTeX 回归比较重命名前后 `.bbl` 的完整内容，覆盖跨数据库拼接、数字、大小写和 preamble；另以自定义样式验证自引用的重命名保留原有结果。
+Real BibTeX regression compares the complete content of `.bbl` before and after renaming, covering cross-database splicing, numbers, case and preamble; a custom style is used to verify that self-referential renaming retains the original results.
 
-## URL 与 DOI 链接
+## URL and DOI links
 
-BibTeX 的 `url` 和 `doi` 字段提供标准文档链接，编辑器可直接打开目标；已确认的链接值同时提供字符串语义高亮。支持大小写不敏感的字段名、花括号或双引号值，以及两种条目定界符。
+BibTeX's `url` and `doi` fields provide standard document links, and the editor can directly open the target; confirmed link values also provide string semantic highlighting. Supports case-insensitive field names, braced or double-quoted values, and both entry delimiters.
 
 ```bibtex
 @article{example,
@@ -171,43 +171,43 @@ BibTeX 的 `url` 和 `doi` 字段提供标准文档链接，编辑器可直接�
 }
 ```
 
-`url` 支持 `http`、`https`、`mailto`、`ftp` 和 `file` 的绝对 URI。`doi` 支持裸标识符、可选的 `doi:` 前缀，以及 `doi.org` / `dx.doi.org` 的 HTTP(S) 解析网址。裸 DOI 转为 HTTPS 解析链接，只检查名称结构，不联网查询注册状态；数字注册代码可包含分段。
+`url` supports absolute URIs for `http`, `https`, `mailto`, `ftp`, and `file`. `doi` supports naked identifiers, the optional `doi:` prefix, and HTTP(S) parsed URLs for `doi.org` / `dx.doi.org`. The naked DOI is converted to an HTTPS parsing link, which only checks the name structure and does not check the registration status online; the digital registration code can contain segments.
 
-裸 DOI 中的 `#`、`?`、`%` 和 Unicode 按标识符内容编码，例如 `10.1234/a?b#c` 打开 `https://doi.org/10.1234/a%3Fb%23c`，不会把后半段解释为查询或页面片段。包含独立 `.` / `..` 路径段的 DOI 会编码斜线，避免浏览器归一化改变标识符。显式解析网址则保留其 URI 编码、查询参数及片段。
+`#`, `?`, `%` and Unicode in bare DOIs are encoded by identifier content, e.g. `10.1234/a?b#c` opens `https://doi.org/10.1234/a%3Fb%23c` without interpreting the second half as a query or page fragment. DOIs containing separate `.` / `..` path segments will have slashes encoded to prevent browser normalization from changing the identifier. Explicitly parsing a URL preserves its URI encoding, query parameters, and fragments.
 
-链接范围只覆盖值的实际内容，保留分组、引号和外围空白；兼容中文、emoji 和 CRLF。支持 `\_`、`\%`、`\#`、`\&`、`\$` 五种字面转义。动态宏、包装命令、字符串宏、`#` 拼接表达式、嵌套分组和内部空白不生成链接；标题、注释及 `@comment` / `@string` / `@preamble` 中的示例文字不参与链接索引。同一条目中的重复字段不生成该字段的链接，其他字段和条目继续正常工作。
+Link scope covers only the actual content of the value, preserving grouping, quotes, and surrounding whitespace; compatible with Chinese, emoji, and CRLF. Supports five literal escapes: `\_`, `\%`, `\#`, `\&`, and `\$`. Dynamic macros, packaging commands, string macros, `#` splicing expressions, nested grouping and internal whitespace do not generate links; titles, comments and sample text in `@comment` / `@string` / `@preamble` do not participate in the link index. Duplicate fields in the same entry do not generate links to that field, other fields and entries continue to work normally.
 
-只有闭合的字段值生成链接；编辑尚未闭合的条目时，已完成的字段仍可打开。独立或共享文献库均无需选定根文档，也无需编译。未保存的增量编辑立即更新链接和高亮；关闭缓冲区及磁盘文件变化后使用当前内容。
+Only closed field values generate links; completed fields can still be opened when editing an entry that has not yet been closed. Neither standalone nor shared libraries require a root document to be selected and no compilation required. Unsaved incremental edits update links and highlights immediately; close buffers and use the current content after disk file changes.
 
-验证命令：
+Verify command:
 
 ```sh
 cargo test --locked --test bibliography_links --test semantic --test navigation
 cargo test --locked --test protocol bibliography_links_
 ```
 
-XDATA 候选类型及原生继承回归：
+XDATA candidate types and native inheritance return:
 
 ```sh
 cargo test --locked --test bibliography_xdata_completion -- --include-ignored
 cargo test --locked --test protocol xdata_relation_completions_
 ```
 
-源码集合中的独立 IDS 回归：
+Standalone IDS regression in source code collection:
 
 ```sh
 cargo test --locked --test biblatex_source_aliases -- --include-ignored
 cargo test --locked --test protocol source_set_disjoint_aliases_
 ```
 
-普通完整项目的执行身份回归：
+Execution identity return of ordinary complete projects:
 
 ```sh
 cargo test --locked --test biblatex_source_projects -- --include-ignored
 cargo test --locked --test protocol source_set_default_
 ```
 
-源码覆盖 IDS 所属主键的只读身份回归：
+The read-only identity of the primary key to which the source code covers the IDS returns:
 
 ```sh
 cargo test --locked --test biblatex_source_alias_owners
@@ -215,14 +215,14 @@ cargo test --locked --test biblatex_source_alias_owners -- --include-ignored
 cargo test --locked --test protocol source_overridden_ids_owners_
 ```
 
-相交 IDS 的完整别名引用与改名回归：
+Full alias reference and rename regression for intersecting IDS:
 
 ```sh
 cargo test --locked --test biblatex_source_alias_references -- --include-ignored
 cargo test --locked --test protocol intersecting_ids_alias_edits_
 ```
 
-源码 IDS 所属主键的耦合编辑及候选认证回归：
+Coupled editing and candidate authentication regression of the primary key of the source code IDS:
 
 ```sh
 cargo test --locked --test biblatex_source_alias_owner_edits --test biblatex_source_alias_candidates -- --include-ignored
@@ -230,7 +230,7 @@ cargo test --locked --test protocol intersecting_ids_source_owner_
 cargo test --locked --test protocol intersecting_ids_owner_candidates_
 ```
 
-Biber 跨数字分区的全局 IDS 缓存回归：
+Biber global IDS cache regression across digital partitions:
 
 ```sh
 cargo test --locked --test biblatex_alias_loading
@@ -238,138 +238,138 @@ cargo test --locked --test biblatex_alias_loading -- --include-ignored
 cargo test --locked --test protocol global_biber_alias_loading_
 ```
 
-原生测试既核验缓存导入，也验证新别名捕获以及新主键删除旧别名映射的反例；需安装 pdfLaTeX、biblatex 和 Biber。
+Native tests verify both cached imports and new alias capture as well as counterexamples of new primary keys deleting old alias mappings; requires pdfLaTeX, biblatex, and Biber to be installed.
 
 
-数字分区首次加载及 IDS 条目缓存回归：
+Digital partition first load and IDS entry cache regression:
 
 ```sh
 cargo test --locked --test biblatex_alias_owner_cache -- --include-ignored
 cargo test --locked --test protocol cached_alias_owner_proofs_
 ```
 
-同名 IDS 的数字分区只读身份回归：
+Return of digital partition read-only identity for the IDS of the same name:
 
 ```sh
 cargo test --locked --test biblatex_numeric_alias_owners -- --include-ignored
 cargo test --locked --test protocol numeric_ids_source_owners_
 ```
 
-原生测试对照默认库书籍和选中库源码集合，并核验接受候选后的 BBL；所属主键编辑继续保护；下一阶段的独立别名编辑另有原生对照。
+The native test compares the default library book and the selected library source code collection, and verifies the BBL after accepting the candidate; the primary key editor continues to be protected; the independent alias editor in the next stage also has native controls.
 
-跨分区别名自身安全编辑回归：
+Cross-partition alias self-safe editing regression:
 
 ```sh
 cargo test --locked --test biblatex_numeric_alias_edits -- --include-ignored
 cargo test --locked --test protocol numeric_ids_alias_edits_
 ```
 
-原生测试比较两个分区改名前后的完整 BBL，归一化改变的别名后要求一致；协议核验两种编辑格式、全部受影响文件的版本、未保存缓存导入及关闭恢复。
+The native test compares the complete BBL of the two partitions before and after the name change, and the requirements are consistent after normalizing the changed aliases; the protocol verifies the two editing formats, versions of all affected files, unsaved cache import and shutdown recovery.
 
-主键改名后的 IDS 全局条目缓存回归：
+IDS global entry cache regression after primary key rename:
 
 ```sh
 cargo test --locked --test biblatex_primary_cache_rename -- --include-ignored
 cargo test --locked --test protocol primary_cache_capture_renames_
 ```
 
-原生测试核验两种强制错误改名都会在没有 Biber 警告时改变后续条目数据，也核验接受的安全同名改名保持 BBL；协议覆盖版本化编辑、未保存数据库、关闭恢复和耦合源码主键。
+Native testing verifies that both forced error renames will change subsequent entry data without Biber warnings, and also verifies that accepted safe renames maintain BBL; the protocol covers versioned edits, unsaved databases, shutdown recovery, and coupled source primary keys.
 
-非加载型文献键的分区交互回归：
+Partition interaction regression for non-loading citation keys:
 
 ```sh
 cargo test --locked --test biblatex_nonloading_section_keys -- --include-ignored
 cargo test --locked --test protocol numeric_nonloading_keys_
 ```
 
-覆盖普通与静态命名调用的完整引用及版本化编辑、未定义名称捕获、被覆盖的缓存所属关系和条件查询保护。原生验证非加载调用不会预读资源，并比较应用改名后的完整 BBL。
+Covers full reference and versioned editing for normal and static named calls, undefined name capture, overridden cache ownership, and conditional query protection. The native verification non-loading call does not pre-read resources and compares the complete BBL after the application is renamed.
 
-IDS 名称与源码集合同名的只读身份回归：
+The read-only identity with the same IDS name as the source code collection returns:
 
 ```sh
 cargo test --locked --test biblatex_source_named_aliases -- --include-ignored
 cargo test --locked --test protocol source_named_ids_reads_
 ```
 
-原生覆盖默认／所选分区的早晚请求、同时存在所属主键与别名名称的两个集合、另一个别名及独立集合成员。协议验证精确引用、拒绝相交改名、未保存静态／字符串／拼接关系撤销认证和关闭恢复。原生反例确认关系宏展开也会在无警告时抑制集合。
+Native override of the default/selected partition's early and late requests, the existence of two collections with their own primary key and alias name, another alias and independent collection members. The protocol verifies precise references, rejects intersection renames, unsaved static/string/splicing relationship revocation authentication and shutdown recovery. Native counterexample confirmation relation macro expansion also suppresses collections without warning.
 
-共享 IDS 所属主键的耦合改名回归：
+Coupled rename regression of the primary key to which the shared IDS belongs:
 
 ```sh
 cargo test --locked --test biblatex_shared_alias_owner_rename -- --include-ignored
 cargo test --locked --test protocol coupled_raw_ids_owners_
 ```
 
-测试核验两个分区的完整 BBL 在改名归一化后一致、三个库经多个别名关联时的完整编辑、独立项目隔离及未保存消费者。协议精确验证两种工作区编辑格式、六处编辑、三个文件的版本与关闭恢复；普通引用结果仍只包含各自声明身份。
+The test verifies that the complete BBL of the two partitions is consistent after name change and normalization, complete editing of the three libraries when multiple aliases are associated, independent project isolation and unsaved consumers. The protocol accurately verifies two workspace edit formats, six edits, three file versions, and close recovery; common citation results still only contain their respective claimed identities.
 
-手写文献与 biblatex 后台命名空间回归：
+Manual bibliographies and biblatex backend namespace regression:
 
 ```sh
 cargo test --locked --test biblatex_manual_namespace -- --include-ignored
 cargo test --locked --test protocol handwritten_items_keep_biblatex_
 ```
 
-覆盖普通项目、数字分区、静态命名条目、完整数据库改名、候选及缺失诊断、未保存输入与关闭恢复。原生对照核验改名前后完整 BBL 一致，手写条目的 `bibcite` 保持不动；协议精确验证两种编辑格式、版本、UTF-16 位置及传统辅助记录不会误用于后台引用提示。
+Covers normal projects, numeric partitions, static named entries, complete database renaming, candidate and missing diagnostics, unsaved input and shutdown recovery. The native comparison verifies that the complete BBL is consistent before and after the name change, and the `bibcite` of the handwritten entry remains unchanged; the protocol accurately verifies that the two editing formats, versions, UTF-16 positions, and traditional auxiliary records will not be mistakenly used for background reference prompts.
 
-源码集合中的纯文本谓词查询支持 `ifentryinbib`／`ifentrycategory`（含静态命名调用）：按每个数字分区最终真实请求和声明解析身份，保留导航、完整引用和改名，但不预读数据库或发送 Biber 请求。集合声明自身可使集合加载，因此不要求存在显式引用。查询缺失键不产生引用警告；真正缺失的引用与集合成员仍检查。
+Plain text predicate query support in source code collections `ifentryinbib`/`ifentrycategory` (with static named calls): resolves identity by final real request and claim per numeric partition, preserving navigation, full referencing and renaming, but does not pre-read the database or send Biber requests. The collection declaration itself enables the collection to be loaded, so no explicit reference is required. Querying for missing keys does not generate reference warnings; truly missing references and set members are still checked.
 
-共享查询的所有执行上下文必须绑定同一身份；重定义、可执行／动态分支、IDS 交叉语义和未经认证的内部命令执行上下文继续保护。谓词键补全按最终分区命名空间认证候选，普通引用和集合成员仍按实际请求位置计算。
+All execution contexts of a shared query must be bound to the same identity; redefinition, executable/dynamic branching, IDS cross semantics, and unauthenticated internal command execution contexts continue to be protected. Predicate key completion authenticates candidates against the final partition namespace, ordinary references and collection members are still calculated against the actual requested position.
 
 ```sh
 cargo test --locked --test biblatex_source_textual_queries -- --include-ignored
 cargo test --locked --test protocol source_textual_predicates_
 ```
 
-直接且未重定义的 `mkbibparens`、`mkbibbrackets`、`parentext` 和 `brackettext` 会初始化 biblatex 内部命令，也支持以静态 `\csuse{名称}`／`\csname 名称\endcsname` 调用这些包装。在这些包装的完整分组参数内，纯文本代码体的 `entrydata`／`entrydata*` 支持源码集合的导航、悬停、补全、引用及完整改名，包括静态命名的 `entrydata` 调用。键按最终分区身份认证，查询不提前加载数据库书籍；早期真实引用仍保留书籍身份。包装自身也提供 `{text}` 签名，内部普通标签引用可以交互。
+Direct and non-redefined `mkbibparens`, `mkbibbrackets`, `parentext` and `brackettext` initialize biblatex internal commands, also supporting calling these wrappers with static `\csuse{name}`/`\csname name\endcsname`. Within the complete grouping parameters of these wrappers, `entrydata`/`entrydata*` of plain text code bodies support navigation, hover, completion, referencing and full renaming of source code collections, including statically named `entrydata` calls. The key is authenticated according to the final partition identity, and the query does not load the database book in advance; early real references still retain the book identity. The package itself also provides the `{text}` signature, and internal common tag references can be interacted with.
 
-前言中已执行的全局零参数纯转发同样支持这些查询，例如 `\def\wrap{\mkbibparens}` 后的 `\wrap{\entrydata{key}{Text}}`，也支持静态命名调用、多级转发和从前言输入文件加载声明。调用时转发链的每个声明都必须已经执行，目标须保持原生含义；`newcommand` 和空参数签名的 `NewDocumentCommand` 等声明沿用相同认证。未保存声明变化及关闭后恢复会立即重新计算。
+The global zero-argument pure forwarding already implemented in the preamble also supports these queries, such as `\wrap{\entrydata{key}{Text}}` after `\def\wrap{\mkbibparens}`, as well as static named calls, multi-level forwarding, and loading statements from the preamble input file. Each claim in the forwarding chain must have been executed when called, and the target must maintain its native meaning; claims such as `newcommand` and `NewDocumentCommand` signed with empty parameters continue to use the same authentication. Unsaved statement changes and recovery after closing are immediately recalculated.
 
-普通正文直接调用、包装之外的代码、复制包装、未执行或局部的转发声明、进入正文后才声明的包装、动态名称、命名接口或包装的重定义、不完整参数和可执行代码体继续保护。`parentext`／`brackettext` 转发的底层 `mkbibparens`／`mkbibbrackets` 被重定义时，同样撤下原生参数执行及初始化认证，保留另一种独立包装。数据库 `execute`／`@preamble`、共享消费者身份和新名称捕获沿用完整认证。
+Direct calls from ordinary text, code outside of packages, copied packages, unexecuted or partial forward declarations, packages declared after entering the text, dynamic names, redefinition of named interfaces or packages, incomplete parameters and executable code bodies continue to be protected. When the underlying `mkbibparens`/`mkbibbrackets` forwarded by `parentext`/`brackettext` is redefined, the native parameter execution and initialization authentication are also removed, and another independent packaging is retained. Database `execute`/`@preamble`, shared consumer identity and new name capture inherit full authentication.
 
-包装还依赖原生括号输出命令。项目重定义对应的 `bibopenparen`／`bibcloseparen`、`bibopenbracket`／`bibclosebracket`，或 `bibleftparen`、`bibrightparen`、`bibleftbracket`、`bibrightbracket` 时，会撤下相关包装及其转发调用的原生文本执行和初始化认证。这些输出命令可能把正文中的第一个命令当作参数消费，留下同名显示文字；导航、补全和改名会保护这些文字。嵌套包装会交替使用两种括号，因此更改一种输出也可能影响另一种包装的认证。移除重定义后恢复原有交互。
+The wrapper also relies on native bracket output commands. Project redefinition corresponding to `bibopenparen`/`bibcloseparen`, `bibopenbracket`/`bibclosebracket`, or `bibleftparen`, `bibrightparen`, `bibleftbracket`, `bibrightbracket` , the native text execution and initialization authentication of the relevant packaging and forwarding calls will be removed. These output commands may consume the first command in the text as a parameter, leaving display text with the same name; navigation, completion, and renaming will protect these text. Nested packages use both brackets interchangeably, so changing the output of one may also affect the authentication of another package. Restore the original interaction after removing the redefinition.
 
-`mkbibfootnote{text}` 和 `mkbibfootnotetext{text}` 提供命令片段、参数提示与正文标签交互。默认 `notetype=foot+end` 及显式 `footonly` 中，原生脚注会即时初始化文献命令；完整参数内的纯文本 `entrydata`／`entrydata*` 支持同样的最终集合查询、补全及完整改名，包括静态命名调用和前言中已执行的纯转发。它们不读取可选脚注编号。
+`mkbibfootnote{text}` and `mkbibfootnotetext{text}` provide command snippets, signature help and text label interaction. In default `notetype=foot+end` and explicit `footonly`, native footnotes will initialize the bibliographic command on the fly; plain text `entrydata`/`entrydata*` within full parameters supports the same final set query, completion and full rename, including static naming calls and pure forwarding performed in the preface. They do not read optional footnote numbers.
 
-脚注初始化同时依赖脚注原语、`protecting`、`blxmkbibnote`、`bibfootnotewrapper`、`bibsentence` 及原生底层排版命令。相关重定义可能丢弃查询或仅吞掉命令、留下显示文字；不能据此提供文献键编辑。`ExecuteBibliographyOptions[entry types]{options}` 同时提供原生参数提示和命令片段。模式认证检查完整源码闭包中的加载选项、`PassOptionsToPackage`／`PassOptionsToClass` 与 `ExecuteBibliographyOptions`，只接受确定保持即时脚注、键名不含内部空白或分组的字面选项。`endonly`、动态选项、直接修改内部模式计数器或无法确认的依赖继续保护，不模拟尾注实际展开的位置。移除未保存的重定义或模式修改后恢复交互。
+Footnote initialization also relies on footnote primitives, `protecting`, `blxmkbibnote`, `bibfootnotewrapper`, `bibsentence` and native underlying typesetting commands. Relevant redefinitions may discard the query or simply swallow the command, leaving the display text behind; no citation key editing can be provided accordingly. `ExecuteBibliographyOptions[entry types]{options}` provides both native signature help and command snippets. Schema authentication checks the load options in the full source closure, `PassOptionsToPackage`/`PassOptionsToClass` and `ExecuteBibliographyOptions`, and only accepts literal options that are sure to preserve live footnotes and key names without internal whitespace or grouping. `endonly`, dynamic options, direct modification of internal mode counters or unconfirmed dependency continuation protection do not simulate the actual expansion position of the endnote. Restore interaction after removing unsaved redefinitions or schema modifications.
 
-脚注代码在其他立即执行分析中保留延迟边界；文献查询跟踪仅在独立认证后启用即时参数。代码中潜在的字符串判断重定义沿用钩子的持续保护，防止尾注后来展开后返回不完整的宏改名。正文内的可执行文献代码仍按原有边界认证，普通文本与静态结构引用继续保留。
+Footnote code preserves latency bounds in otherwise immediate execution analyses; literature query tracking enables immediate parameters only after independent certification. Potential string judgment redefinition in the code is continuously protected by hooks to prevent endnotes from returning incomplete macro renames after subsequent expansion. The executable document code within the text is still authenticated according to the original boundaries, and ordinary text and static structure references continue to be retained.
 
 ```sh
 cargo test --locked --test biblatex_source_entrydata -- --include-ignored
 cargo test --locked --test protocol initialized_entrydata_
 ```
 
-原生测试实际应用 LSP 返回的改名和补全编辑，比较四种包装的普通／星号调用在集合声明前查询时的完整 BBL，确认不会额外加载原数据库书籍。协议核验两种编辑格式、UTF-16／CRLF、主文件及共享查询的范围和版本、未保存重定义与执行代码、共享新根冲突和关闭恢复。
+The native test actually applies the rename and completion edits returned by the LSP, compares the complete BBL of the four packaged normal/asterisk calls when querying before the collection declaration, and confirms that no additional original database books are loaded. The protocol verifies both edit formats, UTF-16/CRLF, ranges and versions of master files and shared queries, unsaved redefinition and execution code, shared new root conflicts, and shutdown recovery.
 
-项目包含独立源码集合时，分属不同数字分区且共享 IDS 的真实数据库所属主键可以耦合改名：按实际资源分配检查冲突，完整收集经别名相连的所有所属条目及其引用。集合成员、通配加载和跨库关系继续参与检查；源码集合遮蔽所属主键、相交的别名、不同所属主键、未认证消费者或新名称捕获仍拒绝编辑。同一物理源码集合的多个跨库先决条目认证见下文。
+When the project contains independent source code collections, the primary keys of real databases that belong to different digital partitions and share IDS can be coupled and renamed: conflicts are checked based on actual resource allocation, and all belonging entries and their references connected by aliases are completely collected. Collection members, wildcard loading, and cross-database relationships continue to participate in the check; source code collections that obscure the primary key, intersecting aliases, different primary keys, unauthenticated consumers, or new name capture still refuse to be edited. Authentication of multiple cross-repository prerequisites for the same physical source code set is described below.
 
 ```sh
 cargo test --locked --test biblatex_source_shared_owners -- --include-ignored
 cargo test --locked --test protocol source_shared_raw_owners_
 ```
 
-同一物理源码集合声明在多个分区执行时，支持同时移动各分区的真实先决主键，条目可以部分或全部没有 IDS。每个原始条目的全部消费者都必须采用这同一集合身份，所有关联 IDS 的所属条目都须纳入编辑；先引用 IDS 不会虚构早期主键请求。只读引用仍保留源码身份，改名额外包含必需的数据库头部。最多 64 个先决条目；数据库引用只认证原有的 `crossref/xref` 父条目关系，实际编辑原子地移动所有必需头部及其关系键，保留 IDS 名称。独立书籍消费者、缺失主键、不同物理集合、早期主键请求、通配遮蔽、未认证的缓存返回、跨库缓存新名称及全项目名称捕获继续保护。单个先决条目沿用原有认证。
+When the same physical source code collection declaration is executed in multiple partitions, it is supported to move the real prerequisite primary keys of each partition simultaneously, and the entries can be partially or completely without IDS. All consumers of each original entry must assume this same collective identity, and all associated IDS entries must be included in the edit; referencing the IDS first will not falsify earlier primary key requests. Read-only references retain source code identity and are renamed to additionally include the required database headers. Maximum of 64 prerequisite entries; the database reference only authenticates the original `crossref/xref` parent entry relationship, and the actual edit atomically moves all required headers and their relationship keys, preserving the IDS name. Independent book consumers, missing primary keys, different physical collections, early primary key requests, wildcard masking, unauthenticated cache returns, cross-repository cache new names, and full-item name capture continue to protect. Individual prerequisites carry over from the original certification.
 
-后续分区回到已解析的库时，最终源码集合可以替换从全局缓存导入的原始先决条目。显示身份按每个分区的实际集合声明认证；先引用 IDS 本身不会阻止最终集合，但先直接请求真实主键仍保留原始书籍。通配加载、同一分区中的不同物理声明、已被真实键删除的别名和含糊提供者继续保护。完整改名仍要求全部原始消费者采用同一物理集合身份；普通数据库图与新名称缓存模拟沿用原有归属检查，分析仍受 32 MiB 工作预算约束。
+On subsequent partitions back to the parsed library, the final source collection can replace the original prerequisite entries imported from the global cache. Display identities are authenticated against the actual collection claims for each partition; referencing the IDS first does not by itself prevent the final collection, but requesting the real primary key directly first still preserves the original book. Wildcard loads, different physical claims in the same partition, aliases that have been removed by real keys, and ambiguous providers continue to protect. A complete name change still requires that all original consumers adopt the same physical collection identity; the ordinary database graph and the new name cache simulation continue to use the original ownership check, and the analysis is still subject to the 32 MiB work budget.
 
 ```sh
 cargo test --locked --test biblatex_source_prerequisites -- --include-ignored
 cargo test --locked --test protocol source_prerequisite_edits_
 ```
 
-本地数字引用上下文的编译标签支持纯字面 `labelprefix`／`sorting` 和全局 deferred 编号。按 AUX 为键记录的默认上下文联结 BBL 真实前缀；同一键跨打印上下文仍遵循 biblatex 实际默认选择。共享物理引用的所有执行必须得到相同完整标签；无法认证的上下文分配、命名上下文声明、重定义、动态选项和自定义格式继续保护。详见[辅助引用与编号提示](auxiliary-references.md)。
+Compilation tags for local numeric reference contexts support both literal `labelprefix`/`sorting` and global deferred numbers. The default context logged by AUX is bound to the BBL real prefix; across printing contexts for the same key still follows the biblatex real default selection. All executions of a shared physical reference must receive the same complete label; unauthenticated context assignments, naming context declarations, redefinitions, dynamic options, and custom formats continue to be protected. For details, see [Auxiliary Reference and Numbering Tips](auxiliary-references.md).
 
-源码集合项目中的 `ifentryinbib`／`ifentrycategory` 键补全支持直接及静态命名调用：候选采用分区最终的首次真实请求或集合声明，查询本身不会成为提前加载请求。尚未发生真实请求时，可以补全后续声明的集合；确有早期 `cite` 时仍显示原书籍的元数据。普通 `cite` 的候选继续使用光标处请求语义。
+`ifentryinbib`/`ifentrycategory` key completion in the source code collection project supports direct and static named calls: the candidate takes the final first real request for the partition or the collection declaration, and the query itself does not become an early load request. When a real request has not yet occurred, the set of subsequent statements can be completed; when there is an early `cite`, the metadata of the original book is still displayed. Candidates for ordinary `cite` continue to use cursor request semantics.
 
-支持空键、完整后缀替换、既有注释及 UTF-16／CRLF 编辑。需要完整、纯文本的分支和静态分类名；未完成分支、可执行代码、重定义、动态键、内部文献执行上下文和 IDS 相交继续保护。共享物理查询的所有根及数字分区必须取得相同物理候选身份，无法确认的单个候选排除；预算不足不返回未经认证的候选。
+Supports empty keys, complete suffix replacement, existing comments, and UTF-16/CRLF editing. Requires complete, plain-text branch and static classification names; unfinished branch, executable code, redefinition, dynamic keys, internal document execution context, and IDS intersection continuation protection. All roots and digital partitions sharing a physical query must obtain the same physical candidate identity, and single candidates that cannot be confirmed are excluded; insufficient budget does not return uncertified candidates.
 
 ```sh
 cargo test --locked --test biblatex_source_predicate_completion -- --include-ignored
 cargo test --locked --test protocol source_predicate_completions_
 ```
 
-`\assignrefcontextentries[options]{keys}` 及其星号形式支持条目键列表的跳转、预览、补全、引用、高亮和完整改名，也识别静态 `csuse`／`csname` 调用及可认证的纯转发命令。方括号是必需参数，即使选项为空也需写作 `[]{keys}`；签名提示区分选项与键列表。改名只修改真实条目键，不改 `labelprefix` 等选项、普通文字和逐字内容。
+`\assignrefcontextentries[options]{keys}` and its asterisk form support jumps, previews, completions, quotes, highlighting and complete renaming of entry key lists, and also recognize static `csuse`/`csname` calls and authenticated pure forwarding commands. Square brackets are required parameters, even if the option is empty, it must be written as `[]{keys}`; the signature prompt distinguishes the option from the key list. Changing the name only modifies the actual entry key, and does not change options such as `labelprefix`, ordinary text, and verbatim content.
 
-此命令分配上下文而不加载或引用条目，因此缺失键及通配 `*` 不触发缺失引用诊断，也不产生引用编号提示。普通资源的数字分区复用非加载型键身份认证；源码集合中的上下文分配、捕获的命令副本和不明确的操作数调用继续拒绝部分改名。普通资源的直接、静态命名和已执行纯转发强／弱分配支持按执行顺序显示 deferred 数字标签，选项及编译记录边界见[辅助引用与编号提示](auxiliary-references.md)；弱分配按原生分组恢复上下文开关，分类分配另按当前源码与 AUX 的成员一致性认证数字提示；关键词分配另按实际加载 BBL 的成员认证数字提示。分类列表的独立命名空间和完整编辑详见[文献分类](bibliography-categories.md)。
+This command allocates context without loading or referencing entries, so missing keys and wildcards `*` do not trigger missing reference diagnostics and do not generate reference number prompts. Numeric partitioning of ordinary resources reuses non-loadable key authentication; context assignments in source collections, captured command copies, and ambiguous operand calls continue to reject partial renames. Direct, static naming of ordinary resources and executed pure forwarding strong/weak allocation support display of deferred numeric labels in order of execution. For options and compilation record boundaries, see [Auxiliary Reference and Numbering Prompt](auxiliary-references.md); weak allocation restores the context switch according to native grouping, and classification allocation also prompts according to the membership authentication number of the current source code and AUX; keyword allocation also prompts according to the member authentication number of the actual loaded BBL. For details on the independent namespace and complete editing of the classification list, see [Bibliography categories](bibliography-categories.md).
 
-`\assignrefcontextkeyws[options]{keywords}` 提供必需方括号、关键词列表及星号形式的参数提示和命令补全片段，也识别静态命名调用与可认证的纯转发。关键词与条目键、分类名分别处理，不提供跨命名空间的键导航或改名。数字提示的成员、空白及覆盖顺序见[辅助引用与编号提示](auxiliary-references.md)。
+`\assignrefcontextkeyws[options]{keywords}` provides signature help and command completion fragments in the form of required square brackets, keyword lists, and asterisks, and also recognizes static named calls and authenticated pure forwarding. Keywords, entry keys, and category names are processed separately, and key navigation or renaming across namespaces is not provided. See [Auxiliary References and Numbering Hints](auxiliary-references.md) for the members, blanks, and coverage sequence of number hints.

@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build, language::features, project::workspace::Workspace};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path, sync::atomic::AtomicBool};
+use texquill::{compilation::build, language::features, project::workspace::Workspace};
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -141,7 +141,7 @@ fn real_refcount_assignments_preserve_reference_and_page_arithmetic_after_both_r
     }
     assert!(source.contains("\\setcounterref{problem}{renamed-anchor}"));
     std::fs::write(root.join("main.tex"), &source).unwrap();
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -251,7 +251,7 @@ fn real_counter_and_environment_renames_keep_spaced_names_independent() {
         "\\end{document}\n",
     )
     .to_owned();
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -493,7 +493,7 @@ fn real_counter_renames_preserve_values_shared_theorems_and_nested_reset_relatio
         &[("main.tex", source), ("definitions.tex", definitions)],
     );
     let main_path = root.join("main.tex");
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -536,7 +536,7 @@ fn real_alias_counter_renames_preserve_shared_registers_and_internal_metadata() 
         &[("main.tex", source), ("definitions.tex", definitions)],
     );
     let main = root.join("main.tex");
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };

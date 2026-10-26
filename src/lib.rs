@@ -1,4 +1,4 @@
-//! LaTeX language server with modules organized by responsibility.
+//! TeXquill: a LaTeX language server with modules organized by responsibility.
 
 mod analysis;
 mod bibliography;

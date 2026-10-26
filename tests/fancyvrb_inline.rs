@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::sync::atomic::AtomicBool;
+use texquill::{
     compilation::build,
     editing::file_operations,
     language::{features, navigation, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
-use std::sync::atomic::AtomicBool;
 
 fn apply(source: &str, edit: WorkspaceEdit, uri: &Url) -> String {
     let Some(DocumentChanges::Edits(documents)) = edit.document_changes else {
@@ -67,7 +67,7 @@ fn literal_bodies_do_not_import_symbols_files_or_rename_edits() {
                 let source = format!("{before}{literal}\r\n{after}");
                 std::fs::write(root.join("main.tex"), &source).unwrap();
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         ..Default::default()
                     },
@@ -213,7 +213,7 @@ fn global_saved_names_are_data_while_moving_use_options_remain_source() {
             let body = r"\label{active}\label{phantom}\newcommand{\hidden}{Oops}\input{example}";
             let source = format!("\\SaveGVerb *[showspaces=true]% name\r\n{name}{{|}}{body}|\\{used} *[formatcom={{\\label{{active}}\\newcommand{{\\visible}}{{Text}}}}]{name}\\ref{{active}}");
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -338,7 +338,7 @@ fn real_global_saved_bodies_and_moving_use_options_survive_versioned_rename() {
                 let body = r"\label{kept}\label{phantom}\newcommand{\hidden}{Oops}\input{example}";
                 let source = format!("\\documentclass{{article}}\r\n\\usepackage{{fancyvrb}}\r\n\\begin{{document}}\r\n\\label{{kept}}\\SaveGVerb{header}{name}{delimiter}{body}|\\{used} *[formatcom={{\\label{{active}}}}]{name}\r\nReal.\\ref{{kept}}\\end{{document}}\r\n");
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         ..Default::default()
                     },
@@ -372,7 +372,7 @@ fn real_global_saved_bodies_and_moving_use_options_survive_versioned_rename() {
                     std::fs::write(root.join("main.tex"), content).unwrap();
                     let outcome = build::run(
                         &root.join("main.tex"),
-                        &latex_lsp::config::BuildConfig {
+                        &texquill::config::BuildConfig {
                             executable: engine.into(),
                             ..Default::default()
                         },
@@ -384,7 +384,7 @@ fn real_global_saved_bodies_and_moving_use_options_survive_versioned_rename() {
                         outcome.output
                     );
                     let aux =
-                        std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                        std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                     assert!(
                         aux.contains(&format!("newlabel{{{expected}}}"))
                             && aux.contains("newlabel{active}"),
@@ -487,7 +487,7 @@ fn real_inline_bodies_preserve_literal_text_and_executable_options_after_rename(
                 };
                 let source = format!("\\documentclass{{article}}\r\n\\usepackage{{fancyvrb}}\r\n\\begin{{document}}\r\n\\label{{kept}}\\{command}{header}{name}{delimiter}{body}|{used}\r\nReal.\\ref{{kept}}\\end{{document}}\r\n");
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         ..Default::default()
                     },
@@ -521,7 +521,7 @@ fn real_inline_bodies_preserve_literal_text_and_executable_options_after_rename(
                     std::fs::write(root.join("main.tex"), content).unwrap();
                     let outcome = build::run(
                         &root.join("main.tex"),
-                        &latex_lsp::config::BuildConfig {
+                        &texquill::config::BuildConfig {
                             executable: engine.into(),
                             ..Default::default()
                         },
@@ -533,7 +533,7 @@ fn real_inline_bodies_preserve_literal_text_and_executable_options_after_rename(
                         outcome.output
                     );
                     let aux =
-                        std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                        std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                     assert!(aux.contains(&format!("newlabel{{{expected}}}")), "{aux}");
                     for key in [absent, "phantom"] {
                         assert!(!aux.contains(&format!("newlabel{{{key}}}")), "{aux}");
@@ -573,7 +573,7 @@ fn collected_verb_bodies_keep_executable_commands_and_file_edits() {
                 "\\newcommand{{\\say}}{{Text}}{before}\\Verb{body}{after}\\ref{{kept}}\\say"
             );
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -708,7 +708,7 @@ fn real_collected_verb_executes_body_commands_before_and_after_rename() {
             let main = Url::from_file_path(root.join("main.tex")).unwrap();
             let source = format!("\\documentclass{{article}}\n\\usepackage{{fancyvrb}}\n\\let\\strong\\textbf\n\\begin{{document}}\n{wrapper}{{\\Verb{body}}}\\ref{{kept}}\n\\end{{document}}\n");
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -733,7 +733,7 @@ fn real_collected_verb_executes_body_commands_before_and_after_rename() {
                 std::fs::write(root.join("main.tex"), content).unwrap();
                 let outcome = build::run(
                     &root.join("main.tex"),
-                    &latex_lsp::config::BuildConfig {
+                    &texquill::config::BuildConfig {
                         executable: engine.into(),
                         ..Default::default()
                     },
@@ -745,11 +745,11 @@ fn real_collected_verb_executes_body_commands_before_and_after_rename() {
                     outcome.output
                 );
                 assert!(outcome.output.lines().any(|line| line == "LIVEBODY"));
-                let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                let aux = std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                 assert!(aux.contains(&format!("newlabel{{{expected}}}")), "{aux}");
                 assert!(!aux.contains(&format!("newlabel{{{absent}}}")), "{aux}");
                 assert!(!aux.contains("newlabel{phantom}"), "{aux}");
-                let fls = std::fs::read_to_string(root.join("build/latex-lsp/main.fls")).unwrap();
+                let fls = std::fs::read_to_string(root.join("build/texquill/main.fls")).unwrap();
                 assert!(fls.contains("chapter.tex"), "{fls}");
             }
         }
@@ -851,7 +851,7 @@ fn real_fvextra_verb_defaults_and_extra_false_preserve_native_body_execution() {
                 std::fs::write(root.join("main.tex"), source).unwrap();
                 let outcome = build::run(
                     &root.join("main.tex"),
-                    &latex_lsp::config::BuildConfig {
+                    &texquill::config::BuildConfig {
                         executable: engine.into(),
                         ..Default::default()
                     },
@@ -868,7 +868,7 @@ fn real_fvextra_verb_defaults_and_extra_false_preserve_native_body_execution() {
                     "{}",
                     outcome.output
                 );
-                let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                let aux = std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                 assert_eq!(aux.contains("newlabel{inside}"), live, "{aux}");
                 assert!(aux.contains("newlabel{real}"), "{aux}");
             }
@@ -906,7 +906,7 @@ fn static_verb_aliases_preserve_reader_modes_and_editable_command_identity() {
             let after = r"}\ref{live}\code|tail|";
             let source = format!("{before}{literal}{middle}{body}{after}");
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -1035,7 +1035,7 @@ fn real_static_verb_aliases_keep_literal_names_and_native_body_execution_after_r
                 let literal = r"|\label{phantom}\input{fake}\code|";
                 let source = format!("\\documentclass{{article}}\n\\usepackage{{{package}}}\n{settings}{declaration}\n\\begin{{document}}\n\\code{literal}\n\\textbf{{\\code|a{{b|\\typeout{{LIVEBODY}}\\label{{live}}\\input{{chapter}}}}d|}}\\label{{real}}\\code|tail|\n\\end{{document}}\n");
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         ..Default::default()
                     },
@@ -1059,7 +1059,7 @@ fn real_static_verb_aliases_keep_literal_names_and_native_body_execution_after_r
                     std::fs::write(root.join("main.tex"), content).unwrap();
                     let outcome = build::run(
                         &root.join("main.tex"),
-                        &latex_lsp::config::BuildConfig {
+                        &texquill::config::BuildConfig {
                             executable: engine.into(),
                             ..Default::default()
                         },
@@ -1077,12 +1077,12 @@ fn real_static_verb_aliases_keep_literal_names_and_native_body_execution_after_r
                         outcome.output
                     );
                     let aux =
-                        std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                        std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                     assert_eq!(aux.contains("newlabel{live}"), live, "{aux}");
                     assert!(aux.contains("newlabel{real}"), "{aux}");
                     assert!(!aux.contains("newlabel{phantom}"), "{aux}");
                     let fls =
-                        std::fs::read_to_string(root.join("build/latex-lsp/main.fls")).unwrap();
+                        std::fs::read_to_string(root.join("build/texquill/main.fls")).unwrap();
                     assert_eq!(fls.contains("chapter.tex"), live, "{fls}");
                 }
             }
@@ -1180,7 +1180,7 @@ fn real_fvextra_special_delimiters_keep_following_labels_editable_after_rename()
                 let main = Url::from_file_path(root.join("main.tex")).unwrap();
                 let source = format!("\\documentclass{{article}}\n\\usepackage{{fvextra}}\n{settings}\\let\\code\\Verb\n\\begin{{document}}\n\\code{options}{body}\\label{{real}}\n\\end{{document}}\n");
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         ..Default::default()
                     },
@@ -1201,7 +1201,7 @@ fn real_fvextra_special_delimiters_keep_following_labels_editable_after_rename()
                 std::fs::write(root.join("main.tex"), updated).unwrap();
                 let outcome = build::run(
                     &root.join("main.tex"),
-                    &latex_lsp::config::BuildConfig {
+                    &texquill::config::BuildConfig {
                         executable: engine.into(),
                         ..Default::default()
                     },
@@ -1212,7 +1212,7 @@ fn real_fvextra_special_delimiters_keep_following_labels_editable_after_rename()
                     "{engine}/{settings}/{options}/{body}: {}",
                     outcome.output
                 );
-                let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                let aux = std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                 assert!(aux.contains("newlabel{changed}"), "{aux}");
                 assert!(
                     !aux.contains("newlabel{real}") && !aux.contains("newlabel{phantom}"),

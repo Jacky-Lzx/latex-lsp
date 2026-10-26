@@ -1,7 +1,7 @@
-use latex_lsp::compilation::build_log::{compilation_analysis, parse};
 use lsp_types::*;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use texquill::compilation::build_log::{compilation_analysis, parse};
 
 fn warning(amount: &str) -> Diagnostic {
     Diagnostic {
@@ -237,7 +237,7 @@ fn real_oversized_figures_and_tables_clear_after_resizing_child_content() {
                 if numbered {
                     arguments.insert(0, "-file-line-error".into());
                 }
-                let config = latex_lsp::config::BuildConfig {
+                let config = texquill::config::BuildConfig {
                     executable: compiler.to_string_lossy().into(),
                     arguments: Some(arguments),
                     ..Default::default()
@@ -250,7 +250,7 @@ fn real_oversized_figures_and_tables_clear_after_resizing_child_content() {
                 );
                 std::fs::write(&child, source).unwrap();
                 let outcome =
-                    latex_lsp::compilation::build::run(&main, &config, &Default::default());
+                    texquill::compilation::build::run(&main, &config, &Default::default());
                 assert_eq!(
                     outcome.status, "success",
                     "{engine}/{width}/{numbered}: {}",
@@ -301,7 +301,7 @@ fn real_oversized_figures_and_tables_clear_after_resizing_child_content() {
                 )
                 .unwrap();
                 let repaired =
-                    latex_lsp::compilation::build::run(&main, &config, &Default::default());
+                    texquill::compilation::build::run(&main, &config, &Default::default());
                 assert_eq!(
                     repaired.status, "success",
                     "{engine}/{width}/{numbered}: {}",

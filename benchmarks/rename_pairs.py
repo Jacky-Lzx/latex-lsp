@@ -28,9 +28,9 @@ def replay(before, after, scale, args, cpu):
     wall = {"before": [], "after": []}
     processor = {"before": [], "after": []}
     for run in range(args.runs):
-        with tempfile.TemporaryDirectory(prefix="latex-lsp-rename-pairs-") as directory, ExitStack() as stack:
+        with tempfile.TemporaryDirectory(prefix="texquill-rename-pairs-") as directory, ExitStack() as stack:
             root = Path(directory)
-            launchers = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="latex-lsp-rename-launch-")))
+            launchers = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="texquill-rename-launch-")))
             metadata = editing.fixture(root, scale, args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces, args.hook_labels, args.lifecycle_labels, args.global_hook_rules, args.default_hook_labels, args.document_hook_slots, args.relative_hook_labels)
             main, chapter = root / "main.tex", root / "chapter0.tex"
             source = chapter.read_text()

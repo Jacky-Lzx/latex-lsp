@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "conflicting-bibliography-alias";
 fn uri(root: &Path, name: &str) -> Url {
@@ -261,7 +261,7 @@ fn missing_unreadable_truncated_or_failed_prior_history_does_not_borrow_future_s
         format!("{}{}{warning}", found("refs.data"), found("missing.data")),
         format!("{}ERROR - Unknown failure\n{warning}", found("refs.data")),
         format!(
-            "{}[latex-lsp: middle of compiler output omitted]\n{warning}",
+            "{}[texquill: middle of compiler output omitted]\n{warning}",
             found("refs.data")
         ),
     ] {

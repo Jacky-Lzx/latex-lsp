@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "duplicate-bibliography-key";
 fn uri(root: &Path, name: &str) -> Url {
@@ -215,7 +215,7 @@ fn ambiguous_duplicate_keys_link_each_exact_candidate_without_selecting_a_declar
         assert!(related.message.contains("alpha😀"));
     }
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -277,7 +277,7 @@ fn duplicate_key_candidates_survive_incomplete_history_only_in_the_explicit_curr
     for problem in [
         "ERROR - malformed input\n",
         "INFO - Found BibTeX data source 'missing.data'\n",
-        "[latex-lsp: middle of compiler output omitted]\n",
+        "[texquill: middle of compiler output omitted]\n",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();

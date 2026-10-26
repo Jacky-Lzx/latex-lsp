@@ -1,21 +1,21 @@
 #![cfg(unix)]
 
-use latex_lsp::{
-    compilation::{build, build_log},
-    config::BuildConfig,
-};
 use lsp_types::DiagnosticSeverity;
 use std::{
     fs::FileTimes,
     sync::atomic::AtomicBool,
     time::{Duration, SystemTime},
 };
+use texquill::{
+    compilation::{build, build_log},
+    config::BuildConfig,
+};
 
 fn run(log: &str, channel: &str) -> (tempfile::TempDir, build::Outcome) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main = root.join("main.tex");
-    let output = root.join("build/latex-lsp");
+    let output = root.join("build/texquill");
     std::fs::create_dir_all(&output).unwrap();
     std::fs::write(
         &main,
@@ -83,7 +83,7 @@ fn explicit_no_output_reports_reject_old_pdfs_without_deleting_them() {
                 .flatten()
                 .any(|item| item.severity == Some(DiagnosticSeverity::ERROR)));
             assert_eq!(
-                std::fs::read_to_string(directory.path().join("build/latex-lsp/main.pdf")).unwrap(),
+                std::fs::read_to_string(directory.path().join("build/texquill/main.pdf")).unwrap(),
                 "%PDF-1.4\nprevious output\n"
             );
         }
@@ -161,12 +161,12 @@ fn an_omitted_later_pass_cannot_prove_that_a_pdf_was_not_produced() {
         for (log, expected) in [
             (
                 format!(
-                    "{report}\n[latex-lsp: middle of compiler output omitted]\nPDF statistics:\n"
+                    "{report}\n[texquill: middle of compiler output omitted]\nPDF statistics:\n"
                 ),
                 "success",
             ),
             (
-                format!("[latex-lsp: middle of compiler output omitted]\n{report}\n"),
+                format!("[texquill: middle of compiler output omitted]\n{report}\n"),
                 "error",
             ),
         ] {

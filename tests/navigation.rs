@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::{FoldingRangeKind, Position, Url};
+use texquill::{
     language::{features, navigation},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::{FoldingRangeKind, Position, Url};
 
 fn insert(workspace: &mut Workspace, uri: &Url, source: &str) {
     workspace
@@ -281,11 +281,11 @@ fn real_hyperref_document_links_match_the_external_uri_annotations_in_the_pdf() 
         "\\end{document}\n",
     );
     std::fs::write(&main, source).unwrap();
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
-    let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+    let result = texquill::compilation::build::run(&main, &config, &Default::default());
     assert_eq!(result.status, "success", "{}", result.output);
     let data = std::fs::read(config.artifact_path(&main, "pdf").unwrap()).unwrap();
     let pdf = String::from_utf8_lossy(&data);

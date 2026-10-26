@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::Url;
+use std::path::Path;
+use texquill::{
     language::{code_lens, features},
     project::workspace::{Document, Workspace},
 };
-use lsp_types::Url;
-use std::path::Path;
 
 fn uri(root: &Path, file: &str) -> Url {
     Url::from_file_path(root.join(file)).unwrap()

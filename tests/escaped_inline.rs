@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, navigation, semantic, signature},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn apply(source: &str, edit: WorkspaceEdit) -> String {
     let Some(DocumentChanges::Edits(documents)) = edit.document_changes else {
@@ -52,7 +52,7 @@ fn escaped_code_uses_ordinary_balanced_tokens_without_executing_its_commands() {
             let source = format!("% 😀\r\n\\usepackage{{fvextra}}\\fvset{{extra=false}}\\label{{kept}}\\newcommand{{\\say}}{{Text}}{before}{literal}{after}\\input{{chapter}}\\say\\ref{{kept}}");
             std::fs::write(root.join("main.tex"), &source).unwrap();
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -166,7 +166,7 @@ fn escaped_reader_copies_and_forwarders_keep_their_own_rename_identity() {
             "{declaration}\\textbf{{\\code{{\\label{{phantom}}\\input{{fake}}}}}}\\label{{real}}"
         );
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 versioned_edits: true,
                 ..Default::default()
             },
@@ -245,7 +245,7 @@ fn escaped_command_completion_hover_and_option_hints_preserve_code() {
         let at = marked.find('¦').unwrap();
         let source = marked.replace('¦', "");
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 snippets: true,
                 ..Default::default()
             },
@@ -296,8 +296,8 @@ fn escaped_command_completion_hover_and_option_hints_preserve_code() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, and fvextra"]
 fn real_escaped_code_never_executes_commands_even_when_escapes_are_invalid() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
+    use texquill::{compilation::build, config::BuildConfig};
     for engine in ["pdflatex", "xelatex"] {
         for declaration in ["", r"\let\code\EscVerb", r"\newcommand{\code}{\EscVerb}"] {
             for (body, valid) in [
@@ -320,7 +320,7 @@ fn real_escaped_code_never_executes_commands_even_when_escapes_are_invalid() {
                 let source = format!("\\documentclass{{article}}\n\\usepackage{{fvextra}}\n\\fvset{{extra=false}}\n{declaration}\n\\begin{{document}}\n\\label{{kept}}{call}\\ref{{kept}}\\label{{real}}\n\\end{{document}}\n");
                 let main = Url::from_file_path(root.join("main.tex")).unwrap();
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         ..Default::default()
                     },
@@ -362,7 +362,7 @@ fn real_escaped_code_never_executes_commands_even_when_escapes_are_invalid() {
                     );
                     assert!(!outcome.output.lines().any(|line| line == "PHANTOM"));
                     let aux =
-                        std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                        std::fs::read_to_string(root.join("build/texquill/main.aux")).unwrap();
                     assert!(
                         aux.contains(&format!("newlabel{{{kept}}}"))
                             && aux.contains("newlabel{real}"),
@@ -374,7 +374,7 @@ fn real_escaped_code_never_executes_commands_even_when_escapes_are_invalid() {
                         "{aux}"
                     );
                     let fls =
-                        std::fs::read_to_string(root.join("build/latex-lsp/main.fls")).unwrap();
+                        std::fs::read_to_string(root.join("build/texquill/main.fls")).unwrap();
                     assert!(!fls.contains("fake.tex"));
                 }
             }

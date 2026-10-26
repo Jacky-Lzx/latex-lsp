@@ -75,7 +75,7 @@ pub fn code_actions(
                 title: fix.title.clone(),
                 kind: Some(CodeActionKind::QUICKFIX),
                 diagnostics: Some(vec![fix.diagnostic.clone()]),
-                is_preferred: Some(fix.diagnostic.source.as_deref() == Some("latex-lsp")),
+                is_preferred: Some(fix.diagnostic.source.as_deref() == Some("texquill")),
                 edit: Some(features::workspace_edit(
                     workspace,
                     std::collections::BTreeMap::from([(uri.clone(), fix.edits())]),
@@ -234,7 +234,7 @@ pub fn resolve_fix(workspace: &Workspace, request: FixRequest) -> Option<Workspa
             && fix.diagnostic.message == request.diagnostic.message
             && request.diagnostic.source == fix.diagnostic.source
             && request.replacement.as_ref().map_or(
-                fix.diagnostic.source.as_deref() == Some("latex-lsp"),
+                fix.diagnostic.source.as_deref() == Some("texquill"),
                 |replacement| *replacement == fix.edit.new_text,
             )
     })?;

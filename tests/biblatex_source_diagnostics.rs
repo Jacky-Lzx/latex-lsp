@@ -1,5 +1,5 @@
-use latex_lsp::{editing, project::workspace::Workspace};
 use lsp_types::*;
+use texquill::{editing, project::workspace::Workspace};
 fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url) {
     let dir = tempfile::tempdir().unwrap();
     let source = format!(

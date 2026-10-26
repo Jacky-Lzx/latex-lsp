@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const NAME: &str = "invalid-bibliography-field";
 const VALUE: &str = "invalid-bibliography-field-value";
@@ -131,7 +131,7 @@ fn unqualified_warnings_require_complete_prior_biber_input_history() {
                 found("other.bib")
             ),
             format!(
-                "{}{}[latex-lsp: middle of compiler output omitted]\n{warning}",
+                "{}{}[texquill: middle of compiler output omitted]\n{warning}",
                 found("refs.bib"),
                 found("other.bib")
             ),
@@ -319,7 +319,7 @@ fn unqualified_sources_are_checked_at_each_warning_without_borrowing_future_inpu
     );
     assert!(items(&diagnostics, &uri(root, "second.data")).is_empty());
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -1160,7 +1160,7 @@ fn field_location_caches_refresh_between_logs_without_proposing_deletions() {
         let item = &items(&diagnostics, &uri(root, "refs.data"))[0];
         assert_eq!(item.range, span(source, "wrong"));
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },

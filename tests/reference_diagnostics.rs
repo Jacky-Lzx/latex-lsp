@@ -1,5 +1,5 @@
-use latex_lsp::{editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{editing, project::workspace::Workspace, text::Text};
 
 #[test]
 fn static_references_update_without_building_and_remain_project_scoped() {

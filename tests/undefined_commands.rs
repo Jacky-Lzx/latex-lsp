@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
+use std::sync::atomic::AtomicBool;
+use texquill::{
     compilation::{build, build_log},
     config::BuildConfig,
     text::Text,
 };
-use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
-use std::sync::atomic::AtomicBool;
 
 #[test]
 fn unresolved_numbered_sources_do_not_borrow_precise_error_context_from_the_root() {
@@ -147,7 +147,7 @@ fn recent_tokens_require_one_matching_literal_token_and_immediate_trustworthy_co
         "<recently read> \\bad\nl.1 Changed $\\bad",
         "<recently read> \\bad\nl.1 ...\\bad",
         "<recently read> \\bad\nPackage audit Warning: Adjacent.\nl.1 $\\bad",
-        "<recently read> \\bad\n[latex-lsp: middle of compiler output omitted]\nl.1 $\\bad",
+        "<recently read> \\bad\n[texquill: middle of compiler output omitted]\nl.1 $\\bad",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -285,7 +285,7 @@ fn uncertain_expansion_stale_context_and_output_boundaries_keep_line_ranges() {
         "l.1 Text \\bad",
         "l.2 ...ad",
         "Package audit Warning: Adjacent warning.\nl.2 Text \\broken and \\bad",
-        "[latex-lsp: middle of compiler output omitted]\nl.2 Text \\broken and \\bad",
+        "[texquill: middle of compiler output omitted]\nl.2 Text \\broken and \\bad",
     ] {
         let log = format!("(./main.tex\n./main.tex:2: Undefined control sequence.\n{context}\n)\n");
         let diagnostics = build_log::parse(&main, &log);

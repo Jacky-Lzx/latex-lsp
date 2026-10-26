@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::Url;
+use texquill::{language::features, project::workspace::Workspace, text::Text};
 
 fn labels(marked: &str) -> Vec<String> {
     let offset = marked.find('¦').unwrap();

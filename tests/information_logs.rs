@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
+use texquill::{compilation::build_log, text::Text};
 
 fn assert_sources(info: &str) {
     let directory = tempfile::tempdir().unwrap();
@@ -246,7 +246,7 @@ fn information_never_hides_a_truncation_barrier() {
     std::fs::write(&main, "\\unknownrootcommand\n").unwrap();
     std::fs::write(&child, "\\unknownchildcommand\n").unwrap();
     let info = format!("Package local Info: {}", "a".repeat(60));
-    let parsed = build_log::parse(&main, &format!("(./main.tex\n{info}\n[latex-lsp: middle of compiler output omitted]\n! Undefined control sequence.\nl.1 \\unknownrootcommand\n(./child.tex\n! Undefined control sequence.\nl.1 \\unknownchildcommand\n)\n"));
+    let parsed = build_log::parse(&main, &format!("(./main.tex\n{info}\n[texquill: middle of compiler output omitted]\n! Undefined control sequence.\nl.1 \\unknownrootcommand\n(./child.tex\n! Undefined control sequence.\nl.1 \\unknownchildcommand\n)\n"));
     assert_eq!(parsed.len(), 2, "{parsed:?}");
     let root_error = &parsed[&Url::from_file_path(&main).unwrap()][0];
     assert!(root_error.code.is_none());

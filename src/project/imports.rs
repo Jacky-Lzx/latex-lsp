@@ -163,7 +163,7 @@ impl Index {
     }
 }
 fn resolve(directory: &std::path::Path, value: &str) -> Option<Url> {
-    let origin = Url::from_file_path(directory.join("__latex_lsp_import__.tex")).ok()?;
+    let origin = Url::from_file_path(directory.join("__texquill_import__.tex")).ok()?;
     crate::project::workspace::resolve_file_path(&origin, "input", value, &["tex"])
 }
 

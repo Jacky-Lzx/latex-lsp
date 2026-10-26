@@ -1,5 +1,5 @@
-use latex_lsp::{editing, project::workspace::Workspace};
 use lsp_types::Url;
+use texquill::{editing, project::workspace::Workspace};
 
 #[test]
 fn first_open_without_a_workspace_resolves_the_editor_text_and_imported_aliases() {

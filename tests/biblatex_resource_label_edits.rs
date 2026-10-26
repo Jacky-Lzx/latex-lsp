@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace, text::Text};
 
 fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url, String, Position) {
     let dir = tempfile::tempdir().unwrap();
@@ -420,7 +420,7 @@ fn resource_label_highlights_distinguish_the_declaration_from_uses_and_other_nam
         setup(r"\newrefsection[ch¦osen]\newrefsection[chosen]\label{chosen}\ref{chosen}");
     let start = source.find("{chosen}").unwrap() + 1;
     let declaration = Text::new(source).range(start, start + 6);
-    let highlights = latex_lsp::editing::highlights(&ws, &main, at);
+    let highlights = texquill::editing::highlights(&ws, &main, at);
     assert_eq!(highlights.len(), 3);
     assert_eq!(
         highlights

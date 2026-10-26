@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     compilation::{build_log, recorder},
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(path: &Path) -> Url {
     Url::from_file_path(path).unwrap()

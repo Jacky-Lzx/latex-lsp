@@ -1,97 +1,98 @@
-# 文档
+# Documentation
 
-[返回项目 README](../README.md)
+[Back to project README](../README.md)
 
-支持补全、导航、跨文件重命名、格式化、诊断、快速修复和后台编译。初次使用请先[安装服务器](install.md)，再[配置编辑器](editors.md)；生成 PDF 的配置见[编译指南](build.md)。
+TeXquill supports completion, navigation, cross-file rename, formatting, diagnostics, quick fixes, and background builds. Start with [installation](install.md) and [editor configuration](editors.md); see the [build guide](build.md) to generate PDFs.
 
-## 入门
+## Getting started
 
-- [安装与启动](install.md)：环境要求、构建、安装及进程协议。
-- [编辑器配置](editors.md)：Neovim、VS Code 配置及示例。
+- [Installation and startup](install.md): Requirements, building from source, installation, protocol lifecycle, and migration.
+- [Editor configuration](editors.md): Neovim and VS Code setup, other editors, and a sample project.
 
-## 编辑与项目
+## Editing and projects
 
-- [编辑功能](editing.md)：补全、导航、高亮和颜色。
-- [格式化](formatting.md)：LaTeX 与 BibTeX 全文和范围格式化、默认 tex-fmt、可选 latexindent、参数与项目设置。
-- [文档折叠](folding.md)：章节、环境、多行公式、BibTeX 条目及客户端能力。
-- [外部文档与编译引用信息](auxiliary-references.md)：xr 前缀、aux 编号/页码/标题、悬停和行内提示。
-- [静态命名引用](named-references.md)：命名引用键的导航、引用收集和跨文件重命名。
-- [标签与交叉引用](labels.md)：键名、注释、范围引用及 hyperref 标签。
-- [PDF 目标与书签](pdf-destinations.md)：内部链接、组合目标和书签重命名。
-- [上下文选项补全](options.md)：宏包、文档类、图片和设置命令的键与枚举值。
-- [补全](completion.md)：调用片段、已有参数、命令名操作数及名称替换。
-- [参数提示](signatures.md)：跨文件签名、声明参数、可选参数边界与注释中的数量。
-- [内核钩子](kernel-hooks.md)：标准钩子的补全、参数提示、名称导航、结构引用及延迟执行边界。
-- [文献检索补全](citation-search.md)：作者、标题、年份、组合查询和模糊键匹配。
-- [文献](bibliography.md)：文献键、biblatex 别名、natbib、手写文献、条目关系、字符串缩写及 URL/DOI 链接。
-- [biblatex 文献资源](biblatex-resources.md)：加载命令、路径编辑和静态支持范围。
-- [biblatex 引用](biblatex.md)：字段、列表、姓名、单次、多组和卷号引用。
-- [biblatex 文献分类](bibliography-categories.md)：分类分配、文献键编辑及重命名边界。
-- [biblatex 文献集合](bibliography-sets.md)：动态集合声明、成员引用、独立重命名及原生集合诊断。
-- [minted 代码](minted.md)：逐字代码、文件路径编辑、构建依赖及缺失文件修复。
-- [expl3 编辑](expl3.md)：完整函数名、变量声明、导航、重命名和参数提示。
-- [结构重构与批量修复](refactoring.md)：正文包裹、命令提取与安全的全部修复。
-- [术语、缩略语与索引符号](glossary-index-symbols.md)：独立命名空间、补全、导航、重命名和诊断。
-- [符号与重命名](symbols.md)：宏、环境、计数器等符号的支持范围。
-- [用户宏调用层次](call-hierarchy.md)：标准调用方／出站导航、跨文件位置及静态边界。
-- [用户声明文档注释](command-documentation.md)：宏与环境的悬浮、补全、参数说明、增量更新与边界。
-- [字符串测试](string-tests.md)：etoolbox 的字面数据、条件分支和参数提示；[跨文件上下文](string-test-projects.md)说明重定义、加载顺序和共享文件重命名边界。
-- [字符串命令的保存与恢复](string-test-copies.md)：静态复制、恢复后的字面数据和跨文件参数边界。
-- [字符串副本的直接调用](string-test-copy-calls.md)：捕获的数据参数数量、参数提示、共享文件歧义和编译诊断。
-- [撤销定义与字符串测试](string-test-undefinitions.md)：撤销操作数、已保存副本、重新定义、动态目标和增量更新。
-- [作为宏参数的字符串测试命令](string-test-operands.md)：跨文件参数语法、控制词操作数、提示边界和未知宏。
-- [条件文件钩子](conditional-string-tests.md)：文件存在性分支、前置钩子顺序、字符串语义和重命名。
-- [章节选择与字符串语义](selected-string-tests.md)：`includeonly` 的加载顺序、名称匹配、共享文件和重命名边界。
-- [计数器与定理](counters.md)：编号关系、跨文件重命名、etoolbox 操作与 refcount 标签赋值。
-- [寄存器与长度](registers.md)：寄存器声明、类型检查、长度表达式与安全重命名。
-- [futurelet 前瞻目标](futurelet.md)：声明、静态名称、跨文件重命名与继续执行边界。
-- [命令名操作数与声明](declaration-operands.md)：复制与声明位置的命令名引用、索引和编辑边界。
-- [meaning 命令名操作数](meaning.md)：查看命令时的导航、跨文件重命名、单 token 边界和依赖候选。
-- [TeX 发行版与宏包](distribution.md)：已安装文件补全、源码跳转、命令元数据与参数提示。
-- [项目配置与作用域](project-settings.md)：目录继承、按主文档覆盖、多文件夹隔离和配置错误。
-- [索引预算与缓存](indexing.md)：后台工作线程、可配置限制、截断状态与语义令牌缓存。
-- [import 系列源码加载](imports.md)：嵌套目录上下文、依赖、路径补全和导航。
-- [项目与文件](projects.md)：工作区索引、根文件、依赖和路径解析。
-- [图片解析与移动](graphics.md)：搜索目录、扩展名顺序、局部与全局设置和图片重命名。
-- [图片文件名](graphics-filenames.md)：文件与搜索目录的引号、引擎差异、空白、路径补全和缺图修复。
-- [图片命令的静态别名](graphics-calls.md)：图片调用与搜索设置的别名、命名调用和支持边界。
-- [文件操作](file-operations.md)：文件移动协议、引用更新、文件 URL、创建和删除。
-- [源码文件名与移动](source-filenames.md)：文件名空格、后缀保留和引用可表达性。
+- [Editing features](editing.md): Completion, navigation, highlights, and colors.
+- [Formatting](formatting.md): LaTeX and BibTeX document, range, and on-type formatting; tex-fmt, latexindent, arguments, and project settings.
+- [Document folding](folding.md): Sections, environments, multiline equations, BibTeX entries, and client capabilities.
+- [External documents and compiled reference information](auxiliary-references.md): xr prefixes, auxiliary-file numbers, pages and titles, hover, and inlay hints.
+- [Static named references](named-references.md): Navigation, reference collection, and cross-file rename for named reference keys.
+- [Labels and cross-references](labels.md): Key names, comments, range references, and hyperref labels.
+- [PDF destinations and bookmarks](pdf-destinations.md): Internal links, composite destinations, and bookmark rename.
+- [Contextual option completion](options.md): Keys and enumerated values for packages, document classes, graphics, and configuration commands.
+- [Completion](completion.md): Call snippets, existing arguments, command-name operands, and name replacement.
+- [Signature help](signatures.md): Cross-file signatures, declaration arguments, optional argument boundaries, and comments in argument counts.
+- [Kernel hooks](kernel-hooks.md): Completion, signature help, name navigation, structural references, and deferred execution boundaries.
+- [Citation search completion](citation-search.md): Authors, titles, years, combined queries, and fuzzy key matching.
+- [Bibliography](bibliography.md): Citation keys, biblatex aliases, natbib, manual bibliographies, entry relationships, string abbreviations, and URL/DOI links.
+- [biblatex resources](biblatex-resources.md): Loading commands, path edits, and static analysis boundaries.
+- [biblatex citations](biblatex.md): Fields, lists, names, single citations, multicites, and volume citations.
+- [biblatex categories](bibliography-categories.md): Category assignment, citation-key edits, and rename boundaries.
+- [biblatex entry sets](bibliography-sets.md): Dynamic set declarations, member references, independent rename, and native set diagnostics.
+- [minted code](minted.md): Verbatim code, file path edits, build dependencies, and missing-file fixes.
+- [expl3 editing](expl3.md): Full function names, variable declarations, navigation, rename, and signature help.
+- [Structural refactoring and fix all](refactoring.md): Text wrapping, command extraction, and safe batch fixes.
+- [Glossary, acronym, and index symbols](glossary-index-symbols.md): Independent namespaces, completion, navigation, rename, and diagnostics.
+- [Symbols and rename](symbols.md): Supported macros, environments, counters, and other symbols.
+- [User macro call hierarchy](call-hierarchy.md): Incoming and outgoing calls, cross-file locations, and static analysis boundaries.
+- [User declaration documentation comments](command-documentation.md): Macro and environment hover, completion, argument documentation, incremental updates, and limits.
+- [String tests](string-tests.md): etoolbox literal data, conditional branches, and signature help.
+- [String tests across files](string-test-projects.md): Redefinitions, load order, and rename boundaries for shared files.
+- [Saving and restoring string commands](string-test-copies.md): Static copies, restored literal data, and cross-file argument boundaries.
+- [Direct calls to saved string commands](string-test-copy-calls.md): Captured data argument counts, signature help, shared-file ambiguity, and build diagnostics.
+- [Undefinition and string tests](string-test-undefinitions.md): Undefinition operands, saved copies, redefinitions, dynamic targets, and incremental updates.
+- [String test commands as macro arguments](string-test-operands.md): Cross-file argument syntax, control-word operands, signature boundaries, and unknown macros.
+- [Conditional file hooks](conditional-string-tests.md): File-existence branches, pre-hook order, string semantics, and rename.
+- [Chapter selection and string semantics](selected-string-tests.md): `includeonly` load order, name matching, shared files, and rename boundaries.
+- [Counters and theorems](counters.md): Numbering relationships, cross-file rename, etoolbox operations, and refcount label assignments.
+- [Registers and lengths](registers.md): Register declarations, type checks, length expressions, and safe rename.
+- [futurelet lookahead targets](futurelet.md): Declarations, static names, cross-file rename, and continuation boundaries.
+- [Command-name operands and declarations](declaration-operands.md): Command-name references in copies and declarations, indexing, and edit boundaries.
+- [meaning command-name operands](meaning.md): Navigation while inspecting commands, cross-file rename, single-token boundaries, and dependency candidates.
+- [TeX distributions and packages](distribution.md): Installed-file completion, source navigation, command metadata, and signature help.
+- [Project settings and scope](project-settings.md): Directory inheritance, root-specific overrides, workspace-folder isolation, and configuration errors.
+- [Indexing budgets and caches](indexing.md): Background workers, configurable limits, truncation status, and semantic token caches.
+- [Source loading with the import family](imports.md): Nested directory contexts, dependencies, path completion, and navigation.
+- [Projects and files](projects.md): Workspace indexing, root files, dependencies, and path resolution.
+- [Graphics resolution and moves](graphics.md): Search directories, extension order, local and global settings, and graphics rename.
+- [Graphics filenames](graphics-filenames.md): Quoted filenames and search directories, engine differences, whitespace, path completion, and missing-graphics fixes.
+- [Static aliases for graphics commands](graphics-calls.md): Aliases for graphics calls and search settings, named calls, and support boundaries.
+- [File operations](file-operations.md): File move requests, reference updates, file URLs, creation, and deletion.
+- [Source filenames and moves](source-filenames.md): Spaces in filenames, extension preservation, and representable references.
 
-## 编译与诊断
+## Builds and diagnostics
 
-- [编辑时静态诊断与 ChkTeX](static-diagnostics.md)：未定义引用、重复文献字段、可选数学定界符检查、即时拼写修复和保存时检查。
-- [静态花括号诊断](brace-diagnostics.md)：编辑时的配对检查、单 token 复制、宏正文和快速修复边界。
-- [编译](build.md)：入口、命令、通知和重编译操作。
-- [清理编译产物](build-cleaning.md)：辅助文件／完整清理、预览、文件保护及状态更新。
-- [编译配置](build-configuration.md)：编译器、引擎、参数模板和产物名称。
-- [编译结果分析](build-analysis.md)：页数、引用、重编译请求及外部处理工具。
-- [末页变更与重编译](last-page.md)：临时额外页、末页钩子位置、实际页数和请求清除。
-- [索引与术语表处理](index-processing.md)：makeindex 工具摘要、显式工具管线、原子产物更新和收敛检查。
-- [编译输入与过期结果](build-inputs.md)：保存检查、取消、依赖追踪和产物有效性。
-- [编译诊断](diagnostics.md)：错误定位、警告和拼写修复规则。
-- [长度诊断与修复](length-diagnostics.md)：etoolbox 的未定义长度定位、候选类型与拼写修复。
-- [toggle 诊断与修复](toggle-diagnostics.md)：未定义开关的定位、独立命名空间与项目内拼写修复。
-- [boolean 诊断与修复](boolean-diagnostics.md)：基础名称定位、项目内候选与只读内置条件修复。
-- [布尔表达式诊断与修复](boolean-expressions.md)：静态逻辑表达式中的 boolean / toggle 操作数与循环边界。
-- [Unicode 输入错误](unicode-errors.md)：不支持的字符、码点摘要与定位边界。
-- [特殊字符诊断与修复](special-characters.md)：字面特殊字符、多余对齐分隔符的精确定位及转义修复。
-- [多余右花括号](extra-braces.md)：正文、数学及显式分组中的字符定位与删除修复。
-- [重复上下标](math-scripts.md)：脚本符号的精确定位及显式空基底修复。
-- [多余的右定界符](right-delimiters.md)：`Extra \right.` 的命令定位、定界符保留与修复校验。
-- [缺失的右定界符](missing-right-delimiters.md)：数学结束标记定位、不可见定界符插入与分轮修复。
-- [缺失的定界符参数](delimiter-operands.md)：直接原语的源码核对、不可见参数插入与文件来源校验。
-- [特殊字符修复的宏来源](literal-macro-scopes.md)：跨文件参数排除、加载时序及旧修复的重新校验。
-- [字体声明、诊断与结果分析](fonts.md)：NFSS 声明补全与参数提示、字体和字号替换、缺字摘要及定位边界。
-- [排版警告分析](typesetting.md)：Overfull / Underfull 分类统计与最大指标。
-- [浮动体高度警告](floats.md)：过高图表的源码行、警告数量与最大超出量。
-- [显式文献处理流程](bibliography-processing.md)：直接 TeX 引擎的 BibTeX / Biber 后端、暂存产物、后续遍次和取消。
-- [文献编译诊断](bibliography-diagnostics.md)：BibTeX / Biber 来源定位、缺失资源和文件名修复。
-- [SyncTeX 双向查询](synctex.md)：源码与 PDF 的查询协议。
+- [Static diagnostics and ChkTeX](static-diagnostics.md): Undefined references, duplicate bibliography fields, optional math delimiter checks, spelling fixes, and save-time checks.
+- [Static brace diagnostics](brace-diagnostics.md): Edit-time matching, single-token copies, macro bodies, and quick fix boundaries.
+- [Builds](build.md): Build entry points, commands, notifications, and rebuild actions.
+- [Cleaning build artifacts](build-cleaning.md): Auxiliary and full cleanup, previews, file protection, and status updates.
+- [Build configuration](build-configuration.md): Build tools, engines, argument templates, and artifact names.
+- [Build result analysis](build-analysis.md): Page counts, citations, rerun requests, and external processing tools.
+- [Last-page changes and reruns](last-page.md): Temporary extra pages, last-page hook positions, actual page counts, and clearing rerun requests.
+- [Index and glossary processing](index-processing.md): Required makeindex tools, explicit pipelines, atomic artifact updates, and convergence checks.
+- [Build inputs and stale results](build-inputs.md): Save checks, cancellation, dependency tracking, and artifact validity.
+- [Build diagnostics](diagnostics.md): Error locations, warnings, and spelling fix rules.
+- [Length diagnostics and fixes](length-diagnostics.md): Undefined etoolbox lengths, candidate types, and spelling fixes.
+- [Toggle diagnostics and fixes](toggle-diagnostics.md): Undefined toggles, independent namespaces, and project-scoped spelling fixes.
+- [Boolean diagnostics and fixes](boolean-diagnostics.md): Base-name locations, project candidates, and read-only built-in conditions.
+- [Boolean expression diagnostics and fixes](boolean-expressions.md): Boolean and toggle operands in static logical expressions, and loop boundaries.
+- [Unicode input errors](unicode-errors.md): Unsupported characters, code-point summaries, and location boundaries.
+- [Special character diagnostics and fixes](special-characters.md): Exact locations and escape fixes for literal special characters and extra alignment tabs.
+- [Extra closing braces](extra-braces.md): Character locations and deletion fixes in text, math, and explicit groups.
+- [Duplicate math scripts](math-scripts.md): Exact script-symbol locations and explicit empty-base fixes.
+- [Extra right delimiters](right-delimiters.md): Command locations, delimiter preservation, and fix validation for `Extra \right.`.
+- [Missing right delimiters](missing-right-delimiters.md): Math end-marker locations, invisible delimiter insertion, and fixes across successive builds.
+- [Missing delimiter operands](delimiter-operands.md): Source checks for direct primitives, invisible operand insertion, and source-file validation.
+- [Macro sources for special character fixes](literal-macro-scopes.md): Cross-file argument exclusion, load order, and revalidation of old fixes.
+- [Font declarations, diagnostics, and analysis](fonts.md): NFSS completion and signature help, font and size substitutions, missing-glyph summaries, and location limits.
+- [Typesetting warning analysis](typesetting.md): Overfull/Underfull counts by category and maximum measurements.
+- [Float height warnings](floats.md): Source lines, warning counts, and maximum excess height for oversized floats.
+- [Explicit bibliography processing](bibliography-processing.md): BibTeX/Biber with direct TeX engines, staged artifacts, subsequent passes, and cancellation.
+- [Bibliography build diagnostics](bibliography-diagnostics.md): BibTeX/Biber source locations, missing resources, and filename fixes.
+- [SyncTeX queries](synctex.md): Source-to-PDF and PDF-to-source query protocols.
 
-## 开发与测试
+## Development and testing
 
-- [开发与测试](development.md)：检查命令和代码结构。
-- [连续编辑 benchmark](benchmarks.md)：真实 stdio 会话、功能延迟、原始样本和优化前后比较。
-- [功能审阅与实现队列](roadmap.md)：按重要性排序的功能缺口、实现状态及后续审阅。
-- [真实工具回归](testing.md)：外部程序要求、PDF 编译及编辑器测试命令。
+- [Development and testing](development.md): Quality checks, module ownership, and analysis architecture.
+- [Continuous editing benchmarks](benchmarks.md): Real stdio sessions, feature latency, raw samples, and before/after comparisons.
+- [Feature reviews and implementation queue](roadmap.md): Prioritized feature gaps, implementation status, and subsequent reviews.
+- [Tests with real tools](testing.md): External program requirements, PDF builds, and editor test commands.

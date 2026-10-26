@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Url};
+use std::path::Path;
+use texquill::{
     compilation::{build, build_log},
     text::Text,
 };
-use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Url};
-use std::path::Path;
 
 const HELP: &str = "\nSee the LaTeX manual or LaTeX Companion for explanation.\nType  H <return>  for immediate help.\n ...                                              \n                                                  \n";
 const SOURCE: &str = r"😀 \usepackage[draft]{local}\relax";
@@ -136,7 +136,7 @@ fn incomplete_mismatched_or_interrupted_help_does_not_invent_option_details() {
         valid.replace("  [new]", "(./unknown.tex\n  [new]"),
         valid.replace(
             "  [new]",
-            "[latex-lsp: middle of compiler output omitted]\n  [new]",
+            "[texquill: middle of compiler output omitted]\n  [new]",
         ),
         format!("Unrelated output\n{valid}"),
         details("local", &"x".repeat(8192), "new"),
@@ -279,7 +279,7 @@ fn real_long_package_option_clashes_report_loaded_and_requested_values() {
             } else { format!("\\documentclass{{article}}\n{loads}\\begin{{document}}Hello.\\end{{document}}\n") }).unwrap();
             let outcome = build::run(
                 &root.join("main.tex"),
-                &latex_lsp::config::BuildConfig {
+                &texquill::config::BuildConfig {
                     executable: engine.into(),
                     ..Default::default()
                 },

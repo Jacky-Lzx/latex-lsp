@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build, config::BuildConfig};
 use lsp_types::{DiagnosticSeverity, Url};
 use std::{path::Path, sync::atomic::AtomicBool};
+use texquill::{compilation::build, config::BuildConfig};
 
 #[cfg(unix)]
 fn compiler(root: &Path, name: &str, body: &str) -> String {
@@ -105,8 +105,8 @@ fn an_unmodified_log_is_not_used_after_an_unrelated_compiler_failure() {
 #[ignore = "requires latexmk, pdflatex and xelatex"]
 fn real_latexmk_repeated_builds_keep_diagnostics_and_clear_repaired_errors() {
     for engine in [
-        latex_lsp::config::Engine::PdfLatex,
-        latex_lsp::config::Engine::XeLatex,
+        texquill::config::Engine::PdfLatex,
+        texquill::config::Engine::XeLatex,
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();

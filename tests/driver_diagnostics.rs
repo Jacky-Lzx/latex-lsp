@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::{DiagnosticSeverity, Url};
+use std::{process::Command, sync::atomic::AtomicBool};
+use texquill::{
     compilation::{build, build_log},
     config::BuildConfig,
 };
-use lsp_types::{DiagnosticSeverity, Url};
-use std::{process::Command, sync::atomic::AtomicBool};
 
 #[test]
 fn pdf_driver_errors_use_the_root_without_borrowing_tex_source_context() {
@@ -115,7 +115,7 @@ fn failed_builds_merge_only_driver_output_and_successful_passes_keep_the_final_l
         (true, "dvipdfmx:fatal: Driver failure.\n"),
         (true, "! Final TeX error.\nl.1 Root.\n"),
     ] {
-        let script = format!("#!/usr/bin/env sh\ncat > build/latex-lsp/main.log <<'AUDIT_LOG'\n(./main.tex\n)\n{driver_log}AUDIT_LOG\nprintf '%s\\n' '%PDF-1.4' > build/latex-lsp/main.pdf\ncat <<'AUDIT_OUTPUT'\n! Stale error from an earlier TeX pass.\nl.1 Root.\nAUDIT_OUTPUT\ncat >&2 <<'AUDIT_DRIVER'\ndvipdfmx:warning: Driver warning.\ndvipdfmx:warning: >> A font mapping detail.\ndvipdfmx:fatal: Driver failure.\nAUDIT_DRIVER\nexit {}\n", u8::from(failed));
+        let script = format!("#!/usr/bin/env sh\ncat > build/texquill/main.log <<'AUDIT_LOG'\n(./main.tex\n)\n{driver_log}AUDIT_LOG\nprintf '%s\\n' '%PDF-1.4' > build/texquill/main.pdf\ncat <<'AUDIT_OUTPUT'\n! Stale error from an earlier TeX pass.\nl.1 Root.\nAUDIT_OUTPUT\ncat >&2 <<'AUDIT_DRIVER'\ndvipdfmx:warning: Driver warning.\ndvipdfmx:warning: >> A font mapping detail.\ndvipdfmx:fatal: Driver failure.\nAUDIT_DRIVER\nexit {}\n", u8::from(failed));
         std::fs::write(&executable, script).unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         let config = BuildConfig {

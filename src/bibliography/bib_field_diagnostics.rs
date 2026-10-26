@@ -68,7 +68,7 @@ pub(crate) fn diagnostics(workspace: &Workspace, uri: &Url) -> Vec<Diagnostic> {
                 range,
                 severity: Some(DiagnosticSeverity::WARNING),
                 code: Some(NumberOrString::String(CODE.into())),
-                source: Some("latex-lsp".into()),
+                source: Some("texquill".into()),
                 message: format!(
                     "Repeated bibliography field `{}`",
                     &source[field.span.clone()]

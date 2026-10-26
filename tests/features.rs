@@ -1,12 +1,12 @@
-use latex_lsp::{
+use lsp_types::{CompletionTextEdit, Position, TextDocumentContentChangeEvent, Url};
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::{CompletionTextEdit, Position, TextDocumentContentChangeEvent, Url};
 
 fn uri(name: &str) -> Url {
-    Url::parse(&format!("file:///latex-lsp-tests/{name}")).unwrap()
+    Url::parse(&format!("file:///texquill-tests/{name}")).unwrap()
 }
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
@@ -508,7 +508,7 @@ fn environment_name_completion_does_not_guess_computed_names_or_overlap_edits_on
 #[test]
 fn snippet_completion_preserves_existing_arguments() {
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },

@@ -44,7 +44,7 @@ fn fix_all(ws: &Workspace, uri: &Url, doc: &Document) -> Option<CodeAction> {
     let fixes = crate::diagnostics::environment_diagnostics::fixes(ws, uri, doc);
     let mut unique: Vec<&syntax::QuickFix> = Vec::new();
     for fix in &fixes {
-        if fix.diagnostic.source.as_deref() != Some("latex-lsp") {
+        if fix.diagnostic.source.as_deref() != Some("texquill") {
             continue;
         }
         let edits = fix.edits();

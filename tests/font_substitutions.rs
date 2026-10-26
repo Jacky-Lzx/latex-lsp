@@ -1,7 +1,7 @@
-use latex_lsp::compilation::build_log::{compilation_analysis, parse};
 use lsp_types::*;
 use serde_json::json;
 use std::collections::BTreeMap;
+use texquill::compilation::build_log::{compilation_analysis, parse};
 
 fn warning(message: String) -> Diagnostic {
     Diagnostic {
@@ -296,14 +296,14 @@ fn real_font_substitutions_preserve_names_sizes_and_clear_after_font_selection_i
             let compiler = root.join(engine);
             std::fs::write(&compiler, format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nmax_print_line={width}\nexport TEXMFVAR TEXMFCACHE max_print_line\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
             std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let config = latex_lsp::config::BuildConfig {
+            let config = texquill::config::BuildConfig {
                 executable: compiler.to_string_lossy().into(),
                 ..Default::default()
             };
             let family = format!("missingfamily{}", "x".repeat(65));
             let source = format!("\\documentclass{{article}}\n\\DeclareFontFamily{{OT1}}{{lsplimited}}{{}}\n\\DeclareFontShape{{OT1}}{{lsplimited}}{{m}}{{n}}{{<10> cmr10}}{{}}\n\\begin{{document}}\n{{\\fontencoding{{OT1}}\\fontfamily{{missingfont}}\\selectfont Missing family.}}\n{{\\fontencoding{{OT1}}\\fontfamily{{cmr}}\\fontseries{{bx}}\\fontshape{{sc}}\\selectfont Missing shape.}}\n{{\\fontencoding{{OT1}}\\fontfamily{{lsplimited}}\\fontsize{{14.7}}{{18}}\\selectfont Limited size.}}\n{{\\fontencoding{{OT1}}\\fontfamily{{{family}}}\\selectfont Long family.}}\n\\end{{document}}\n");
             std::fs::write(&main, &source).unwrap();
-            let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+            let outcome = texquill::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(
                 outcome.status, "success",
                 "{engine}/{width}: {}",
@@ -335,7 +335,7 @@ fn real_font_substitutions_preserve_names_sizes_and_clear_after_font_selection_i
                 .replace(r"\fontshape{sc}", r"\fontshape{n}")
                 .replace(r"\fontsize{14.7}{18}", r"\fontsize{10}{18}");
             std::fs::write(&main, fixed).unwrap();
-            let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
+            let outcome = texquill::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(
                 outcome.status, "success",
                 "{engine}/{width}: {}",

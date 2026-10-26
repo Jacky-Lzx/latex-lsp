@@ -1878,8 +1878,8 @@ mod graphic_conditions {
         assert_eq!(snapshot.paths.len(), MAX_PATHS);
         assert!(snapshot.paths.contains_key(&root.join("last.pdf")));
         assert!(!snapshot.paths.contains_key(&root.join("last.png")));
-        let snapshot = capture(root, r"\includegraphics{build/latex-lsp/main.pdf}");
-        let output = root.join("build/latex-lsp/main.pdf");
+        let snapshot = capture(root, r"\includegraphics{build/texquill/main.pdf}");
+        let output = root.join("build/texquill/main.pdf");
         assert!(!snapshot.paths.contains_key(&output));
         std::fs::create_dir_all(output.parent().unwrap()).unwrap();
         std::fs::write(output, b"%PDF-1.4\n").unwrap();
@@ -2158,7 +2158,7 @@ mod indirect_source_checks_tests {
             let uri = Url::from_file_path(&root).unwrap();
             std::fs::write(
                 &root,
-                format!(r"\def\readpart{{\input}}{call}\csuse{{include}}{{sub/chapter}}\IfFileExists{{build/latex-lsp/sub/chapter.aux}}{{}}{{}}"),
+                format!(r"\def\readpart{{\input}}{call}\csuse{{include}}{{sub/chapter}}\IfFileExists{{build/texquill/sub/chapter.aux}}{{}}{{}}"),
             )
             .unwrap();
             let mut workspace = Workspace::default();
@@ -2172,7 +2172,7 @@ mod indirect_source_checks_tests {
             );
             assert!(!snapshot
                 .paths
-                .contains_key(&directory.path().join("build/latex-lsp/sub/chapter.aux")));
+                .contains_key(&directory.path().join("build/texquill/sub/chapter.aux")));
             assert!(snapshot.changed_path().is_none());
             std::fs::write(directory.path().join("chapte.tex"), "Chapter").unwrap();
             assert!(snapshot.changed_path().is_some(), "{call}");

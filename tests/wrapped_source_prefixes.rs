@@ -1,5 +1,5 @@
-use latex_lsp::compilation::build_log;
 use lsp_types::{NumberOrString, Url};
+use texquill::compilation::build_log;
 
 #[test]
 fn continued_source_names_outgrow_existing_and_unavailable_prefix_files() {

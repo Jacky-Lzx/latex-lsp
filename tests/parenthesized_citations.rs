@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, semantic},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///parenthesized-citations/{name}")).unwrap();
@@ -132,7 +132,7 @@ fn citation_variants_rename_exact_keys_across_declarations_and_bibtex_fields() {
                 format!("\\citetalias{{{old}}}"),
             ] {
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         ..Default::default()
                     },
@@ -336,7 +336,7 @@ fn citation_spelling_fixes_preserve_compiler_ranges_for_parenthesized_keys() {
     let diagnostics = build_log::parse(&main, "(./main.tex\nLaTeX Warning: Citation `book(targte)' on page 1 undefined on input line 4.\n)\n");
     let diagnostic = diagnostics[&uri][0].clone();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -435,7 +435,7 @@ fn multiline_bibtex_headers_keep_metadata_navigation_and_exact_rename_ranges() {
         for gap in ["\n", "\r\n  ", " \t\n\t", "\n\n"] {
             for (open, close) in [('{', '}'), ('(', ')')] {
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: true,
                         ..Default::default()
                     },

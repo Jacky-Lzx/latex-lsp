@@ -1,5 +1,5 @@
-use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
+use texquill::{compilation::build_log, text::Text};
 
 const HELP: &str = "\nSee the LaTeX manual or LaTeX Companion for explanation.\nType  H <return>  for immediate help.\n ...                                              \n                                                  \n";
 
@@ -208,7 +208,7 @@ fn environment_context_falls_back_for_expansion_stale_sources_and_incomplete_hel
         format!("{HELP}l.2 Text \\begin{{algin}}"),
         format!("{HELP}l.1 Text \\begin{{algin}}a\\end{{algin}} \\broken"),
         "Package audit Warning: Adjacent warning.\nl.1 Text \\begin{algin}".into(),
-        "[latex-lsp: middle of compiler output omitted]\nl.1 Text \\begin{algin}".into(),
+        "[texquill: middle of compiler output omitted]\nl.1 Text \\begin{algin}".into(),
         "See the LaTeX manual or LaTeX Companion for explanation.\nType H <return> for help.\nl.1 Text \\begin{algin}".into(),
     ] {
         let log = format!("(./main.tex\n./main.tex:1: LaTeX Error: Environment algin undefined.\n{context}\n)\n");
@@ -244,8 +244,8 @@ fn environment_diagnostics_ignore_comments_verbatim_dynamic_names_and_end_argume
 #[cfg(unix)]
 #[ignore = "requires pdflatex, xelatex and lualatex"]
 fn real_engines_pinpoint_environment_names_and_keep_macro_expansion_errors_on_the_call_line() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::{os::unix::fs::PermissionsExt, sync::atomic::AtomicBool};
+    use texquill::{compilation::build, config::BuildConfig};
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for numbered in [false, true] {
             let directory = tempfile::tempdir().unwrap();

@@ -5,11 +5,11 @@ const { runTests } = require('@vscode/test-electron');
 
 async function main() {
   const extensionDevelopmentPath = path.resolve(__dirname, '..');
-  const server = process.env.LATEX_LSP_TEST_SERVER
-    ?? path.resolve(extensionDevelopmentPath, '../../target/release/latex-lsp');
+  const server = process.env.TEXQUILL_TEST_SERVER
+    ?? path.resolve(extensionDevelopmentPath, '../../target/release/texquill');
   await fs.access(server);
   // realpath avoids /var vs /private/var URI aliases on macOS.
-  const temporaryRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'latex-lsp-vscode-')));
+  const temporaryRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'texquill-vscode-')));
   const workspace = path.join(temporaryRoot, 'project');
   const userData = path.join(temporaryRoot, 'user-data');
   try {
@@ -28,8 +28,8 @@ async function main() {
     await fs.writeFile(path.join(workspace, 'slow.cjs'),
       'require("node:fs").writeFileSync(require("node:path").join(__dirname, "slow.pid"), String(process.pid)); setTimeout(() => {}, 60000);');
     await fs.writeFile(path.join(userData, 'User/settings.json'), JSON.stringify({
-      'latex-lsp.serverPath': server,
-      'latex-lsp.settings': { distribution: { enabled: false }, build: { executable: 'pdflatex', outputDirectory: 'build' } },
+      'texquill.serverPath': server,
+      'texquill.settings': { distribution: { enabled: false }, build: { executable: 'pdflatex', outputDirectory: 'build' } },
       'security.workspace.trust.enabled': false,
       'workbench.startupEditor': 'none',
       'extensions.autoUpdate': false,
@@ -42,7 +42,7 @@ async function main() {
       extensionDevelopmentPath,
       extensionTestsPath: path.join(extensionDevelopmentPath, 'dist/test/integration.js'),
       vscodeExecutablePath: process.env.VSCODE_EXECUTABLE_PATH,
-      extensionTestsEnv: { LATEX_LSP_TEST_WORKSPACE: workspace, LATEX_LSP_TEST_NODE: process.execPath },
+      extensionTestsEnv: { TEXQUILL_TEST_WORKSPACE: workspace, TEXQUILL_TEST_NODE: process.execPath },
       launchArgs: [workspace, '--user-data-dir', userData, '--extensions-dir', path.join(temporaryRoot, 'extensions'),
         '--disable-extensions', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust', '--no-sandbox'],
     });

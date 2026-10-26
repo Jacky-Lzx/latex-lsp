@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     compilation::build_log,
     editing,
     language::{features, semantic},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///quoted-citations/{name}")).unwrap();
@@ -78,7 +78,7 @@ fn quoted_keys_navigate_and_rename_across_all_citation_argument_styles() {
                 format!("\\bibitem[Display]{{% keep\r\n{key}% tail\r\n}} Body"),
             ] {
                 let mut workspace = Workspace {
-                    client: latex_lsp::project::state::ClientCapabilities {
+                    client: texquill::project::state::ClientCapabilities {
                         versioned_edits: versioned,
                         ..Default::default()
                     },
@@ -158,7 +158,7 @@ fn rename_into_quotes_converts_each_quoted_relationship_value_once() {
     for versioned in [false, true] {
         for tail in ["\"}", ""] {
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: versioned,
                     ..Default::default()
                 },
@@ -382,7 +382,7 @@ fn quoted_undefined_citations_have_exact_warning_ranges_and_spelling_repairs() {
             Text::new(source.clone()).range(start, start + "O\"Cononr".len())
         );
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },

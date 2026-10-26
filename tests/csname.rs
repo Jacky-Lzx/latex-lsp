@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeMap, path::Path, sync::atomic::AtomicBool};
+use texquill::{
     compilation::build,
     editing,
     language::{features, signature},
     project::workspace::Workspace,
 };
-use lsp_types::*;
-use std::{collections::BTreeMap, path::Path, sync::atomic::AtomicBool};
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -221,7 +221,7 @@ fn unicode_named_macro_renames_preserve_behavior_in_all_supported_engines() {
         } else {
             executable.into()
         };
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: compiler,
             ..Default::default()
         };
@@ -364,7 +364,7 @@ fn renamed_literal_macro_calls_keep_control_word_syntax_and_compile() {
     for (uri, source) in renamed(&workspace, &main, position) {
         std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
     }
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -521,7 +521,7 @@ fn renamed_expanded_literal_definitions_and_aliases_still_compile() {
         for (uri, source) in renamed(&workspace, &definitions, position) {
             std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
         }
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: "pdflatex".into(),
             ..Default::default()
         };
@@ -554,7 +554,7 @@ fn robust_macro_renames_preserve_defaults_literal_calls_and_protected_expansion(
             &[("main.tex", source), ("definitions.tex", &definitions)],
         );
         let main = root.join("main.tex");
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: "pdflatex".into(),
             ..Default::default()
         };
@@ -1038,7 +1038,7 @@ fn named_alias_renames_preserve_the_copied_meaning_when_the_original_is_redefine
             &[("main.tex", source), ("definitions.tex", &definitions)],
         );
         let main = root.join("main.tex");
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: "pdflatex".into(),
             ..Default::default()
         };
@@ -1106,7 +1106,7 @@ fn named_mutation_renames_preserve_scope_and_expansion_behavior() {
             &[("main.tex", &source), ("definitions.tex", definitions)],
         );
         let main = uri(root, "main.tex");
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: "pdflatex".into(),
             ..Default::default()
         };
@@ -1195,7 +1195,7 @@ fn named_calls_and_predicates_still_compile_after_cross_file_macro_rename() {
         &[("main.tex", source), ("definitions.tex", definitions)],
     );
     let main = root.join("main.tex");
-    let config = latex_lsp::config::BuildConfig {
+    let config = texquill::config::BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
     };
@@ -1376,7 +1376,7 @@ fn named_declaration_renames_preserve_local_global_and_expanded_definition_behav
             &[("main.tex", source), ("definitions.tex", &definitions)],
         );
         let main = root.join("main.tex");
-        let config = latex_lsp::config::BuildConfig {
+        let config = texquill::config::BuildConfig {
             executable: "pdflatex".into(),
             ..Default::default()
         };

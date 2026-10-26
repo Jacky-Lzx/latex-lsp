@@ -252,7 +252,7 @@ fn complete_with_argument(
         }
     }
     for parent in directories {
-        let Ok(origin) = Url::from_file_path(parent.join("__latex_lsp_completion__.tex")) else {
+        let Ok(origin) = Url::from_file_path(parent.join("__texquill_completion__.tex")) else {
             continue;
         };
         let Ok(entries) = std::fs::read_dir(parent.join(directory)) else {

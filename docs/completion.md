@@ -1,34 +1,34 @@
-# 补全
+# Completion
 
-[返回文档目录](README.md) · [编辑功能](editing.md) · [编辑器配置](editors.md)
+[Back to documentation](README.md) · [Editing features](editing.md) · [Editor configuration](editors.md)
 
-支持常用 LaTeX 命令、环境、项目内用户命令、跨文件标签、BibTeX 条目类型、字段名、字符串缩写与文献键，以及输入文件、图片和本地包等路径。支持词中替换；引用和路径的可选参数含有嵌套命令时，仍可找到当前的键名或文件参数。
+Supports common LaTeX commands, environments, in-project user commands, cross-file labels, BibTeX entry types, field names, string abbreviations and citation keys, as well as paths to input files, images and local packages. Supports mid-word substitution; when optional parameters of references and paths contain nested commands, the current key name or file parameter can still be found.
 
-内置及已加载宏包中的数学专用命令（如 `alpha`、`frac`、`dfrac`）仅在数学模式中补全。识别 `$…$`、`$$…$$`、`\(…\)`、`\[…\]`、`ensuremath` 和常见公式环境；公式内的 `text`、`mbox` 等文本参数恢复文本模式。注释、逐字内容、转义符号与未展开的命令名操作数不改变模式。用户定义继续优先，声明、复制和查看命令名的位置仍可补全数学命令。此判断基于当前文件的静态语法，不执行宏展开或推断自定义环境的数学模式。
+Math-only commands from the built-in catalog and loaded packages (such as `alpha`, `frac`, and `dfrac`) are completed only in math mode. The server recognizes `$…$`, `$$…$$`, `\(…\)`, `\[…\]`, `ensuremath`, and common math environments; text arguments such as `text` and `mbox` inside formulas restore text mode. Comments, verbatim content, escaped symbols, and unexpanded command-name operands do not change the mode. User definitions retain priority, and math commands remain available when declaring, copying, or inspecting command names. This check uses static syntax in the current file; it does not expand macros or infer math mode for custom environments.
 
-biblatex 的 `citefield` / `printfield`、`citelist` / `printlist`、`citename` / `printnames` 还按参数类型补全常用输出字段、字面列表或姓名列表名称，并提供悬停说明；详见[biblatex 数据访问](biblatex.md#字段列表和姓名引用)。
+biblatex's `citefield` / `printfield`, `citelist` / `printlist`, `citename` / `printnames` also completes common output fields, literal lists or name list names by parameter type, and provides hover instructions; see [biblatex Data Access](biblatex.md#fields-lists-and-name-references).
 
-字段读取、undef 检查和字段/列表比较共用名称候选。`iffieldsequal` 的两个字段参数都可补全；比较字符串、命令内容和执行分支中的普通文字保持独立，详见[字段与列表条件](biblatex.md#字段与列表条件)。
+Field reads, undef checks, and field/list comparisons share name candidates. Both field parameters of `iffieldsequal` can be completed; the comparison string, command content and ordinary text in the execution branch remain independent. For details, see [Field and List Conditions](biblatex.md#field-and-list-conditions).
 
-`ifentrytype` 的首参数建议常用 biblatex 输出条目类型，使用普通名称编辑和类型说明；它的两个分支保持独立，详见[条目条件检查](biblatex.md#条目条件检查)。
+The first parameter of `ifentrytype` recommends commonly used biblatex output entry types, using ordinary name editing and type description; its two branches remain independent, see [Entry Condition Check](biblatex.md#entry-condition-check) for details.
 
-## BibTeX 条目与字段
+## BibTeX entries and fields
 
-在 `@` 后补全常用 BibTeX / biblatex 条目类型，也提供当前项目文献库中已出现的自定义类型。输入 `@art` 可选择 `article`，大小写不敏感，词中补全会替换完整类型名并保留 `@`。已有花括号或圆括号正文时，只替换名称，保留条目键、字段和注释。
+Complete common BibTeX / biblatex entry types after `@`, and also provide custom types that already appear in the current project library. Enter `@art` to select `article`, which is not case-sensitive. In-word completion will replace the complete type name and retain `@`. When there is already a curly or parenthesis body, only the name is replaced, the entry key, fields, and comments are retained.
 
-支持片段的客户端可以直接插入新条目的字段模板，例如选择 `article` 后填入文献键、作者、标题、期刊和年份。模板采用当前文档的 LF / CRLF；`comment`、`string` 和 `preamble` 使用各自的语法。模板提供常用字段，不用于判断样式要求或校验必填项；自定义类型生成通用条目骨架。
+Clients that support snippets can directly insert the field template of a new entry, for example, select `article` and fill in the citation key, author, title, journal, and year. The template takes the LF/CRLF of the current document; `comment`, `string` and `preamble` use their respective syntax. The template provides common fields and is not used to determine style requirements or verify required items; the custom type generates a general entry skeleton.
 
-在条目键后的逗号、字段之间的空白或未完成字段名处，提供常用字段补全。候选包含字段说明，优先显示当前类型常用的字段，排除同一条目中已经填写的字段名；比较不区分大小写。编辑已有字段名时保留其赋值、字段值及注释。例如，把 `AUTHbad = {Writer}` 中的 `AUTHbad` 补全为 `author`，不会修改 `{Writer}`。
+Provides common field completion at commas after entry keys, spaces between fields, or incomplete field names. Candidates include field descriptions, which prioritize commonly used fields of the current type and exclude field names that have already been filled in in the same entry; comparisons are not case-sensitive. When editing an existing field name, its assignment, field value, and comments are retained. For example, completing `AUTHbad` in `AUTHbad = {Writer}` to `author` will not modify `{Writer}`.
 
-候选也包含当前项目文献库中已赋值的自定义字段。保留原始名称，按 ASCII 大小写去重；同名字段优先采用当前文件中的拼写，内置字段使用标准小写名称。当前类型常用字段排在最前，其余内置字段之后显示自定义字段。尚未赋值的名称不会成为项目候选，已输入 `=` 的未完成赋值仍可贡献字段名。其他项目、注释和特殊条目中的示例不参与收集。
+Candidates also contain custom fields that have values assigned to them in the current project library. The original name is retained and deduplicated according to ASCII case; fields with the same name are given priority to use the spelling in the current file, and built-in fields use standard lowercase names. Commonly used fields of the current type are listed first, and custom fields are displayed after the other built-in fields. Names that have not yet been assigned will not become project candidates, and unfinished assignments that have entered `=` can still contribute field names. Examples from other projects, notes, and special entries are not included in the collection.
 
-字段名采用 BibTeX 标识符规则，支持 `custom:field`、`field$` 和非 ASCII 字符等合法名称；它们的后续字段继续参与大纲、导航、补全和语义高亮。在 `AUTH:bad` 中输入 `AUTH` 后选择 `author`，会替换整个 `AUTH:bad` 名称。数字开头的字段名不作为有效赋值解析。
+Field names adopt BibTeX identifier rules, supporting legal names such as `custom:field`, `field$`, and non-ASCII characters; their subsequent fields continue to participate in outline, navigation, completion, and semantic highlighting. Entering `AUTH` in `AUTH:bad` and then selecting `author` will replace the entire `AUTH:bad` name. Field names beginning with a number are not parsed as valid assignments.
 
-支持片段时，新字段插入值占位符，如 `author = {…},`，并保留已有逗号；已有 `=` 时只改字段名。自定义字段名中的 `$` 和反斜杠会按片段语法转义，展开后保留原始字符。没有片段能力的客户端只插入类型名或字段名。内置条目类型和字段名也提供悬停说明；条目键和条目间引用继续使用文献导航与补全。
+When fragments are supported, the new field inserts a value placeholder, such as `author = {…},`, and retains the existing commas; when `=` already exists, only the field name is changed. `$` and backslashes in custom field names are escaped per snippet syntax and the original characters are retained after expansion. Clients without snippet support only insert type names or field names. Built-in item types and field names also provide hover descriptions; item keys and inter-item references continue to use document navigation and completion.
 
-上下文复用条目及字段解析，不在条目键、标题、URL、其他字段值、注释和特殊条目正文中建议类型或字段名。缺少键后的逗号或遇到无法解析的字段时，不猜测后续字段。自定义类型和字段的候选按项目隔离，不引入独立论文中的名称；未保存的增量编辑立即更新候选，关闭文件后恢复当前磁盘内容。
+Contextual reuse of entry and field parsing does not suggest types or field names in entry keys, titles, URLs, other field values, comments, and special entry bodies. Subsequent fields are not guessed when a comma after a key is missing or an unparsable field is encountered. Candidates for custom types and fields are isolated by project and names from independent papers are not introduced; unsaved incremental edits update candidates immediately, restoring current disk contents after closing the file.
 
-验证：
+verify:
 
 ```sh
 cargo test --locked --test bibliography_completion --test bibliography
@@ -38,29 +38,29 @@ cargo test --locked --test bibliography_completion real_bibtex_reads_completed -
 cargo test --locked --test bibliography_completion bibliography_snippets -- --include-ignored
 ```
 
-最后一项通过真实 Neovim 0.10+ 的 `vim.snippet` 检查片段展开；原生 BibTeX 回归使用自定义样式读取补全后的字段，验证已有赋值和后续标题保留。
+The last item is expanded by the `vim.snippet` check snippet of real Neovim 0.10+; the native BibTeX regression uses a custom style to read the completed field, verify that the assigned value and subsequent title are preserved.
 
-BibTeX 字段值、字符串赋值和 `@preamble` 的表达式还提供项目内[字符串缩写](bibliography.md#字符串缩写)及常见月份补全。候选可替换完整裸标识符，或填入 `=`、`#` 后的空值位置，保留字面文本和拼接结构。
+BibTeX field values, string assignments, and expressions for `@preamble` also provide in-project [string abbreviation](bibliography.md#string-abbreviations) and common month completions. Candidates can replace the complete naked identifier, or fill in the empty value position after `=`, `#`, preserving the literal text and splicing structure.
 
-## 调用片段与已有参数
+## Call snippets and existing arguments
 
-唯一用户宏和环境的补全说明包含原有声明信息和声明前连续的[文档注释](command-documentation.md)，按纯文本展示；同名声明有歧义时保留原有简要信息。环境名称补全与普通控制词补全复用一次建立的项目声明索引，避免为每个候选扫描整个项目。宏与环境的声明分别判断，保留同名声明各自的说明。
+The completion description of the unique user macro and environment includes the original declaration information and the consecutive [Document Comments](command-documentation.md) before the declaration, and is displayed as plain text; when there is ambiguity in the declaration with the same name, the original brief information is retained. Environment name completion and normal control word completion reuse the project declaration index built once to avoid scanning the entire project for each candidate. The declarations of macros and environments are judged separately, and the respective descriptions of declarations with the same name are retained.
 
-服务器提供标准 `completionItem/resolve`。客户端在 `textDocument.completion.completionItem.resolveSupport.properties` 中包含 `documentation` 时，用户宏与环境文档延后到解析请求返回；其余客户端直接收到内联说明。片段、名称替换、附加编辑和排序字段在解析中保持原值。普通内置项等无需解析的候选原样返回。
+The server provides standard `completionItem/resolve`. When the client contains `documentation` in `textDocument.completion.completionItem.resolveSupport.properties`, the user macro and environment document are deferred until the parsing request is returned; other clients receive the inline description directly. Fragment, name substitution, additional editing and sorting fields retain their original values during parsing. Candidates that do not need to be parsed, such as ordinary built-ins, are returned unchanged.
 
-解析数据绑定原始文档、声明命名空间、唯一声明、项目文件内容和版本。相关缓冲区发生变化、声明消失、作用域改变或数据被改写时返回 `-32801`，客户端应重新请求补全；结构不合法的数据返回 `InvalidParams`。独立项目的修改不会使当前项目的候选失效。此延迟机制覆盖普通用户控制词及环境名称分支，专用的 expl3、路径、文献和其他名称参数补全继续使用各自的即时说明。
+Parse data binding raw documents, declaration namespaces, unique declarations, project file contents and versions. `-32801` is returned when the relevant buffer changes, the declaration disappears, the scope changes, or the data is rewritten, and the client should request completion again; data with illegal structure returns `InvalidParams`. Modifications to independent projects will not invalidate candidates for the current project. This delay mechanism covers the normal user-controlled word and environment name branches, and dedicated expl3, path, literature, and other name parameter completions continue to use their respective on-the-fly instructions.
 
-客户端声明 snippet 支持时，命令补全可插入参数占位符；否则只插入命令名。用户命令根据项目内的静态签名生成片段，省略可选参数与标志，保留默认行为。
+When the client declares snippet support, command completion can insert parameter placeholders; otherwise, only the command name is inserted. User commands generate fragments based on static signatures within the project, omitting optional parameters and flags, and retaining the default behavior.
 
-跨文件声明及参数数量中的注释规则见[参数提示](signatures.md)。
+See [Signature help](signatures.md) for the comment rules for cross-file declarations and number of parameters.
 
-已有参数时只替换名称，不重复添加参数。内置命令也保留已有的无花括号 ASCII 实参，例如 `\frac12` 和 `\textbf\payload`；在数学、对齐或环境结束符前仍插入参数占位符。用户宏使用相同规则，显式声明的标志和分隔符优先。
+If there are already parameters, only the names will be replaced and parameters will not be added repeatedly. Built-in commands also retain existing braceless ASCII arguments, such as `\frac12` and `\textbf\payload`; parameter placeholders are still inserted before math, alignment, or environment terminators. The same rules apply to user macros, with explicitly declared flags and delimiters taking precedence.
 
-## 命令名操作数
+## Command-name operands
 
-声明目标、命令复制来源和 `meaning` 查看位置只读取命令名，不调用该命令。输入部分命令名并接受补全时，仅替换名称，不插入被命名命令的参数；只输入反斜杠、尚未输入字母时也遵循这一规则，兼容尚未闭合的名称分组。例如，项目内有 `\newcommand{\ordinary}[1]{#1}` 时：
+Declaring the target, command copy source, and `meaning` view location only reads the command name and does not invoke the command. When you enter part of a command name and accept completion, only the name is replaced and the parameters of the named command are not inserted. This rule is also followed when only backslashes are entered and no letters are entered, and it is compatible with unclosed name groups. For example, when there is `\newcommand{\ordinary}[1]{#1}` in the project:
 
-| 输入 | 选择 `ordinary` 后 |
+| Input | After selecting `ordinary` |
 | --- | --- |
 | `\meaning\` | `\meaning\ordinary` |
 | `\meaning\ord` | `\meaning\ordinary` |
@@ -68,16 +68,16 @@ BibTeX 字段值、字符串赋值和 `@preamble` 的表达式还提供项目内
 | `\newcommand{\ord}` | `\newcommand{\ordinary}` |
 | `\futurelet\ord\relax x` | `\futurelet\ordinary\relax x` |
 
-内置命令与跨文件用户命令适用相同规则。词中补全替换剩余命令字母，保留反斜杠、注释、换行和后续正文；位置采用 UTF-16，兼容中文与 emoji。
+The same rules apply to built-in commands as to cross-file user commands. In-word completion replaces the remaining command letters, retaining backslashes, comments, line breaks, and subsequent text; the position uses UTF-16 and is compatible with Chinese and emoji.
 
-实际调用仍提供参数片段，包括 `futurelet` 的后续执行命令，以及被查看或复制的操作数之后再次出现的真实命令。操作数判断沿用静态解析边界；本文件前文已显式重定义相关关键词时，按普通调用处理。不执行任意宏展开，也不完整推断跨文件改写或分组恢复。
+The actual call still provides the argument snippet, including the subsequent execution command of `futurelet`, and the real command that appears again after the operand is viewed or copied. The operand judgment follows the static parsing boundary; when the relevant keywords have been explicitly redefined in the previous section of this document, they are processed as ordinary calls. Does not perform arbitrary macro expansion, nor does it fully infer cross-file overwrites or group recovery.
 
-相关语义见[命令名操作数与声明](declaration-operands.md)、[meaning](meaning.md) 和 [futurelet](futurelet.md)。
+For related semantics, see [Command-name operands and declaration](declaration-operands.md), [meaning](meaning.md) and [futurelet](futurelet.md).
 
-`detokenize` 的分组正文、`string` 转成文字的 token 不提供普通命令补全；文件名参数中的这些包装仍可用于路径补全。被 `meaning` 查看或被复制的转换命令不启动文字转换，后续真实命令继续提供补全。
+The grouped text of `detokenize` and the token converted to text by `string` do not provide ordinary command completion; these wrappers in the file name parameter can still be used for path completion. The conversion command viewed or copied by `meaning` does not start text conversion, and subsequent real commands continue to provide completion.
 
-## 名称替换
+## Name replacement
 
-选择单标签引用、环境或计数器名称补全时，以候选的完整名称替换当前名称参数，包括旧名称内部的首尾空白，避免补全后仍引用另一个名称。保留参数分隔符、数值、格式和参数外的排版。
+When single-label reference, environment, or counter name completion is selected, the current name parameter is replaced with the full name of the candidate, including leading and trailing whitespace within the old name, to avoid still referencing another name after completion. Preserves parameter separators, values, formatting, and typesetting outside parameters.
 
-跨行名称使用当前行的主编辑与互不重叠的附加删除编辑，符合 LSP 对补全编辑的单行要求。动态名称与无法安全安放主编辑的空行不提供建议。
+Cross-line names use the current line's main edit and non-overlapping additional delete edits, which conforms to LSP's single-line requirements for completion edits. No suggestions are provided for dynamic names and empty lines where the main editor cannot be safely placed.

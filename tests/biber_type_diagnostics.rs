@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "invalid-bibliography-entry-type";
 fn uri(root: &Path, file: &str) -> Url {
@@ -245,7 +245,7 @@ fn type_diagnostics_refresh_raw_name_ranges_without_an_unverified_misc_replaceme
         let item = &items(&diagnostics, &uri(root, "refs.data"))[0];
         assert_eq!(item.range, span(&source, "Straße"));
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },

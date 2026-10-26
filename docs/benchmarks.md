@@ -1,27 +1,27 @@
-# 连续编辑性能测试
+# Continuous editing benchmarks
 
-[返回文档](README.md)
+[Back to documentation](README.md)
 
-`benchmarks/editing.py` 使用 Python 3 标准库启动真实的 release 服务器，以 LSP stdio 协议回放编辑器会话。无需安装 Python 包、TeX 发行版或编辑器。
+`benchmarks/editing.py` uses the Python 3 standard library to start a real release server and play back the editor session with the LSP stdio protocol. No need to install Python packages, TeX distributions or editors.
 
 ```sh
 cargo build --release --locked
 python3 benchmarks/editing.py --output target/benchmarks/latest.json
 ```
 
-默认测量三档确定性生成的项目：small 为 1 个章节、每章 16 节；medium 为 4 个章节、每章 32 节；large 为 8 个章节、每章 64 节。每个项目包含主文档、章节文件与 BibTeX 数据库，正文含中文、emoji、数学环境、用户宏、跨文件标签和文献引用。项目均低于默认索引预算；测试会拒绝索引截断。
+By default, three sizes of deterministically generated projects are measured: small is 1 chapter and 16 sections per chapter; medium is 4 chapters and 32 sections per chapter; large is 8 chapters and 64 sections per chapter. Each project contains the main document, chapter files and BibTeX database. The text contains Chinese, emoji, mathematical environment, user macros, cross-file labels and citations. Projects are all below the default index budget; the test rejects index truncation.
 
-每档启动 3 个独立服务器，每次先预热 3 个周期，再测量 20 个周期。每周期执行：
+Start 3 independent servers at each level, warm up for 3 cycles each time, and then measure for 20 cycles. Execute every cycle:
 
-1. 插入／删除中文，或粘贴／删除带新标签的多行正文，使用 UTF-16 增量范围。
-2. 修改未保存主文档中用户宏的参数个数，并在章节中查询最新参数提示。
-3. 查询标签、文献、命令补全，悬停，定义，引用，跨文件重命名，参数提示，大纲，工作区符号的精确／全部／无匹配搜索，折叠，以及完整语义令牌和缓存 delta。
-4. 引入／修复未定义引用，查询完整 pull 诊断，再用 `previousResultId` 查询缓存报告。
-5. 连发 8 次增量编辑，随后立即请求补全，测量输入突发下的响应时间。
+1. Insert/delete Chinese text, or paste/delete multi-line text with new labels, using UTF-16 increment range.
+2. Modify the number of parameters of the user macro in the unsaved main document, and check the latest signature help in the chapter.
+3. Query label completion, citation completion, command completion, hover, definition, citation, cross-file renaming, signature help, outline, exact/all/no match search for workspace symbols, folding, and full semantic tokens and cached delta.
+4. Introduce/repair undefined references, query the complete pull diagnostics, and then use `previousResultId` to query the cache report.
+5. Burst 8 incremental edits, followed immediately by requesting completion, and measure response time under bursts of input.
 
-重命名只测量生成工作区编辑的时间，不应用重命名。每个响应都会进行内容校验，包括预期补全候选、精确的定义位置、跨章节引用和重命名的完整文件集合及条目数量、主文档参数变化，以及错误出现／消失和诊断缓存命中。CI 运行 small 的短会话校验协议和脚本，不设置受机器负载影响的耗时门槛。
+Renaming only measures the time it takes to generate workspace edits, renaming is not applied. Each response is checked for content, including expected completion candidates, precise definition locations, the complete set of files and number of entries referenced and renamed across chapters, main document parameter changes, and the appearance/disappearance of errors and diagnostic cache hits. CI runs small's short session verification protocol and scripts without setting a time-consuming threshold that is affected by machine load.
 
-`--hook-labels` 为每节增加显式 `contribution` 代码标签，并加入另一个 hook 的干扰标签和带完整后缀的补全字段。每周期额外核验全部代码块的精确定义位置、注册与使用的全部引用、悬停及按 hook 过滤的完整后缀补全；三档分别有 17／129／513 个定义，18／133／521 项引用。可与其他 hook 选项组合。配对脚本的 `--query hook-definition` 自动启用此负载，交替测量同一代码标签查询，并逐项比较定义响应；`--query definition --hook-labels` 用于观察同一项目内普通查询的索引成本。
+`--hook-labels` Adds explicit `contribution` code labels to each section and adds interference tags for another hook and completion fields with full suffixes. Each cycle additionally verifies the precise definition position of all code blocks, all references registered and used, hover and complete suffix completion filtered by hook; the three levels have 17/129/513 definitions and 18/133/521 references respectively. Can be combined with other hook options. `--query hook-definition` of the paired script automatically enables this load, alternately measuring the same code label query, and comparing the defined responses item by item; `--query definition --hook-labels` is used to observe the indexing cost of ordinary queries within the same project.
 
 ```sh
 python3 benchmarks/editing.py --hook-labels --output target/benchmarks/hook-labels.json
@@ -29,7 +29,7 @@ python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after tar
   --query hook-definition --output target/benchmarks/hook-label-pairs.json
 ```
 
-`--lifecycle-labels` 隐含 `--hook-labels`，把每节的注册改为 `AtBeginDocument[contribution]`，在主文档混合一个 `AddToHook{begindocument}[contribution]`，并加入结束阶段的 `AtEndDocument[contrast]` 干扰。定义／引用按 `begindocument` 组合身份独立计算，悬停也核对 hook 名称；补全必须排除结束阶段和其他 hook 的同前缀标签。仍逐项核验三档全部 17／129／513 个代码块及 18／133／521 项引用。两种脚本均记录 `lifecycle_labels`，比较要求选项一致。
+`--lifecycle-labels` implies `--hook-labels`, changes the registration of each section to `AtBeginDocument[contribution]`, mixes a `AddToHook{begindocument}[contribution]` in the main document, and adds the `AtEndDocument[contrast]` interference in the end stage. The definition/reference is calculated independently according to the `begindocument` combination identity, and the hook name is also checked on hover; the completion must exclude the end stage and the same prefix tags of other hooks. All 17/129/513 code blocks and 18/133/521 references in the three project sizes are still verified one by one. Both scripts record `lifecycle_labels`, and the comparison requires the options to be consistent.
 
 ```sh
 python3 benchmarks/editing.py --lifecycle-labels --output target/benchmarks/lifecycle-labels.json
@@ -37,7 +37,7 @@ python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after tar
   --query hook-definition --lifecycle-labels --output target/benchmarks/lifecycle-pairs.json
 ```
 
-`--global-hook-rules` 隐含 `--hook-labels`，每节加入其他 hook 的同名注册，每章增加全局默认规则及完整后缀补全探测。可与 `--lifecycle-labels` 组合；完整会话同时核验局部和全局定义／引用、悬停作用域及精确补全。全局补全必须包含跨 hook 的 `contrast`、`contribution`，局部补全仍只包含自身 hook 的注册。三档全局定义为 33／257／1025 处，全局引用为 35／265／1041 处；局部定义保持 17／129／513 处，局部引用增加到 19／137／529 处。配对脚本的 `--query global-hook-definition` 自动启用此负载并逐次校验全部全局定义，`--query hook-definition` 继续仅核验当前 hook 的定义，`--query hook-name-definition` 则核验独立 hook 名称的声明，作为不经过代码标签索引的对照。
+`--global-hook-rules` implies `--hook-labels`. Each section adds the registration of other hooks with the same name. Each chapter adds global default rules and complete suffix completion detection. Can be combined with `--lifecycle-labels`; full session verifies both local and global definitions/references, hover scope, and exact completion. Global completion must include cross-hook `contrast` and `contribution`. Local completion still only includes the registration of its own hook. The global definition of the three project sizes is 33/257/1025 places, and the global reference is 35/265/1041 places; the local definition remains at 17/129/513 places, and the local reference is increased to 19/137/529 places. `--query global-hook-definition` of the paired script automatically enables this load and verifies all global definitions one by one, `--query hook-definition` continues to verify only the definition of the current hook, and `--query hook-name-definition` verifies the declaration of the independent hook name as a control without code label indexing.
 
 ```sh
 python3 benchmarks/editing.py --global-hook-rules --lifecycle-labels \
@@ -46,7 +46,7 @@ python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after tar
   --query global-hook-definition --lifecycle-labels --output target/benchmarks/global-hook-pairs.json
 ```
 
-`--default-hook-labels` 隐含 `--hook-labels`，每节增加 Push／Set／省略标签注册／Pop，并在章末增加默认标签设置的定义、引用、悬停和完整后缀补全查询。定义只计当前已认证的显式注册，省略注册不计入预期结果。设置字段的定义与补全跨 hook，局部定义仍按自身 hook 过滤；两类引用均包含相应设置字段。与 `--global-hook-rules --lifecycle-labels` 组合时，三档局部定义／引用为 17／36、129／269、513／1049，全局及默认设置为 33／52、257／397、1025／1561。配对脚本的 `--query default-hook-definition` 自动启用新负载并逐次校验全部显式定义；其他选项仍可独立组合。
+`--default-hook-labels` implies `--hook-labels`, adds Push/Set/omitted tag registration/Pop in each section, and adds the definition, reference, hover and complete suffix completion query of the default tag setting at the end of the chapter. The definition only counts currently authenticated explicit registrations, omitting registrations does not count towards the expected results. The definition and completion of setting fields span hooks, and local definitions are still filtered by their own hooks; both types of references contain corresponding setting fields. When combined with `--global-hook-rules --lifecycle-labels`, the three gears are locally defined/referenced as 17/36, 129/269, 513/1049, and the global and default settings are 33/52, 257/397, 1025/1561. The pairing script's `--query default-hook-definition` automatically enables new payloads and verifies all explicit definitions in turn; other options can still be combined independently.
 
 ```sh
 python3 benchmarks/editing.py --default-hook-labels --global-hook-rules --lifecycle-labels \
@@ -56,7 +56,7 @@ python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after tar
   --output target/benchmarks/default-hook-pairs.json
 ```
 
-`--document-hook-slots` 隐含 `--hook-labels`，在当前 hook 的主文档／每节加入显式 `top-level` 注册，另一个 hook 放同名干扰，每章增加移除与 `toFAKE` 后缀补全字段。逐项核验仅本 hook 的全部定义／引用、文档级槽悬停及完整后缀替换，不将排序规则或默认设置并入该槽。三档为 17／129／513 个定义和 18／133／521 项引用；可与生命周期、全局规则和默认设置负载组合。`--query document-hook-definition` 自动启用新负载并逐次校验定义。
+`--document-hook-slots` implies `--hook-labels`, add explicit `top-level` registration in the main document/each section of the current hook, put another hook with the same name to interfere, and add and remove the suffix completion field with `toFAKE` in each chapter. Only all definitions/references of this hook, document-level slot hovers, and complete suffix substitutions are verified item by item. Sorting rules or default settings are not incorporated into the slot. Level three is 17/129/513 definitions and 18/133/521 references; can be combined with lifecycle, global rules, and default settings loads. `--query document-hook-definition` automatically enables new loads and verifies definitions one after another.
 
 ```sh
 python3 benchmarks/editing.py --document-hook-slots --lifecycle-labels \
@@ -66,7 +66,7 @@ python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after tar
   --output target/benchmarks/document-hook-pairs.json
 ```
 
-`--relative-hook-labels` 隐含 `--hook-labels`，主文档显式注册 `relative/tail`，每节增加紧邻 `PushDefaultHookLabel{relative}` 的相对 `./tail` 注册并 Pop，另一个 hook 放同名干扰，每章增加相对移除和 `./taFAKE` 补全字段。逐项核验解析身份对应的完整定义／引用、原相对字段范围、hook 作用域和保留相对拼写的完整后缀替换。三档为 17／129／513 个定义、18／133／521 项引用，可与全部既有负载组合。`--query relative-hook-definition` 自动启用该负载。
+`--relative-hook-labels` implies `--hook-labels`, the main document explicitly registers `relative/tail`, each section adds the relative `./tail` registration and Pop next to `PushDefaultHookLabel{relative}`, another hook puts the same name interference, and each chapter adds relative removal and `./taFAKE` completion fields. Verify the complete definition/reference corresponding to the parsed identity, the original relative field scope, the hook scope, and the complete suffix replacement that preserves the relative spelling one by one. The third level has 17/129/513 definitions and 18/133/521 references, which can be combined with all existing loads. `--query relative-hook-definition` automatically enables this load.
 
 ```sh
 python3 benchmarks/editing.py --relative-hook-labels --lifecycle-labels \
@@ -76,144 +76,144 @@ python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after tar
   --output target/benchmarks/relative-hook-pairs.json
 ```
 
-## 指标含义
+## Indicator meaning
 
-- `initialize`：初始化请求到响应，单独报告，不混入预热后的功能样本；`open` 包含打开两个缓冲区到有序屏障响应。
-- `edit.*`：发送单次编辑通知，到后续 `latex.indexingStatus` 请求返回。这个轻量、有序请求是通知处理屏障；耗时包括文本更新、解析、依赖刷新、传输和屏障本身，并非纯解析时间。
-- 其他功能：已完成前序编辑后，单次请求到响应的墙钟耗时，包括 stdio、JSON 编解码、排队和功能计算；按会话顺序测量，前面的查询可能预热后面的查询。
-- `semantic.full` 在文本修改后查询；`semantic.delta.cached` 在无后续修改时请求 delta。两者明确区分。
-- `diagnostic` 在新的引用编辑后重新计算；`diagnostic.cached` 必须返回 `unchanged`。
-- `burst8.to_completion`：从第一条编辑通知到补全返回，包含 8 次编辑的处理时间；这是积压场景下的端到端延迟。
+- `initialize`: Initialize request to response, reported separately, not mixed with functional samples after warm-up; `open` includes opening two buffers to ordered barrier response.
+- `edit.*`: Send a single edit notification and return it to the subsequent `latex.indexingStatus` request. This lightweight, ordered request is a notification processing barrier; the time consumption includes text update, parsing, dependency refresh, transmission and the barrier itself, not pure parsing time.
+- Other features: After the pre-order editing is completed, the wall clock time from a single request to the response, including stdio, JSON encoding and decoding, queuing and function calculations; measured in session order, previous queries may warm up subsequent queries.
+- `semantic.full` queries after text modification; `semantic.delta.cached` requests delta when there are no subsequent modifications. The two are clearly distinguished.
+- `diagnostic` is recalculated after a new reference is edited; `diagnostic.cached` must return `unchanged`.
+- `burst8.to_completion`: The processing time from the first edit notification to completion return, including 8 edits; this is the end-to-end delay in the backlog scenario.
 
-输出 JSON 保存所有原始毫秒样本、p50、p95（nearest rank）与最大值，以及项目字节数、项目和脚本指纹、二进制指纹、平台和 Python 版本。各进程的预热后样本合并统计；初始化和打开每个进程各一个样本。
+The output JSON saves all raw millisecond samples, p50, p95 (nearest rank) and maximum values, as well as project bytes, project and script fingerprints, binary fingerprints, platform and Python version. The warmed up samples of each process are combined into statistics; one sample is initialized and opened for each process.
 
-本测试关闭发行版发现，并使用 pull 诊断，避免机器上的 TeX 安装和 push 诊断防抖影响功能比较。它测量语言功能；PDF 编译、外部格式化器、ChkTeX 和磁盘保存不是本次负载。这里使用可复现的合成多文件论文，不代表所有真实用户项目，尤其不覆盖复杂宏展开、超大单行和大量条件加载。
+This test turns off distro discovery and uses pull diagnostics to avoid the TeX installation on the machine and push diagnostic anti-shake effect comparison. It measures language functionality; PDF compilation, external formatters, ChkTeX, and disk saving are not part of this load. A reproducible synthetic multi-file paper is used here, which does not represent all real user projects, especially does not cover complex macro expansion, extremely large single lines, and large number of conditional loads.
 
-`--hooks` 在主文档加入一个带参数的内核 hook，并在正文使用它。每周期额外测量 `signature.hook`，核验声明的 1 个参数覆盖调用处写出的 0；其他引用、重命名及编辑校验保持完整。章节没有 hook 调用，用于观察项目级参数分析是否给无关章节增加重复扫描。输出参数记录 `hooks`，前后比较必须使用相同选项。
+`--hooks` Add a kernel hook with parameters to the main document and use it in the body. An additional measurement of `signature.hook` is performed every cycle to verify that the declared 1 parameter covers the 0 written at the call; other references, renaming and editing verification remain intact. There is no hook call for chapters, which is used to observe whether project-level parameter analysis adds repeated scanning to irrelevant chapters. Output parameter record `hooks`, the same options must be used for comparison before and after.
 
 ```sh
 python3 benchmarks/editing.py --hooks --output target/benchmarks/hooks.json
 ```
 
-`--hook-wrappers` 包含上述 hook 负载，并在主文档定义两层带参数包装宏，每节增加一次包装调用。它测量把调用实参传递为 hook 字面数据时的完整分析成本；独立标签的跨章节引用和改名仍进行数量及文件集合校验。输出记录 `hook_wrappers`，比较时也必须一致。
+`--hook-wrappers` contains the above hook payload, and defines two layers of parameterized packaging macros in the main document, adding a packaging call to each section. It measures the full parsing cost when passing call arguments as hook literals; cross-section references and renames of independent tags are still subject to quantity and file collection verification. The output record `hook_wrappers` must also be consistent during comparison.
 
 ```sh
 python3 benchmarks/editing.py --hook-wrappers --output target/benchmarks/hook-wrappers.json
 ```
 
-`--hook-environments` 包含 hook 负载，并为每节加入一次 xparse 环境调用，环境结束正文将开始参数传给 hook。每档分别定义 16／32／64 个环境，各章节复用这些定义，用于测量环境参数绑定随定义数和调用数增长的成本。可与 `--hook-wrappers` 组合；输出记录 `hook_environments`，前后比较要求选项一致。
+`--hook-environments` contains the hook payload, and adds an xparse environment call for each section. The environment end text passes the start parameters to the hook. Each file defines 16/32/64 environments respectively, and each chapter reuses these definitions to measure the cost of environment parameter binding as the number of definitions and calls increases. Can be combined with `--hook-wrappers`; output record `hook_environments`, the before and after comparison requires the same options.
 
 ```sh
 python3 benchmarks/editing.py --hook-wrappers --hook-environments \
   --output target/benchmarks/hook-environments.json
 ```
 
-`--hook-renames` 包含 hook 负载，并增加 `rename.hook`。它从主文件的显式声明请求改名，逐项比较所有源码中完整的名称编辑范围和替换文本，覆盖注册、使用、包装正文和章节转发调用，排除普通缺失引用。配对探测使用 `--query hook-rename`，同样检查完整编辑集合。
+`--hook-renames` contains the hook payload and adds `rename.hook`. It requests name changes from explicit declarations in the main file, compares the complete name edit range and replacement text in all source code, covering registration, usage, wrapper text and chapter forwarding calls, excluding ordinary missing references. Pair detection uses `--query hook-rename`, also checking the full edit set.
 
-`--hook-interfaces` 包含 hook 负载，在主文件定义零参数环境转发器 `benchinterface`，每节直接调用其生成的开始控制序列，把紧随的名称与字面数据交给 `UseHook`。它覆盖环境生成接口的安全分析成本，可与上述两种包装负载组合；输出记录 `hook_interfaces`。
+`--hook-interfaces` contains the hook payload. The zero-parameter environment forwarder `benchinterface` is defined in the main file. Each section directly calls the start control sequence generated by it, and passes the following name and literal data to `UseHook`. It covers the security analysis cost of the environment generation interface and can be combined with the above two packaging payloads; output record `hook_interfaces`.
 
 ```sh
 python3 benchmarks/editing.py --hook-wrappers --hook-environments --hook-interfaces \
   --output target/benchmarks/hook-interfaces.json
 ```
 
-## 比较优化前后
+## Compare before and after optimization
 
-先保留优化前的二进制，再构建优化后的版本，依次测量，避免构建或其他 benchmark 同时运行：
+First keep the pre-optimized binary, then build the optimized version, and measure it in sequence to avoid building or running other benchmarks at the same time:
 
 ```sh
 cargo build --release --locked
 mkdir -p target/benchmarks
-cp target/release/latex-lsp target/benchmarks/latex-lsp-before
-# 修改源码后重新构建。
+cp target/release/texquill target/benchmarks/texquill-before
+# Rebuild after changing the source。
 cargo build --release --locked
-python3 benchmarks/editing.py --server target/benchmarks/latex-lsp-before \
+python3 benchmarks/editing.py --server target/benchmarks/texquill-before \
   --output target/benchmarks/before.json
 python3 benchmarks/editing.py --baseline target/benchmarks/before.json \
   --output target/benchmarks/after.json
 ```
 
-比较要求脚本指纹、预热次数、采样次数、运行次数及项目指纹一致；使用同一机器、相同构建参数，并保持负载稳定。速度倍率是优化前 p50 / 优化后 p50；小于 1 表示变慢。不要把一次运行的亚毫秒差异当作回归证据。
+The comparison requires that the script fingerprint, number of warming up times, number of sampling times, number of runs and project fingerprints are consistent; use the same machine, the same build parameters, and keep the load stable. The speed multiplier is p50 before optimization / p50 after optimization; less than 1 means slower. Don't take a sub-millisecond difference in one run as evidence of regression.
 
-生成可切换项目规模和 p50／p95 的独立 HTML 对比页：
+Generate standalone HTML comparison pages for switchable project sizes and p50/p95:
 
 ```sh
 python3 benchmarks/report.py target/benchmarks/before.json target/benchmarks/after.json \
   --output target/benchmarks/report.html
 ```
 
-页面自包含，可离线打开或分享；完整原始样本保留在 JSON 中。
+The page is self-contained and can be opened or shared offline; the complete original sample is retained in JSON.
 
-快速检查可以使用：
+A quick check can be done using:
 
 ```sh
 python3 benchmarks/editing.py --scales small --iterations 2 --warmup 1 \
   --runs 1 --output target/benchmarks/smoke.json
 ```
 
-`--timeout` 设置每个请求等待上限，默认 120 秒；服务退出、超时、协议错误和功能校验失败都会让脚本非零退出。
+`--timeout` sets the upper limit of waiting for each request, the default is 120 seconds; service exit, timeout, protocol error and function verification failure will cause the script to exit non-zero.
 
-## 2026-10-26 第四轮：hook 项目的重复扫描
+## 2026-10-26 The fourth round: repeated scanning of hook projects
 
-补齐静态可变参数 hook 后，分别测量常规项目与 `--hooks` 项目。每档 3 个独立进程，每个进程预热 3 个周期、测量 12 个周期，每项 36 个样本；构建、测试和测量分别运行。
+After completing the static variable parameter hook, measure the regular project and the `--hooks` project respectively. 3 independent processes per stage, each process warms up for 3 cycles, measures for 12 cycles, 36 samples each; build, test, and measure run separately.
 
-审阅发现，改名保护会先为每份章节构造完整引用上下文，再确认该文件是否包含相关调用；参数扫描也会为普通命令反复探测四个 hook 接口。现在先根据可能的直接／命名／转发／复制名称筛选章节，并直接检查已经解析的叶命令。分析预算、数据边界与歧义保护保持原有规则。
+The review found that name change protection will first construct a complete reference context for each chapter, and then confirm whether the file contains relevant calls; parameter scanning will also repeatedly detect four hook interfaces for ordinary commands. Now filter the chapters based on possible direct/named/forwarded/copied names and check the parsed leaf commands directly. Analysis budgets, data boundaries, and ambiguity protection remain the same.
 
-以下为 large 项目的端到端毫秒。复测交换两版运行顺序，单独保存，不与首轮样本混合；两组速度倍率不是置信区间。
+Below are the end-to-end milliseconds for the large project. The running order of the two versions of the retest is exchanged, saved separately, and not mixed with the first round of samples; the two sets of speed magnifications are not confidence intervals.
 
-| 负载与指标 | 优化前 p50 | 优化后 p50 | 速度倍率 | 优化前 p95 | 优化后 p95 |
+| Load and index | p50 before optimization | p50 after optimization | Speed multiplier | p95 before optimization | p95 after optimization |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 带 hook：跨文件重命名 | 24.89 | 21.68 | 1.15× | 41.25 | 39.18 |
-| 带 hook：交换顺序复测重命名 | 26.37 | 20.85 | 1.27× | 41.82 | 37.32 |
-| 带 hook：标签补全 | 30.93 | 28.43 | 1.09× | 48.42 | 52.94 |
+| With hook: cross-file rename | 24.89 | 21.68 | 1.15× | 41.25 | 39.18 |
+| With hook: Exchange order retest renaming | 26.37 | 20.85 | 1.27× | 41.82 | 37.32 |
+| With hook: tag completion | 30.93 | 28.43 | 1.09× | 48.42 | 52.94 |
 
-主要可重复收益是带 hook 大型项目的重命名。标签补全的 p50 略降，但 p95 首轮变差；常规项目和其他功能没有一致的广泛提升，不据此宣称整体加速。新增 `signature.hook` 同时校验真实数量覆盖，不仅记录耗时。
+The main repeatable benefit is the renaming of large projects with hooks. Tag completion's p50 dropped slightly, but p95 got worse on the first run; there were no consistent broad improvements in general items and other features, and no overall speedup can be claimed on that basis. Added `signature.hook` to verify the real quantity coverage at the same time, which is not only time-consuming to record.
 
-原始样本：[常规优化前](../benchmarks/results/2026-10-26/round4-before.json)、[常规优化后](../benchmarks/results/2026-10-26/round4-after.json)、[hook 优化前](../benchmarks/results/2026-10-26/round4-hooks-before.json)、[hook 优化后](../benchmarks/results/2026-10-26/round4-hooks-after.json)、[交换顺序复测前版](../benchmarks/results/2026-10-26/round4-hooks-repeat-before.json)、[交换顺序复测后版](../benchmarks/results/2026-10-26/round4-hooks-repeat-after.json)。传给 `benchmarks/report.py` 可以重建独立 HTML 对比页。结果仅适用于本机合成论文负载。
+Original samples: [Before normal optimization](../benchmarks/results/2026-10-26/round4-before.json), [After normal optimization](../benchmarks/results/2026-10-26/round4-after.json), [Before hook optimization](../benchmarks/results/2026-10-26/round4-hooks-before.json), [hook After optimization](../benchmarks/results/2026-10-26/round4-hooks-after.json), [Exchange sequence before retest version](../benchmarks/results/2026-10-26/round4-hooks-repeat-before.json), [Exchange sequence after retest version](../benchmarks/results/2026-10-26/round4-hooks-repeat-after.json). Pass to `benchmarks/report.py` to reconstruct a stand-alone HTML comparison page. Results only apply to native synthetic paper loads.
 
-## 优化内容
+## Optimize content
 
-导航、引用、重命名、悬停和参数提示现在使用与补全和诊断相同的查询内源码图缓存。同一查询还复用最多 16 组依赖遍历结果，键包含工作区、起始文档和根文档，避免重复文件解析与路径检查；查询结束即释放，后续编辑或磁盘变化重新计算。
+Navigation, referencing, renaming, hover, and signature help now use the same in-query source graph cache as completion and diagnostics. The same query also reuses up to 16 groups of dependency traversal results. The key includes the workspace, starting document, and root document to avoid repeated file parsing and path checking; it is released when the query is completed, and subsequent edits or disk changes are recalculated.
 
-标签声明的非执行数据分析原先会对每一个消费文档，重新分析项目中每份源码的命令执行位置。没有宏声明的章节不会贡献任何数据读取器，现在直接跳过这次扫描，减少多章节项目里的重复工作。声明、引用及未保存内容的语义保持原有规则。
+The non-execution data analysis of tag declarations originally reanalyzed the command execution location of each source code in the project for each consumption document. Chapters without macro declarations will not contribute any data readers. This scan is now skipped directly to reduce repeated work in multi-chapter projects. The semantics of declarations, references, and unsaved content remain the same.
 
-命名引用分析还会被同一请求中的目标识别、作用域校验和引用收集重复使用。引用、重命名及其预检查通过不可变共享索引复用这些结果；这些查询和诊断也按精确项目范围共享标签声明分析。补全、定义、悬停和参数提示仅使用源码图缓存，避免为只使用一次的分析保留额外索引。两类符号分析各最多保留 4 项，共享每次查询约 8 MiB 的估算字节预算；超限仍正常计算结果，不额外缓存。缓存键区分工作区和原始查询文档／项目范围，单独提供资源上下文的文献分区分析继续使用自己的解释，避免混用含义。
+Named reference analysis is also reused by target identification, scope validation, and reference collection in the same request. References, renames, and their prechecks reuse these results through an immutable shared index; these queries and diagnostics also share tag declaration analysis by precise project scope. Completion, definition, hover, and signature help only use the source graph cache to avoid retaining extra indexes for analyzes that are only used once. Each of the two types of symbolic analysis retains a maximum of 4 items, sharing an estimated byte budget of approximately 8 MiB per query; if the limit is exceeded, the results will still be calculated normally without additional caching. The cache key differentiates between workspaces and original query document/project scopes, and document partitioning analysis that provides separate resource context continues to use its own interpretation to avoid confusion of meanings.
 
-## 2026-10-26 第一轮测量结果
+## 2026-10-26 First round of measurement results
 
-环境：Linux x86_64，Intel Xeon Gold 6146，默认 release 配置（thin LTO）。每档 3 个独立进程，每个进程预热 3 个周期、测量 12 个周期；每项功能 36 个样本。两版在同一机器上顺序运行，测量期间没有并行构建或测试。
+Environment: Linux x86_64, Intel Xeon Gold 6146, default release configuration (thin LTO). Each stage has 3 independent processes, each process has 3 cycles of warming up and 12 cycles of measurement; 36 samples per function. Both versions were run sequentially on the same machine, with no parallel builds or tests during the measurement period.
 
-large 项目包含 10 个文件、196343 字节；以下为端到端 p50，单位毫秒：
+The large project contains 10 files and 196343 bytes; the following is the end-to-end p50 in milliseconds:
 
-| 功能 | 优化前 | 优化后 | 速度倍率 |
+| Function | Before optimization | After optimization | Speed multiplier |
 | --- | ---: | ---: | ---: |
-| 标签补全 | 48.25 | 22.11 | 2.18× |
-| 悬停 | 67.17 | 15.43 | 4.35× |
-| 定义跳转 | 91.91 | 25.13 | 3.66× |
-| 查找引用 | 118.07 | 36.54 | 3.23× |
-| 跨文件重命名 | 143.10 | 53.43 | 2.68× |
-| 重新计算诊断 | 111.47 | 37.37 | 2.98× |
-| 连续 8 次编辑到补全 | 61.76 | 34.18 | 1.81× |
+| Tag completion | 48.25 | 22.11 | 2.18× |
+| Hover | 67.17 | 15.43 | 4.35× |
+| Definition jump | 91.91 | 25.13 | 3.66× |
+| Find citations | 118.07 | 36.54 | 3.23× |
+| Cross-file rename | 143.10 | 53.43 | 2.68× |
+| Recalculate diagnostics | 111.47 | 37.37 | 2.98× |
+| 8 consecutive edits to completion | 61.76 | 34.18 | 1.81× |
 
-优化集中于依赖和标签分析。单次文本编辑、折叠、语义令牌及缓存诊断的中位数基本保持原水平；这些指标中的微小变化不足以说明性能差异。
+Optimization focuses on dependency and tag analysis. The medians for single text edits, folds, semantic tokens, and cache diagnostics remain essentially the same; the small changes in these metrics are not enough to account for the performance differences.
 
-保留了三档项目的完整指标、环境和原始样本：[优化前 JSON](../benchmarks/results/2026-10-26/before.json)、[优化后 JSON](../benchmarks/results/2026-10-26/after.json)。可将它们传给 `benchmarks/report.py` 重建 HTML 对比页。这是单机合成论文负载的测量，不能外推为所有项目的固定加速倍数。
+The complete indicators, environment and original samples of the three-tier projects are retained: [JSON before optimization](../benchmarks/results/2026-10-26/before.json), [JSON after optimization](../benchmarks/results/2026-10-26/after.json). They can be passed to `benchmarks/report.py` to reconstruct the HTML comparison page. This is a measurement of a single-machine synthetic paper load and cannot be extrapolated to a fixed speedup factor for all projects.
 
-## 2026-10-26 第二轮测量结果
+## 2026-10-26 Second round of measurement results
 
-本轮基线为第一轮优化后的版本，优化后为新增引用／标签分析复用的最终版本。环境、构建配置及采样参数与上表相同；两版重新顺序测量，期间没有并行构建或测试。large 项目的端到端延迟如下，单位毫秒：
+The baseline of this round is the version after the first round of optimization, and the optimized version is the final version for new reference/tag analysis and reuse. The environment, build configuration, and sampling parameters are the same as in the table above; the two versions were measured sequentially, with no parallel builds or tests during the period. The end-to-end latency of the large project is as follows, in milliseconds:
 
-| 功能 | 基线 p50 | 本轮 p50 | p50 速度倍率 | 基线 p95 | 本轮 p95 |
+| Function | Baseline p50 | This round p50 | p50 speed multiplication | Baseline p95 | This round p95 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 查找引用 | 36.34 | 22.49 | 1.62× | 44.35 | 29.44 |
-| 跨文件重命名 | 53.71 | 18.55 | 2.90× | 92.41 | 33.60 |
-| 重新计算诊断 | 37.72 | 30.23 | 1.25× | 61.25 | 51.24 |
+| Find References | 36.34 | 22.49 | 1.62× | 44.35 | 29.44 |
+| Cross-file rename | 53.71 | 18.55 | 2.90× | 92.41 | 33.60 |
+| Recalculate diagnostics | 37.72 | 30.23 | 1.25× | 61.25 | 51.24 |
 
-small／medium 的重命名 p50 分别从 2.62／14.20 ms 降到 1.17／5.04 ms。large 的标签补全为 22.40 → 22.57 ms，连续 8 次编辑到补全为 35.02 → 35.28 ms，正文编辑处理为 2.06 → 2.07 ms；本轮没有明显改善这些指标。p95 更容易受负载影响，完整数据保留了其他指标的波动，不把它们解读为全面加速。
+The renaming p50 of small/medium dropped from 2.62/14.20 ms to 1.17/5.04 ms respectively. The label completion of large is 22.40 → 22.57 ms, the completion of eight consecutive edits is 35.02 → 35.28 ms, and the text editing process is 2.06 → 2.07 ms; these indicators have not been significantly improved in this round. p95 is more susceptible to load, and the full data preserves fluctuations in other metrics without interpreting them as full acceleration.
 
-新增符号缓存只用于有重复分析的查询。扩大到所有查询的实验曾让补全等路径的中位数增加约 10%，反转测量顺序后仍然存在；缩小缓存范围后重新测量得到上面的最终结果。
+The new symbol cache is only used for queries with repeated analysis. Expanding the experiment to all queries resulted in an approximately 10% increase in the median number of completion paths, which persisted after reversing the measurement order; re-measurement after reducing the cache range yielded the final result above.
 
-本轮还增强了定义精确范围、跨文件引用完整数量和重命名编辑的校验，因此脚本指纹与第一轮不同。请在同一轮内配对报告，不能将两轮的 JSON 交叉比较。最终原始样本：[本轮基线 JSON](../benchmarks/results/2026-10-26/round2-before.json)、[本轮优化后 JSON](../benchmarks/results/2026-10-26/round2-after.json)。
+This round also has enhanced validation of defining exact ranges, full number of cross-file references, and rename edits, so script fingerprints are different from the first round. Please pair reports within the same round and do not cross-compare JSON from two rounds. Final original samples: [Baseline JSON of this round](../benchmarks/results/2026-10-26/round2-before.json), [JSON after optimization of this round](../benchmarks/results/2026-10-26/round2-after.json).
 
 ```sh
 python3 benchmarks/report.py benchmarks/results/2026-10-26/round2-before.json \
@@ -221,29 +221,29 @@ python3 benchmarks/report.py benchmarks/results/2026-10-26/round2-before.json \
   --output target/benchmarks/round2-report.html
 ```
 
-最终代码通过完整测试：3341 项通过，490 项需要外部工具的测试跳过；另通过格式检查、严格 Clippy，以及 CI 参数的真实 stdio 短会话。回归覆盖查询后的未保存依赖／宏含义变化、工作区和项目范围隔离、嵌套查询异常恢复，以及缓存容量超限时继续计算。
+The final code passed all tests: 3341 passed, 490 tests that required external tools were skipped; additionally passed format checking, strict Clippy, and a real stdio short session with CI parameters. Regression covers unsaved dependency/macro meaning changes after query, workspace and project scope isolation, nested query exception recovery, and continued calculation when cache capacity is exceeded.
 
 
-## 2026-10-26 第三轮：工作区符号搜索
+## 2026-10-26 Round 3: Workspace symbol search
 
-基线为 `cca0e35` 的 release 版本。本轮新增工作区符号的精确、全部和无匹配查询，保留原有文档大纲、编辑、补全、诊断等指标作为对照。三档项目各启动 3 个独立进程，每个进程预热 3 个周期，测量 8 个周期，每项 24 个样本；脚本和项目指纹一致。最终配对先测优化版本，再测基线版本，测量期间没有构建、测试或其他 benchmark 同时运行。large 项目仍为 10 个文件、196343 字节。
+The baseline is the release version of `cca0e35`. Exact, all and no matching queries for workspace symbols are added in this round, and the original document outline, editing, completion, diagnostics and other indicators are retained for comparison. Each of the three projects starts 3 independent processes, each process is warmed up for 3 cycles, measured for 8 cycles, and each process contains 24 samples; the script and project fingerprint are consistent. The final pairing tests the optimized version first and then the baseline version. There are no builds, tests, or other benchmarks running simultaneously during the measurement period. The large project is still 10 files, 196343 bytes.
 
-初轮分析确认，每次搜索都会重建所有文档的大纲，分配完整平面结果，再排序截取前 256 项。现在按源码版本共享有界大纲缓存，并用最多 256 项的排名队列保留候选，避免复制所有匹配项和同时保留超限文档的大纲。缓存不保存 URI，总保留预算约 4 MiB；编辑、语言角色改变和移动时重新生成，超限继续计算。详见[索引与缓存](indexing.md)。
+An initial analysis confirmed that each search reconstructed the outline of all documents, distributed the full flat results, and then sorted and intercepted the top 256 items. Bounded outline caches are now shared by source version and candidates are retained with a ranked queue of up to 256 items, avoiding copying all matches and retaining outlines for over-limit documents at the same time. The cache does not save URIs, and the total retention budget is about 4 MiB; it is regenerated when editing, language role changes, and moves, and calculation continues when the limit is exceeded. For details, see [Indexing and Caching](indexing.md).
 
-large 的端到端延迟，单位毫秒：
+End-to-end latency of large, in milliseconds:
 
-| 功能 | 基线 p50 | 本轮 p50 | p50 速度倍率 | 基线 p95 | 本轮 p95 |
+| Function | Baseline p50 | This round p50 | p50 speed multiplication | Baseline p95 | This round p95 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 精确搜索 | 1.996 | 0.585 | 3.41× | 3.289 | 0.947 |
-| 全部搜索 | 4.116 | 2.579 | 1.60× | 6.111 | 3.268 |
-| 无匹配搜索 | 1.758 | 0.404 | 4.36× | 2.555 | 0.510 |
-| 文档大纲（对照） | 2.811 | 2.751 | 1.02× | 3.350 | 3.847 |
+| Exact search | 1.996 | 0.585 | 3.41× | 3.289 | 0.947 |
+| Search all | 4.116 | 2.579 | 1.60× | 6.111 | 3.268 |
+| No matching search | 1.758 | 0.404 | 4.36× | 2.555 | 0.510 |
+| Document Outline (Contrast) | 2.811 | 2.751 | 1.02× | 3.350 | 3.847 |
 
-small／medium 的精确搜索 p50 分别加速 1.57×／2.12×，无匹配搜索加速 1.74×／2.81×。缓存主要减少重复符号分析，未改善其他语言功能。large 的连续 8 次编辑到补全为 36.534 → 36.553 ms，标签补全为 22.547 → 23.570 ms，诊断为 30.859 → 32.491 ms；保留这些波动，不将本轮解读为普遍加速，p95 也受到机器负载影响。
+The precise search p50 of small/medium is accelerated by 1.57×/2.12× respectively, and the unmatched search is accelerated by 1.74×/2.81×. The cache mainly reduces duplicate symbol analysis and does not improve other language features. The 8 consecutive edits to completion for large are 36.534 → 36.553 ms, tag completion is 22.547 → 23.570 ms, and diagnostics is 30.859 → 32.491 ms; retaining these fluctuations and not interpreting this round as a general acceleration, p95 is also affected by machine load.
 
-最初让层次化大纲的首次查询也建立缓存，造成约 10% 的大纲耗时增加；最终改为首次直接返回新树，仅复用已经存在的缓存，反转测量顺序后大纲 p50 恢复到基线附近。
+Initially, the cache was also created for the first query of the hierarchical outline, which resulted in an increase of about 10% of the outline time. Eventually, the new tree was returned directly for the first time, and only the existing cache was reused. After the measurement order was reversed, the outline p50 returned to near the baseline.
 
-完整样本与环境：[本轮基线 JSON](../benchmarks/results/2026-10-26/round3-before.json)、[本轮优化后 JSON](../benchmarks/results/2026-10-26/round3-after.json)。新增指标改变了脚本指纹，请仅在本轮内配对。
+Complete samples and environments: [Baseline JSON for this round](../benchmarks/results/2026-10-26/round3-before.json), JSON after optimization for this round](../benchmarks/results/2026-10-26/round3-after.json). The new indicator changes the script fingerprint, please only match within this round.
 
 ```sh
 python3 benchmarks/report.py benchmarks/results/2026-10-26/round3-before.json \
@@ -251,34 +251,34 @@ python3 benchmarks/report.py benchmarks/results/2026-10-26/round3-before.json \
   --output target/benchmarks/round3-report.html
 ```
 
-本轮整仓回归 3344 项通过、490 项外部工具测试默认跳过；最终缓存范围收窄后，26 项导航／文献符号／语言角色回归、严格全目标 Clippy、release 构建和三档真实 stdio benchmark 再次通过。回归覆盖未保存更新、旧快照、UTF-16、容器、300 多项候选的排序与截断、语言切换及缓存超限后的完整结果。
+In this round of consolidation, 3344 items passed, and 490 external tool tests were skipped by default; after the final cache scope was narrowed, 26 items of navigation/document symbols/language roles returned, strict full-target Clippy, release build, and three levels of real stdio benchmark were passed again. Regression covers unsaved updates, old snapshots, UTF-16, containers, sorting and truncation of over 300 candidates, language switching, and complete results after cache overrun.
 
-## 2026-10-26 第五轮：包装宏的数据流保护
+## 2026-10-26 Round 5: Data flow protection of wrapped macros
 
-在 `17c9233` 补齐命令包装参数的 hook 数据保护后，新增 `--hook-wrappers` 负载：每节调用两层包装宏，将实际参数传入 hook。审阅发现，保护只需字面区间和声明位置，却构造了含完整操作数分析的引用上下文；每轮数据流传播还为无关命令做名称与上下文检查。现在复用较小的源码上下文，并先筛选可能的数据读取器名称；静态 `csuse`／`csname`、分析预算和数据边界保留。
+After `17c9233` completes the hook data protection of command packaging parameters, a new `--hook-wrappers` load is added: each section calls two layers of packaging macros and passes the actual parameters into the hook. The review found that the protection only requires the literal range and declaration position, but constructs a reference context with complete operand analysis; each round of data flow propagation also performs name and context checks for unrelated commands. Now reuse the smaller source context and filter possible data reader names first; static `csuse`/`csname`, analysis budget and data boundary preservation.
 
-连续编辑会话仍按三档、3 个新进程 ×12 个测量周期、预热 3 周期运行。墙钟出现较大波动：首次大型包装项目改名 p50 为 36.30→38.40 ms（0.95×），交换顺序后的独立复测为 37.51→30.37 ms（1.24×）。早期只筛选名称的中间版本也出现多项未改功能同时变慢，因此不将单组会话或名称筛选单独作为稳定收益的依据。全部原始样本保留。
+Continuous editing sessions still run in three gears, 3 new sessions x 12 measurement cycles, and 3 warm-up cycles. The wall clock showed large fluctuations: the first large-scale packaging project renamed p50 was 36.30→38.40 ms (0.95×), and the independent retest after the order was swapped was 37.51→30.37 ms (1.24×). The early intermediate version that only filtered names also experienced slowdowns in multiple unchanged features at the same time, so a single group of sessions or name filtering alone was not used as a basis for stable revenue. All original samples are retained.
 
-为进一步比较改名计算，新增 `benchmarks/rename_pairs.py`：两版服务器读取同一个固定项目快照，每次依次发送相同的改名请求，逐对交换顺序；3 组新进程，每组预热 5 对、测量 20 对，共 60 对。Linux 下在启动服务器前绑定同一允许的 CPU，并在打开文件后核验全部线程的亲和性，确保 Tokio 工作线程也受约束。该探测不包含编辑和其他功能，不能替代连续会话；它同时记录墙钟原始样本和服务器 `/proc` CPU 增量。CPU 单样本分辨率为 10 ms，表内为 60 个样本的均值，尤其不根据小项目的少量 CPU tick 宣称优化。
+In order to further compare the rename calculation, `benchmarks/rename_pairs.py` is added: the two versions of the server read the same fixed project snapshot, send the same rename request each time, and exchange the order pair by pair; 3 groups of new processes, each group warms up 5 pairs and measures 20 pairs, for a total of 60 pairs. Under Linux, bind the same allowed CPU before starting the server, and verify the affinity of all threads after opening the file to ensure that Tokio worker threads are also bound. This probe does not include editing and other features and is not a replacement for a continuous session; it records both the wall clock raw sample and the server `/proc` CPU delta. The CPU single sample resolution is 10 ms, and the table is the average of 60 samples, especially if it is not claimed to be optimized based on a small number of CPU ticks for small projects.
 
-以下每行均按“原保护实现→优化后”排列；反向复测的 JSON 交换了两版的 `before`／`after` 参数。
+Each line below is arranged according to "original protection implementation → after optimization"; the reverse retest JSON exchanges the two versions of `before`/`after` parameters.
 
-| 固定快照 | 改名 p50 前／后 ms | p50 倍率 | 服务器 CPU 均值前／后 ms |
+| Fixed snapshot | Renamed p50 before/after ms | p50 multiplier | Server CPU average before/after ms |
 | --- | ---: | ---: | ---: |
-| small 包装 | 2.44／2.00 | 1.22× | 2.33／2.33 |
-| medium 包装 | 11.19／8.51 | 1.31× | 11.50／8.50 |
-| large 包装 | 33.15／25.95 | 1.28× | 34.17／26.50 |
-| large 包装，交换二进制顺序 | 38.19／30.45 | 1.25× | 39.33／30.33 |
-| large 常规 | 23.51／22.59 | 1.04× | 24.33／23.50 |
+| small packaging | 2.44／2.00 | 1.22× | 2.33／2.33 |
+| medium packaging | 11.19／8.51 | 1.31× | 11.50／8.50 |
+| large packaging | 33.15／25.95 | 1.28× | 34.17／26.50 |
+| large wrapper, swap binary order | 38.19/30.45 | 1.25× | 39.33/30.33 |
+| large regular | 23.51／22.59 | 1.04× | 24.33／23.50 |
 
-大型包装的两组逐对墙钟倍率中位数约为 1.26×、1.25×，服务器 CPU 均值下降约 22%–23%。结论限于这项数据保护的改名成本；常规负载变化较小，也不声称其他功能整体加速。
+The median wall clock magnification of the two sets of large packages is about 1.26×, 1.25×, and the average server CPU decreases by about 22%–23%. Conclusions are limited to the cost of renaming this data protection; regular load changes are small, and no overall acceleration of other functions is claimed.
 
-原始数据位于 `benchmarks/results/2026-10-26/round5*.json`。`guard` 为最早基线、`filter` 为仅筛选名称的中间版；`before`／`after` 和 `wrappers` 保存最终连续会话，`wrappers-repeat` 保存反向会话，`pairs` 保存正式配对探测。`pairs-*-main-thread` 及 `pairs-main-thread` 是早期只在启动后绑定主线程的探测，未核验 Tokio 工作线程，单独保留但不用于上述同核结论。
+The original data is located at `benchmarks/results/2026-10-26/round5*.json`. `guard` is the earliest baseline, `filter` is the intermediate version that only filters the name; `before`/`after` and `wrappers` save the final continuous session, `wrappers-repeat` saves the reverse session, and `pairs` saves the formal pairing detection. `pairs-*-main-thread` and `pairs-main-thread` are early detections that are only bound to the main thread after startup. The Tokio worker thread is not verified. They are reserved separately but are not used for the above same-core conclusion.
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 benchmarks/rename_pairs.py \
-  --before target/benchmarks/latex-lsp-round5-guard \
-  --after target/benchmarks/latex-lsp-round5-final --hook-wrappers \
+  --before target/benchmarks/texquill-round5-guard \
+  --after target/benchmarks/texquill-round5-final --hook-wrappers \
   --output target/benchmarks/pairs.json
 python3 benchmarks/report.py \
   benchmarks/results/2026-10-26/round5-wrappers-before.json \
@@ -287,33 +287,33 @@ python3 benchmarks/report.py \
   --output target/benchmarks/round5-wrappers-report.html
 ```
 
-保护实现的稳定整仓基线为 319 个目标、3359 项通过、0 失败。优化后再次通过 521 项单元及相关回归、8 项 hook 协议、6 项显式原生测试和全目标严格 Clippy；原生数据保护覆盖 21 种直接／包装／命名调用，核验捕获文本、宏执行次数和实际独立标签编辑后的完整 AUX。CI 加入包装会话与配对探测短测，不设机器相关的性能门槛。dev 清理释放 9.1 GiB，测量结束时可用空间约 20 GiB。
+The stable consolidation baseline achieved by the protection was 319 targets, 3359 passes, and 0 failures. After optimization, it once again passed 521 units and related regressions, 8 hook protocols, 6 explicit native tests and full-target strict Clippy; native data protection covers 21 direct/wrapped/named calls, verifying the complete AUX after capturing text, macro execution times and actual independent label editing. CI joins the short test of packaging sessions and pairing detection, with no machine-related performance thresholds. The dev cleanup freed 9.1 GiB, leaving approximately 20 GiB free at the end of the measurement.
 
-## 2026-10-26 第六轮：环境负载与无关查询的 hook 索引
+## 2026-10-26 Round 6: Environment load and hook index for irrelevant queries
 
-基线为 `0f26cef`，已保护环境包装与额外参数转发中的 hook 数据。新增 `--hook-environments`，与 `--hook-wrappers` 组合测量：large 含 10 个文件、240046 字节、64 个 xparse 环境和 512 次环境调用，结束正文把开始参数传给 hook。独立标签的全部编辑及文件集合仍经过校验。
+The baseline is `0f26cef`, and the hook data in environment packaging and extra parameter forwarding has been protected. Added `--hook-environments`, measured in combination with `--hook-wrappers`: large contains 10 files, 240046 bytes, 64 xparse environments and 512 environment calls. End the text and pass the start parameters to the hook. All edits and file collections of independent tags are still verified.
 
-最初尝试按文档索引数据流分析中的正文所属定义。同核配对改名的 small／medium／large p50 倍率约为 0.99×／0.96×／0.99×，未显示稳定收益，因此撤回；`round6-owner-index-pairs.json` 保留此次中间实验。随后发现普通标签导航也会建立全部源码的 hook 名称索引。现在先解析光标所在文档，若该消费者解释下没有目标 hook 名称，直接结束此项分析；真正的 hook 名称查询继续扫描完整项目，并保留所有共享消费者的一致性检查。没有增加跨请求缓存。
+Initially attempts to index body-owned definitions in Data Flow Analysis by document. The renamed small/medium/large p50 with homonuclear pairing has a magnification ratio of approximately 0.99×/0.96×/0.99×. It does not show stable returns and is therefore withdrawn; `round6-owner-index-pairs.json` retains this intermediate experiment. Later, I discovered that ordinary tag navigation would also create a hook name index for all source codes. Now parse the document where the cursor is located. If there is no target hook name under the consumer's interpretation, this analysis will end directly; the real hook name query continues to scan the complete project and retains the consistency check of all shared consumers. No cross-request caching is added.
 
-连续会话为每档 3 个独立进程，每进程预热 3 周期、测量 12 周期。大型组合负载的定义 p50 为 79.95→76.46 ms，悬停 51.00→45.36 ms，改名 47.85→48.81 ms；常规负载定义为 26.77→25.89 ms，改名 19.40→20.30 ms。会话仍有明显波动，不将这些变化解释为所有功能的普遍加速。
+Continuous sessions are 3 independent processes per gear, each process has 3 cycles of warm-up and 12 cycles of measurement. The definition p50 of large combined load is 79.95→76.46 ms, hovering 51.00→45.36 ms, renamed to 47.85→48.81 ms; conventional load is defined as 26.77→25.89 ms, renamed 19.40→20.30 ms. There are still noticeable fluctuations in sessions, don't interpret these changes as a general speedup across all functions.
 
-`rename_pairs.py` 新增 `--query definition`，核对精确声明位置，沿用启动前同核绑定、打开后全部线程亲和性检查和交替请求。每档为 3 组进程，预热 5 对、测量 20 对。下表始终按“原版→优化版”排列，反向复测文件的 `before`／`after` 则交换了二进制。
+`rename_pairs.py` Added `--query definition` to check the exact declaration position, and continue to use same-core binding before startup, all thread affinity checks and alternate requests after startup. Each level has 3 sets of processes, 5 pairs of warming up and 20 pairs of measurements. The following table is always arranged according to "Original → Optimized Version", and the `before`/`after` of the reverse retest file has the binary exchanged.
 
-| 固定快照 | 定义 p50 前／后 ms | p50 倍率 | CPU 均值前／后 ms |
+| fixed snapshot | define p50 before/after ms | p50 multiplier | CPU mean before/after ms |
 | --- | ---: | ---: | ---: |
-| small 组合 | 4.51／4.34 | 1.04× | 4.83／4.67 |
-| medium 组合 | 20.03／18.32 | 1.10× | 21.33／18.50 |
-| large 组合 | 77.31／69.55 | 1.11× | 77.83／70.83 |
-| large 组合，交换顺序 | 77.40／69.21 | 1.12× | 77.00／70.50 |
+| small combination | 4.51／4.34 | 1.04× | 4.83／4.67 |
+| medium combination | 20.03／18.32 | 1.10× | 21.33／18.50 |
+| large combination | 77.31／69.55 | 1.11× | 77.83／70.83 |
+| large combination, exchange order | 77.40／69.21 | 1.12× | 77.00／70.50 |
 
-两组大型探测的 CPU 均值下降约 8%–9%；CPU tick 为 10 ms，不能根据小项目的少量 tick 宣称收益。结论限于避免无关 hook 索引的导航成本；配对探测没有连续编辑，不能替代完整会话。测量期间未并行运行构建、测试或浏览器渲染。
+The average CPU drop for both sets of large probes is about 8%–9%; the CPU tick is 10 ms, and benefits cannot be claimed based on a small number of ticks for a small project. Conclusions are limited to avoiding the navigation costs of irrelevant hook indexes; paired probes do not have continuous editing and cannot replace a full session. No builds, tests, or browser rendering were run in parallel during the measurement.
 
-全部原始数据为 `benchmarks/results/2026-10-26/round6*.json`，合计约 290 KiB：`environments-before/after` 和 `regular-before/after` 为连续会话，`definition-pairs` 及其 `reversed` 为正式配对，`owner-index-pairs` 为已撤回实验。
+All raw data is `benchmarks/results/2026-10-26/round6*.json`, totaling about 290 KiB: `environments-before/after` and `regular-before/after` are continuous sessions, `definition-pairs` and its `reversed` are official pairs, and `owner-index-pairs` is a withdrawn experiment.
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 benchmarks/rename_pairs.py \
-  --before target/benchmarks/latex-lsp-round6-guard \
-  --after target/benchmarks/latex-lsp-round6-origin-first \
+  --before target/benchmarks/texquill-round6-guard \
+  --after target/benchmarks/texquill-round6-origin-first \
   --query definition --hook-wrappers --hook-environments \
   --output target/benchmarks/definition-pairs.json
 python3 benchmarks/report.py \
@@ -323,35 +323,35 @@ python3 benchmarks/report.py \
   --output target/benchmarks/round6-environments-report.html
 ```
 
-两种配对查询及环境组合会话的 smoke 通过，CI 同步覆盖。44 项 hook 相关测试、8 项显式原生测试、全目标严格 Clippy、文档、格式及差异检查通过。冻结源码后的整仓回归为 320 个目标、3365 项通过、0 失败、494 项默认跳过，其中完整串行协议为 406 项通过、29 项默认跳过。独立 HTML 的配对表及项目／分位数／指标筛选交互、全部原始样本数量与数值检查通过；预览服务仍返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计为视觉验证通过。
+Smoke passes for both pairing queries and environment combination sessions, and CI is covered synchronously. 44 hook-related tests, 8 explicit native tests, all-target strict Clippy, documentation, format and difference checks passed. The total warehouse return after freezing the source code was 320 targets, 3365 passed, 0 failed, and 494 were skipped by default, of which the complete serial protocol was 406 passed and 29 were skipped by default. The independent HTML pairing table and item/quantile/indicator filtering interaction, all original sample numbers and numerical checks passed; the preview service still returned `Headless Chrome could not render the page: the browser exited unexpectedly.`, which was not counted as a visual verification pass.
 
-## 2026-10-26 第七轮：环境控制接口与无图片项目
+## 2026-10-26 Round 7: Environmental Control Interface and No Picture Project
 
-基线为 `b41daa5`，已保护环境生成的开始／结束控制序列直接转发 hook 时的数据。新增 `--hook-interfaces`，每节通过环境生成的控制序列直接调用 hook；它可与 `--hook-wrappers --hook-environments` 组合，CI 的会话与两种配对查询同步覆盖。各项测量继续核验独立标签的完整编辑集合及精确声明位置。
+The baseline is `b41daa5`, and the data when the start/end control sequence generated by the protected environment is directly forwarded to the hook. Added `--hook-interfaces`, each section directly calls the hook through the control sequence generated by the environment; it can be combined with `--hook-wrappers --hook-environments`, and the CI session is covered simultaneously with the two pairing queries. Measurements continue to verify the complete edited set of individual tags and their precise declared location.
 
-先后尝试跳过安全检查未使用的 hook 提示索引，以及在 hook 名称索引前筛选光标所在的候选字段。大型同核配对收益仅约 1%–3%，均已撤回；保留 `round7-without-hint-index-pairs.json` 和 `round7-definition-pairs.json`，不将它们计为最终优化。
+Try to skip the unused hook prompt index of the security check, and filter the candidate field where the cursor is located before the hook name index. Large-scale same-core pairings only yielded about 1%–3%, and have been withdrawn; `round7-without-hint-index-pairs.json` and `round7-definition-pairs.json` are retained and are not counted as final optimizations.
 
-临时分阶段诊断显示，大型定义请求中的文档链接分析约花费 21–22 ms，即使项目没有任何图片，也会建立全项目图片签名和操作数分析。正式优化先检查全部有界 LaTeX 来源，包括 recorder-only 文件：若源码均不含 `includegraphics`，且无 `csuse`／`csname`／`endcsname`，则直接保留每个文档的空调用列表。静态别名链和命令复制必须有最终内置名称，命名构造则一律回退完整分析；不能只检查查询文件，也未增加跨请求缓存。含图片字样或命名构造的项目继续走原分析，因而本轮收益限于符合此条件的项目。正式二进制已移除全部诊断计时。
+Temporary staged diagnostics show that document link analysis in large definition requests takes approximately 21–22 ms, even if the project does not have any images, building full-project image signatures and operand analysis. Formal optimization first checks all bounded LaTeX sources, including recorder-only files: if the source code does not contain `includegraphics`, and there is no `csuse`/`csname`/`endcsname`, then directly retain the empty call list of each document. Static alias chains and command replication must have final built-in names, and named constructs always fall back to full analysis; query files cannot be checked only, and cross-request caching is not added. Projects containing picture words or naming structures will continue to undergo original analysis, so the income in this round is limited to projects that meet this condition. The official binary has all diagnostic timing removed.
 
-同核交替定义探测每档 3 组进程、预热 5 对、测量 20 对；启动前绑定 CPU，打开后核验全部线程。下表均按“基线→优化后”排列；反向样本文件交换了二进制参数。
+The same core alternating definition detects 3 groups of processes in each stage, warms up 5 pairs, and measures 20 pairs; binds the CPU before starting, and verifies all threads after opening. The following tables are all arranged by "Baseline → After Optimization"; the reverse sample file has the binary parameters exchanged.
 
-| 固定快照 | 定义 p50 前／后 ms | p50 倍率 | CPU 均值前／后 ms |
+| fixed snapshot | define p50 before/after ms | p50 multiplier | CPU mean before/after ms |
 | --- | ---: | ---: | ---: |
-| small 组合 | 4.70／3.78 | 1.24× | 4.67／3.67 |
-| medium 组合 | 20.65／15.83 | 1.30× | 20.17／15.67 |
-| large 组合 | 78.08／59.41 | 1.31× | 77.67／58.83 |
-| large 组合，交换顺序 | 78.02／60.03 | 1.30× | 77.83／59.67 |
+| small combination | 4.70／3.78 | 1.24× | 4.67／3.67 |
+| medium combination | 20.65／15.83 | 1.30× | 20.17／15.67 |
+| large combination | 78.08／59.41 | 1.31× | 77.67／58.83 |
+| large combination, exchange order | 78.02／60.03 | 1.30× | 77.83／59.67 |
 
-大型两组 CPU 均值下降约 23%–24%；单样本 tick 仍为 10 ms，不按小项目的少量 tick 推断收益。测量期间不并行构建、测试或浏览器渲染。
+The average CPU value of the two large groups dropped by about 23%–24%; the single-sample tick is still 10 ms, and the benefits are not extrapolated from the small number of ticks for small projects. There are no parallel builds, tests, or browser rendering during measurements.
 
-连续会话仍为三档项目、每档 3 个独立进程、预热 3 周期、测量 12 周期。大型组合为 10 个文件、261082 字节：定义 p50 为 80.36→62.34 ms，悬停 48.23→32.66 ms，连续 8 次编辑到补全 86.57→69.40 ms；改名则为 52.50→55.08 ms，hook 参数提示为 22.39→23.21 ms。常规大型项目的定义为 27.64→19.95 ms、悬停 16.94→10.23 ms、改名 19.75→18.86 ms。本轮未改动改名与 hook 参数提示算法，完整会话仍有波动，不能声称所有操作加速。
+The continuous session is still a three-level project, with 3 independent processes per level, 3 cycles of warm-up, and 12 cycles of measurement. The large combination is 10 files and 261082 bytes: p50 is defined as 80.36→62.34 ms, hovering is 48.23→32.66 ms, editing to completion 8 times continuously is 86.57→69.40 ms; renaming is 52.50→55.08 ms, and the hook signature help is 22.39→23.21 ms. Regular large items are defined as 27.64→19.95 ms, hover 16.94→10.23 ms, rename 19.75→18.86 ms. The renaming and hook signature helping algorithms have not been changed in this round. The complete session still fluctuates, and we cannot claim that all operations are accelerated.
 
-原始数据为 `benchmarks/results/2026-10-26/round7*.json`：`interfaces-before/after` 与 `regular-before/after` 保存连续会话，`no-images-definition-pairs` 及其 `reversed` 保存正式配对；另外两个配对文件是已撤回尝试；8 份 JSON 合计 317212 字节，10560 个墙钟原始样本的数量、有限值及中位数校验通过。HTML 的配对表、项目／分位数／指标筛选已用 JS VM 校验；预览仍返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计为视觉验证通过。
+The original data is `benchmarks/results/2026-10-26/round7*.json`: `interfaces-before/after` and `regular-before/after` save continuous sessions, `no-images-definition-pairs` and `reversed` save formal pairing; the other two pairing files are withdrawn attempts; 8 JSONs total 317212 bytes, 10560 The number, finite value and median verification of the original samples of the wall clock passed. The HTML pairing table, item/quantile/indicator filter has been verified using JS VM; the preview still returns `Headless Chrome could not render the page: the browser exited unexpectedly.`, which is not counted as a visual verification pass.
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 benchmarks/rename_pairs.py \
-  --before target/benchmarks/latex-lsp-round7-guard \
-  --after target/benchmarks/latex-lsp-round7-no-images \
+  --before target/benchmarks/texquill-round7-guard \
+  --after target/benchmarks/texquill-round7-no-images \
   --query definition --hook-wrappers --hook-environments --hook-interfaces \
   --output target/benchmarks/definition-pairs.json
 python3 benchmarks/report.py \
@@ -361,385 +361,385 @@ python3 benchmarks/report.py \
   --output target/benchmarks/round7-interfaces-report.html
 ```
 
-冻结 Rust 后的完整回归为 320 个目标、3370 项通过、0 失败、495 项默认跳过，其中完整串行协议 407 项通过、29 项默认跳过。新增回归验证未保存提供文件从无图片定义到新增别名、删除和恢复时，图片导航与文件改名同步刷新；既有跨文件、命名、recorder-only、共享消费者及不完整来源回归通过。12 项显式原生测试、全目标严格 Clippy、文档、格式和差异检查通过。dev 产物在验证后清理，保留 release 基线和全部原始测量。
+The full regression after freezing Rust was 320 targets, 3370 passes, 0 failures, 495 default skips, including 407 passes, 29 default skips for the full serial protocol. Added regression verification for unsaved files from no image definition to new alias, deletion, and recovery. Image navigation and file rename are refreshed simultaneously; cross-file, naming, recorder-only, shared consumer, and incomplete source regressions are passed. 12 explicit native tests, full target rigorous Clippy, documentation, formatting and diff checks passed. The dev product is cleaned after validation, retaining the release baseline and all raw measurements.
 
-## 2026-10-26 第八轮：自定义 hook 名称改名
+## 2026-10-26 Round 8: Custom hook name rename
 
-功能基线为 `78b9374`，支持完整的自定义 hook 名称编辑，独立检查共享消费者、动态调用、来源及读取器身份。新增 `--hook-renames` 和配对 `--query hook-rename`；主文件查询显式声明，逐项比较全部名称编辑的文件、UTF-16 范围和替换文本。组合负载同时启用命令包装、环境包装和环境生成接口，三档分别检查 36／164／580 项名称编辑。
+The functional baseline is `78b9374`, which supports complete custom hook name editing, independent checking of shared consumers, dynamic calls, sources and reader identities. Added `--hook-renames` and pairing `--query hook-rename`; master file query explicit declaration, comparing all name-edited files, UTF-16 ranges, and replacement text on an item-by-item basis. The combined load enables command packaging, environment packaging and environment generation interfaces at the same time, and the three levels check 36/164/580 name edits respectively.
 
-测量发现完整改名检查重复构造了 `named_references::Context`，再次分析操作数、expl3 数据和正文。名称索引已经在相同项目的每个消费者解释中排除操作数；校验仍要求精确匹配完整索引条目。因此校验改用较小的 `LiteralContext`，保留字面区域、动态调用、接口身份、相关修改、来源与冲突检查，复用已有条目的操作数排除结果。没有新增缓存或跨请求状态。
+Measurement found that the full rename check duplicated the construction of `named_references::Context`, again analyzing the operands, expl3 data and body. Name indexing already excludes operands in each consumer interpretation of the same item; verification still requires an exact match of the full index entry. Therefore, the verification uses the smaller `LiteralContext`, retaining the literal area, dynamic calls, interface identities, related modifications, sources and conflict checks, and reusing the operand exclusion results of existing entries. There is no new cache or cross-request state.
 
-正式配对使用三组新进程，每组预热 5 对、测量 40 对；启动前同核绑定，打开项目后核验所有线程的 CPU 亲和性。两版交替请求，所有编辑均做完整校验。CPU 为每版 120 次请求的均值，单样本计时粒度为 10 ms。
+Formal pairing uses three groups of new processes, with each group warming up 5 pairs and measuring 40 pairs; the same core is bound before starting, and the CPU affinity of all threads is verified after opening the project. The two versions are requested alternately, and all editors are fully verified. CPU is the average of 120 requests per version, with a single-sample timing granularity of 10 ms.
 
-| 组合项目 | hook 改名 p50：原版 → 优化版 | p50 加速 | CPU 均值：原版 → 优化版 |
+| Portfolio project | hook renamed p50: original → optimized version | p50 acceleration | CPU average: original → optimized version |
 | --- | ---: | ---: | ---: |
 | small | 2.906 → 2.516 ms | 1.15× | 2.750 → 2.417 ms |
 | medium | 13.577 → 10.952 ms | 1.24× | 13.000 → 9.917 ms |
 | large | 52.221 → 41.304 ms | 1.26× | 49.333 → 38.750 ms |
-| large，交换二进制参数后按原版 → 优化版换算 | 51.940 → 41.003 ms | 1.27× | 49.667 → 38.833 ms |
+| large, after exchanging binary parameters, convert according to the original → optimized version | 51.940 → 41.003 ms | 1.27× | 49.667 → 38.833 ms |
 
-两组大型配对的 CPU 均值下降约 21%–22%。完整编辑会话使用三组新进程，每组预热 3 个周期、测量 20 个周期；hook 名称改名的 small／medium／large p50 分别从 2.953／13.105／55.001 降为 2.552／10.844／43.607 ms。大型普通标签改名为 59.625 → 59.854 ms，hook 参数提示为 23.811 → 25.906 ms；不据此宣称所有功能加速。会话同时核验未保存主文档、中文／emoji 增量编辑、诊断修复及其他功能结果。
+The average CPU drop for both large pairings is about 21%–22%. The full editing session uses three new groups of processes, each group warms up for 3 cycles and measures 20 cycles; the hook name renamed small/medium/large p50 is reduced from 2.953/13.105/55.001 to 2.552/10.844/43.607 ms respectively. The large common tag is renamed to 59.625 → 59.854 ms, and the hook signature help is 23.811 → 25.906 ms; it is not claimed that all functions are accelerated based on this. The session also verifies the unsaved main document, Chinese/emoji incremental editing, diagnostic repair, and other functional results.
 
-两版的 11 组真实 release 编辑审核结果一致：5 组完整编辑逐项等于手工标记的正确编辑，并保留事件、捕获数据与 AUX；6 组动态或不完整场景均拒绝编辑。新增捕获 hook token 的回归：朴素名称替换会改变数据文本，执行次数和 AUX 却保持相同，索引条目排除检查继续拒绝这种编辑。
+The review results of the 11 real release edits of the two versions are consistent: 5 sets of complete edits are equal to manually marked correct edits item by item, and events, capture data and AUX are retained; 6 sets of dynamic or incomplete scenes are rejected for editing. Added regression to catch hook tokens: naive name substitution changes the data text, but the execution count and AUX remain the same, and the index entry exclusion check continues to reject such edits.
 
-原始报告共 250657 bytes（约 245 KiB），9276 个墙钟样本的数量、p50、p95、最大值及配对 CPU 均值已复算：
+The original report totaled 250657 bytes (approximately 245 KiB), and the number of 9276 wall clock samples, p50, p95, maximum and paired CPU averages have been recalculated:
 
-- [组合会话：原版](../benchmarks/results/2026-10-26/round8-hook-renames-before.json)
-- [组合会话：优化版](../benchmarks/results/2026-10-26/round8-hook-renames-after.json)
-- [同核配对：三档](../benchmarks/results/2026-10-26/round8-hook-rename-pairs.json)
-- [同核配对：交换二进制参数](../benchmarks/results/2026-10-26/round8-hook-rename-pairs-reversed.json)
+- [Combo Session: Original](../benchmarks/results/2026-10-26/round8-hook-renames-before.json)
+- [Combined Session: Optimized Version](../benchmarks/results/2026-10-26/round8-hook-renames-after.json)
+- [Same core pairing: third level](../benchmarks/results/2026-10-26/round8-hook-rename-pairs.json)
+- [Same core pairing: exchange binary parameters](../benchmarks/results/2026-10-26/round8-hook-rename-pairs-reversed.json)
 
 ```sh
 python3 benchmarks/rename_pairs.py \
-  --before target/benchmarks/latex-lsp-round8-guard \
-  --after target/benchmarks/latex-lsp-round8-index-proof \
+  --before target/benchmarks/texquill-round8-guard \
+  --after target/benchmarks/texquill-round8-index-proof \
   --query hook-rename --hook-wrappers --hook-environments --hook-interfaces \
   --iterations 40 --warmup 5 --runs 3 --output target/benchmarks/round8-hook-rename-pairs.json
 ```
 
-新指标、三种配对查询、报告交互和两版 release 原生审核通过。最终冻结源码的整仓验证为 321 个目标、3377 项通过、0 失败、497 项默认跳过，完整串行协议为 408 项通过、29 项默认跳过。64 项 hook 专项（含原生）、严格全目标 Clippy、文档、格式及差异检查通过。478 份 Rust 源码与冻结时的校验值一致，两版测量二进制的 SHA 与报告一致。HTML 交互脚本检查通过；两次 headless 预览均因浏览器异常退出失败，不计视觉验证通过。
+New indicators, three paired queries, report interactions, and two versions of release passed native review. The final verification of the entire frozen source code was 321 targets, 3377 passed, 0 failed, and 497 were skipped by default. The complete serial protocol was 408 passed and 29 were skipped by default. 64 special hook items (including native), strict full-target Clippy, document, format and difference checks passed. 478 copies of the Rust source code are consistent with the checksum when frozen, and the SHA of the two versions of the measured binary is consistent with the report. The HTML interactive script check passed; both headless previews failed due to abnormal browser exit, regardless of visual verification.
 
-## 2026-10-26 第九轮显式代码标签与字段候选筛选
+## 2026-10-26 The ninth round of explicit code label and field candidate screening
 
-功能基线为 `513ab8a`，新增以 `(hook, code label)` 为身份的定义、引用、悬停和补全。负载同时启用 `--hook-labels --hook-wrappers --hook-environments --hook-interfaces --hook-renames`，保留两类改名的全部编辑校验。三档有 17／129／513 个代码块定义及 18／133／521 项引用；代码标签响应逐项核验精确范围，补全核验 hook 隔离及整个后缀的替换。
+The functional baseline is `513ab8a`, and the definition, reference, hover and completion with the identity of `(hook, code label)` are added. The load also enables `--hook-labels --hook-wrappers --hook-environments --hook-interfaces --hook-renames`, retaining all edit verifications for both types of name changes. The three project sizes has 17/129/513 code block definitions and 18/133/521 references; the code label responds to the precise range of item-by-item verification, complete verification hook isolation and replacement of the entire suffix.
 
-源码审阅发现，hook 名称与代码标签索引会先为光标文档构造完整操作数上下文，再判断光标是否位于相关字段。优化先解析候选字段；光标未命中时提前返回，有候选的文档才构造上下文，并按候选所属调用检查操作数。字面区域、声明位置、共享消费者一致性、来源预算和改名的完整调用保护均保留，没有新增缓存。已有数据实参、未保存提供文件和共享消费者回归用于检查筛选顺序的改变。
+Source code review found that the hook name and code label index will first construct the complete operand context for the cursor document, and then determine whether the cursor is located in the relevant field. The optimization first parses the candidate fields; returns early when the cursor is not hit, only constructs the context for documents with candidates, and calls the check operand according to the candidate. Full call protection of literal areas, declaration locations, shared consumer consistency, source budgets, and renames are preserved, and no new caches are added. Existing data arguments, unsaved provision files, and shared consumer regressions are used to check for changes in filter order.
 
-正式配对在 CPU 0 启动两个常驻 release 进程，打开后核验所有服务器线程的亲和性；请求顺序及每组进程启动顺序均交替。每档 3 组进程，每组预热 5 对、测量 30 对，再交换 `--before`／`--after` 完整复测。下表统一按功能基线 → 优化版列出，反向报告本身保留实际参数顺序。
+Formal pairing starts two resident release processes on CPU 0. After opening, the affinity of all server threads is verified; the request order and the start order of each group of processes are alternated. There are 3 groups of processes in each gear, each group warms up 5 pairs, measures 30 pairs, and then exchanges `--before`/`--after` for complete retest. The following table is uniformly listed in the order of functional baseline → optimized version, and the reverse report itself retains the actual parameter order.
 
-| 查询／项目 | 首组 p50 · ms | 交换后 p50 · ms | 两组倍率 |
+| Query/Project | First group p50 · ms | After exchange p50 · ms | Two sets of magnifications |
 | --- | ---: | ---: | ---: |
-| 普通定义 · small | 4.562 → 3.919 | 4.572 → 3.925 | 1.16×／1.16× |
-| 普通定义 · medium | 18.854 → 17.327 | 18.679 → 17.090 | 1.09×／1.09× |
-| 普通定义 · large | 69.861 → 66.269 | 70.783 → 67.401 | 1.05×／1.05× |
-| 代码标签定义 · small | 2.796 → 2.432 | 2.686 → 2.364 | 1.15×／1.14× |
-| 代码标签定义 · medium | 11.294 → 10.609 | 11.508 → 10.570 | 1.06×／1.09× |
-| 代码标签定义 · large | 42.971 → 41.159 | 43.257 → 41.398 | 1.04×／1.04× |
+| Common definition · small | 4.562 → 3.919 | 4.572 → 3.925 | 1.16×／1.16× |
+| Common definition · medium | 18.854 → 17.327 | 18.679 → 17.090 | 1.09×／1.09× |
+| Common definition · large | 69.861 → 66.269 | 70.783 → 67.401 | 1.05×／1.05× |
+| Code label definition · small | 2.796 → 2.432 | 2.686 → 2.364 | 1.15×／1.14× |
+| Code label definition · medium | 11.294 → 10.609 | 11.508 → 10.570 | 1.06×／1.09× |
+| Code label definition · large | 42.971 → 41.159 | 43.257 → 41.398 | 1.04×／1.04× |
 
-large 普通定义的服务器 CPU 均值分别为 70.222 → 66.667、70.444 → 66.889 ms，均下降约 5.1%；代码标签定义为 41.222 → 39.778、42.778 → 39.889 ms，下降约 3.5%／6.8%。CPU 单样本精度为 10 ms，只比较每档 90 个样本的均值，不据单个样本作结论。
+The average server CPU values of large generally defined are 70.222 → 66.667, 70.444 → 66.889 ms, both decreased by approximately 5.1%; the code label definitions are 41.222 → 39.778, 42.778 → 39.889 ms, decreased by approximately 3.5%/6.8%. The single-sample accuracy of the CPU is 10 ms. It only compares the mean of 90 samples in each level and does not draw conclusions based on a single sample.
 
-完整连续会话为每档 3 个新进程，各预热 3 个周期、测量 20 个周期。large 的结果如下：
+A full continuous session is 3 new sessions per run, each with 3 cycles of warm-up and 20 cycles of measurement. The results for large are as follows:
 
-| 操作 | 优化前 p50 · ms | 优化后 p50 · ms |
+| Operation | Before optimization p50 · ms | After optimization p50 · ms |
 | --- | ---: | ---: |
-| 代码标签定义 | 43.941 | 41.660 |
-| 代码标签引用 | 45.412 | 42.848 |
-| 代码标签悬停 | 44.771 | 39.019 |
-| 代码标签补全 | 46.763 | 40.795 |
-| 普通定义 | 72.854 | 73.899 |
-| 普通改名 | 63.614 | 61.826 |
-| hook 名称改名 | 55.230 | 54.016 |
-| hook 参数提示 | 25.365 | 25.243 |
-| 连续 8 次编辑到补全 | 81.895 | 75.165 |
+| Code label definition | 43.941 | 41.660 |
+| Code Tag Reference | 45.412 | 42.848 |
+| Code label hover | 44.771 | 39.019 |
+| Code tag completion | 46.763 | 40.795 |
+| Common definition | 72.854 | 73.899 |
+| Ordinary name change | 63.614 | 61.826 |
+| hook name renamed | 55.230 | 54.016 |
+| hook signature help | 25.365 | 25.243 |
+| 8 consecutive edits to completion | 81.895 | 75.165 |
 
-配对查询确认小幅稳定收益；连续会话仍有波动，普通定义在本次完整回放中略慢，不能据此声称所有功能加速。测试使用合成论文，关闭发行版发现并使用 pull 诊断，不包含 PDF 编译或外部格式化。
+Paired queries confirm small, stable gains; there are still fluctuations in consecutive sessions, and ordinary definitions are slightly slower in this full replay, which cannot be used to claim that all functions are accelerated. Tested using synthetic papers, turning off release discovery and using pull diagnostics, does not include PDF compilation or external formatting.
 
-六份正式原始报告合计 350040 bytes（约 342 KiB），11916 个墙钟样本的统计量、CPU 均值、fixture、脚本与二进制 SHA 均已复算：
+The six official original reports total 350040 bytes (approximately 342 KiB), and the statistics, CPU averages, fixtures, scripts and binary SHA of 11916 wall clock samples have been recalculated:
 
-- [完整会话优化前](../benchmarks/results/2026-10-26/round9-code-labels-before.json)、[优化后](../benchmarks/results/2026-10-26/round9-code-labels-after.json)
-- [普通定义配对](../benchmarks/results/2026-10-26/round9-field-candidates-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round9-field-candidates-definition-pairs-reversed.json)
-- [代码标签定义配对](../benchmarks/results/2026-10-26/round9-field-candidates-code-label-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round9-field-candidates-code-label-pairs-reversed.json)
+- [Full session before optimization](../benchmarks/results/2026-10-26/round9-code-labels-before.json), [After optimization](../benchmarks/results/2026-10-26/round9-code-labels-after.json)
+- [Normal definition pairing](../benchmarks/results/2026-10-26/round9-field-candidates-definition-pairs.json), [Exchange order](../benchmarks/results/2026-10-26/round9-field-candidates-definition-pairs-reversed.json)
+- [Code Tag Definition Pairing](../benchmarks/results/2026-10-26/round9-field-candidates-code-label-pairs.json), [Exchange Order](../benchmarks/results/2026-10-26/round9-field-candidates-code-label-pairs-reversed.json)
 
 ```sh
-python3 benchmarks/editing.py --server target/benchmarks/latex-lsp-round9-labels \
+python3 benchmarks/editing.py --server target/benchmarks/texquill-round9-labels \
   --hook-labels --hook-wrappers --hook-environments --hook-interfaces --hook-renames \
   --runs 3 --iterations 20 --warmup 3 --output target/benchmarks/round9-before.json
 python3 benchmarks/rename_pairs.py \
-  --before target/benchmarks/latex-lsp-round9-labels \
-  --after target/benchmarks/latex-lsp-round9-field-candidates \
+  --before target/benchmarks/texquill-round9-labels \
+  --after target/benchmarks/texquill-round9-field-candidates \
   --query hook-definition --hook-labels --hook-wrappers --hook-environments --hook-interfaces \
   --runs 3 --iterations 30 --warmup 5 --output target/benchmarks/round9-pairs.json
 ```
 
-功能版与优化版均通过实际 release 的四种导航及原生编辑审核：直接、静态命名、纯转发和边界注释的精确定义／引用／悬停保持一致；独立普通标签的实际编辑应用后保持代码事件顺序与完整 AUX。严格全目标 Clippy 已通过，优化版最终冻结全量回归进行中。
+Both the functional version and the optimized version have passed the four navigation and native editing reviews of the actual release: direct, static naming, pure forwarding and precise definition/reference/hover of boundary comments are consistent; the actual editing application of independent ordinary tags maintains the code event sequence and complete AUX. The strict full-target Clippy has been passed, and the optimized version’s final frozen full-scale return is in progress.
 
-交互报告的 JS VM 校验通过，包含三档切换、p50／p95、全部指标及配对表。`html_preview` 仍返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`；未将该预览记为视觉验证通过。
+The JS VM verification of the interactive report has passed, including three-speed switching, p50/p95, all indicators and matching tables. `html_preview` still returns `Headless Chrome could not render the page: the browser exited unexpectedly.`; the preview is not marked as a visual verification pass.
 
-优化版最终冻结验证通过：322 个目标、3385 项通过、0 失败、499 项默认跳过，其中完整串行 stdio 为 409 项通过、29 项默认跳过。73 项含原生 hook 专项、严格全目标 Clippy、文档、格式及差异检查通过；481 份 Rust 源码集合和校验值均一致。普通／hook 会话 smoke 及四种配对查询模式通过；六份正式 JSON 与两版 release SHA 再次校验一致。
+The optimized version of the final freeze verification passed: 322 targets, 3385 passes, 0 failures, 499 default skips, of which the full serial stdio is 409 passes, 29 default skips. 73 projects including native hooks, strict full-target Clippy, documentation, format and difference checks passed; 481 Rust source code collections and verification values were consistent. Normal/hook session smoke and four paired query modes passed; six official JSONs and two versions of release SHA were verified again to be consistent.
 
-## 2026-10-26 第十轮：生命周期标签与撤回的命令预筛选
+## 2026-10-26 Round 10: Lifecycle labels and withdrawn commands pre-screening
 
-本轮增加 `--lifecycle-labels`，将逐节注册改成 `AtBeginDocument`，混合直接 `AddToHook{begindocument}`、结束阶段和其他 hook 的干扰。每次查询均核验完整定义／引用与精确补全范围。三档负载分别为 3／6／10 文件、16400／80871／290107 bytes；代码标签定义为 17／129／513 处，引用为 18／133／521 处。
+This round adds `--lifecycle-labels`, changes the section-by-section registration to `AtBeginDocument`, and mixes the interference of direct `AddToHook{begindocument}`, the end stage and other hooks. Each query checks for complete definitions/references and exact completion ranges. The three load levels are 3/6/10 files and 16400/80871/290107 bytes respectively; the code label is defined at 17/129/513 and the reference is 18/133/521.
 
-功能基线来自 `b244dcd`，保存为 `target/benchmarks/latex-lsp-round10-lifecycle`，SHA-256 为 `a4daa8704e0585d1cdc543b5c7df1afb274788d02d4b6cb5a43408704114bf0a`。完整会话每档启动 3 个进程，各预热 3 个周期、测量 20 个周期：
+The functional baseline is from `b244dcd`, saved as `target/benchmarks/texquill-round10-lifecycle`, and SHA-256 is `a4daa8704e0585d1cdc543b5c7df1afb274788d02d4b6cb5a43408704114bf0a`. A complete session starts 3 processes at each stage, each with 3 cycles of warm-up and 20 cycles of measurement:
 
-| 操作 p50 · ms | small | medium | large |
+| Operation p50 · ms | small | medium | large |
 | --- | ---: | ---: | ---: |
-| 普通定义 | 3.943 | 17.414 | 68.709 |
-| 生命周期代码标签定义 | 2.429 | 10.562 | 41.865 |
-| 生命周期代码标签引用 | 2.516 | 10.771 | 41.736 |
-| 生命周期代码标签悬停 | 2.346 | 9.791 | 37.820 |
-| 生命周期代码标签补全 | 2.694 | 10.794 | 40.196 |
-| 自定义 hook 名称改名 | 2.766 | 11.860 | 46.330 |
-| 连续 8 次编辑到补全 | 9.618 | 27.542 | 72.698 |
+| Common definition | 3.943 | 17.414 | 68.709 |
+| Lifecycle code label definition | 2.429 | 10.562 | 41.865 |
+| Lifecycle Code Label Reference | 2.516 | 10.771 | 41.736 |
+| Lifecycle Code Label Hover | 2.346 | 9.791 | 37.820 |
+| Lifecycle code label completion | 2.694 | 10.794 | 40.196 |
+| Custom hook name renamed | 2.766 | 11.860 | 46.330 |
+| 8 consecutive edits to completion | 9.618 | 27.542 | 72.698 |
 
-待优化点是 hook 字段读取器反复检查不相关命令的字面区域和转发身份。测试了三种候选：从当前签名预收集已确认的接口别名；在此基础上先排除不可能的内置名称；以及去掉别名集合，仅把已有的转发判断前移。全部保留后续命名调用、当前内核叶接口、数据角色和共享消费者检查。首版通过 80 项含原生 hook 专项和严格全目标 Clippy，但性能探测未显示收益。
+The point to be optimized is that the hook field reader repeatedly checks the literal area and forwarding identity of unrelated commands. Three candidates were tested: pre-collecting confirmed interface aliases from the current signature; excluding impossible built-in names on this basis; and removing the alias set and only moving forward the existing forwarding judgment. Subsequent named calls, current kernel leaf interfaces, data roles, and shared consumer checks are all preserved. The first version passed 80 special projects with native hooks and strict all-target Clippy, but the performance probe did not show any benefit.
 
-大型项目的探测均在同核的两个常驻进程中交替请求，2 轮、每轮预热 4 次、测量 15 次。每版每项查询有 30 个样本；以下是探测结果，不是完整双顺序性能认证：
+The detection of large-scale projects is requested alternately in two resident processes of the same core, with 2 rounds, 4 warm-ups and 15 measurements per round. There are 30 samples per query per version; the following are probe results, not full dual-sequential performance certification:
 
-| 候选 | 查询 | 基线 p50 → 候选 p50 · ms | 配对比值中位数 |
+| candidate | query | baseline p50 → candidate p50 · ms | median paired odds |
 | --- | --- | ---: | ---: |
-| 预收集别名集合 | 普通定义 | 65.797 → 67.136 | 0.98× |
-| 别名集合加名称预筛选 | 普通定义 | 66.934 → 68.001 | 0.98× |
-| 别名集合加名称预筛选 | 代码标签定义 | 40.201 → 40.639 | 0.99× |
-| 直接前移转发判断 | 普通定义 | 66.673 → 67.782 | 0.99× |
-| 直接前移转发判断 | 代码标签定义 | 40.681 → 42.288 | 0.97× |
+| Pre-collected alias set | Common definition | 65.797 → 67.136 | 0.98× |
+| Alias collection plus name pre-filtering | Common definition | 66.934 → 68.001 | 0.98× |
+| Alias collection plus name pre-filtering | Code label definition | 40.201 → 40.639 | 0.99× |
+| Direct forward forwarding judgment | Ordinary definition | 66.673 → 67.782 | 0.99× |
+| Direct forward forwarding judgment | Code label definition | 40.681 → 42.288 | 0.97× |
 
-这些小规模探测不足以证明普遍退化，但没有达到保留优化的标准；三种候选均已撤回，Rust 源码与已完成整仓验证的功能提交完全一致。没有新增缓存，也不宣称本轮查询加速。下一轮继续按实际功能负载测量，优先关注重复签名构造，而非增加未证实有效的筛选层。CPU 时钟精度为 10 ms，不据单个样本判断微小变化。
+These small-scale detections are not enough to prove widespread degradation, but they do not meet the criteria to retain optimization; all three candidates have been withdrawn, and the Rust source code is completely consistent with the functional submission that has completed the whole warehouse verification. There is no new cache, nor is there any claim to speed up this round of queries. The next round continues to measure actual functional load, giving priority to duplicate signature constructs rather than adding unproven filtering layers. The CPU clock has an accuracy of 10 ms and does not judge small changes based on individual samples.
 
-六份原始报告合计 141993 bytes，5178 个墙钟样本的统计量、fixture、CPU 均值及脚本／二进制 SHA 已复算：
+The six original reports total 141993 bytes, and the statistics, fixtures, CPU averages and script/binary SHA of 5178 wall clock samples have been recalculated:
 
-- [完整生命周期会话](../benchmarks/results/2026-10-26/round10-lifecycle-before.json)
-- [别名集合：普通定义](../benchmarks/results/2026-10-26/round10-filter-definition-rejected.json)
-- [名称预筛选：普通定义](../benchmarks/results/2026-10-26/round10-uppercase-definition-rejected.json)、[代码标签定义](../benchmarks/results/2026-10-26/round10-uppercase-label-rejected.json)
-- [前移判断：普通定义](../benchmarks/results/2026-10-26/round10-early-meaning-definition-rejected.json)、[代码标签定义](../benchmarks/results/2026-10-26/round10-early-meaning-label-rejected.json)
+- [Full Lifecycle Session](../benchmarks/results/2026-10-26/round10-lifecycle-before.json)
+- [Alias Collection: Common Definition](../benchmarks/results/2026-10-26/round10-filter-definition-rejected.json)
+- [Name pre-filter: normal definition](../benchmarks/results/2026-10-26/round10-uppercase-definition-rejected.json), [Code label definition](../benchmarks/results/2026-10-26/round10-uppercase-label-rejected.json)
+- [Forward judgment: normal definition](../benchmarks/results/2026-10-26/round10-early-meaning-definition-rejected.json), [Code label definition](../benchmarks/results/2026-10-26/round10-early-meaning-label-rejected.json)
 
 ```sh
-python3 benchmarks/editing.py --server target/benchmarks/latex-lsp-round10-lifecycle \
+python3 benchmarks/editing.py --server target/benchmarks/texquill-round10-lifecycle \
   --lifecycle-labels --hook-wrappers --hook-environments --hook-interfaces --hook-renames \
   --runs 3 --iterations 20 --warmup 3 --output target/benchmarks/round10-lifecycle.json
 ```
 
-功能版冻结回归为 322 个目标、3391 项通过、0 失败、501 项默认跳过，其中完整串行 stdio 为 410 项通过、29 项默认跳过。80 项含原生 hook 专项、九组实际 release 原生／精确导航审核、严格全目标 Clippy、文档、格式及差异检查通过。测量结束后已恢复功能版 release；不保留失败候选的源码。
+The functional freeze regression was 322 targets, 3391 passes, 0 failures, 501 default skips, with the full serial stdio at 410 passes, 29 default skips. Passed 80 special projects including native hooks, nine groups of actual release native/accurate navigation reviews, and strict all-target Clippy, document, format, and difference checks. After the measurement, the functional version release has been restored; the source code of failed candidates will not be retained.
 
-## 2026-10-26 第十一轮：全局排序规则与请求内签名复用
+## 2026-10-26 Round 11: Global sorting rules and intra-request signature reuse
 
-功能基线为 `723f611`。新增 `--global-hook-rules`，可与 `--lifecycle-labels` 组合，覆盖局部与全局规则的定义、引用、悬停和补全。三档局部定义为 17／129／513 处，引用为 19／137／529 处；全局定义为 33／257／1025 处，引用为 35／265／1041 处。独立计算全部位置，校验全局补全包含 `contrast` 和 `contribution`，局部定义及补全仅包含本 hook。普通与 hook 名称改名仍检查完整编辑。
+The functional baseline is `723f611`. Added `--global-hook-rules`, which can be combined with `--lifecycle-labels` to cover the definition, reference, hover and completion of local and global rules. The third gear is locally defined as 17/129/513 places and cited as 19/137/529 places; globally defined as 33/257/1025 places and cited as 35/265/1041 places. Calculate all positions independently, verify that global completion includes `contrast` and `contribution`, and local definition and completion only include this hook. Normal and hook name renames still check for full editing.
 
-源码审阅发现，同一请求中的 hook 名称索引和代码标签索引重复构造项目命令签名。优化在已有的请求级缓存中保存 owned 签名，以 workspace 身份及精确源码作用域区分；每类最多四项，与已有分析共享 8 MiB 计量预算，超限仅重新计算、不继续保留。缓存随请求结束销毁，不跨未保存编辑复用。定义、悬停和补全也进入已有的符号查询缓存，因此同时复用了已有 named／label 分析；本轮结果不能全部归因于签名复用。字面数据、接口含义及所有共享消费者检查保持。
+Source code review found that the hook name index and code label index in the same request repeatedly constructed the project command signature. Optimized to save owned signatures in the existing request-level cache, distinguished by workspace identity and precise source code scope; each category has a maximum of four items, sharing the 8 MiB metering budget with existing analysis. If the limit is exceeded, it will only be recalculated and will not be retained. The cache is destroyed when the request ends and is not reused across unsaved edits. Definitions, hovers, and completions also go into the existing symbol query cache, so existing named/label analyzes are reused at the same time; the results of this round cannot all be attributed to signature reuse. Literal data, interface meanings, and all shared consumer checks are maintained.
 
-正式配对使用同核两个常驻 release 进程，核验全部线程的亲和性，交替请求顺序；每档三组进程，各预热五对、测量三十对，再交换进程启动顺序完整复测。表内统一按功能基线 → 优化版展示，单位 ms：
+The formal pairing uses two resident release processes of the same core to verify the affinity of all threads and alternate the order of requests. There are three groups of processes in each stage, each of which is warmed up with five pairs, measured with thirty pairs, and then the process startup order is exchanged for complete retesting. The table is uniformly displayed according to functional baseline → optimized version, unit ms:
 
-| 查询／项目 | 首组 p50 | 交换后 p50 |
+| Query/Project | First set of p50 | After exchange p50 |
 | --- | ---: | ---: |
-| 普通定义 · small | 4.166 → 4.045 | 4.026 → 3.869 |
-| 普通定义 · medium | 18.388 → 18.156 | 18.244 → 18.068 |
-| 普通定义 · large | 72.781 → 72.305 | 73.570 → 72.865 |
-| 局部标签定义 · small | 2.488 → 2.372 | 2.510 → 2.362 |
-| 局部标签定义 · medium | 11.588 → 11.571 | 11.302 → 11.136 |
-| 局部标签定义 · large | 45.007 → 43.635 | 45.609 → 44.099 |
-| 全局标签定义 · small | 3.017 → 2.859 | 2.645 → 2.479 |
-| 全局标签定义 · medium | 12.438 → 12.054 | 12.192 → 12.083 |
-| 全局标签定义 · large | 50.043 → 50.096 | 50.703 → 49.496 |
+| Common definition · small | 4.166 → 4.045 | 4.026 → 3.869 |
+| Common definition · medium | 18.388 → 18.156 | 18.244 → 18.068 |
+| Common definition · large | 72.781 → 72.305 | 73.570 → 72.865 |
+| Local label definition · small | 2.488 → 2.372 | 2.510 → 2.362 |
+| Local label definition · medium | 11.588 → 11.571 | 11.302 → 11.136 |
+| Local label definition · large | 45.007 → 43.635 | 45.609 → 44.099 |
+| Global label definition · small | 3.017 → 2.859 | 2.645 → 2.479 |
+| Global label definition · medium | 12.438 → 12.054 | 12.192 → 12.083 |
+| Global label definition · large | 50.043 → 50.096 | 50.703 → 49.496 |
 
-大型局部定义两组 p50 均改善约 3%；普通定义大型约 1%。大型全局定义一组持平／略慢，另一组改善约 2.4%，不能认定稳定改善 5%。其服务器 CPU 均值分别为 47.667 → 46.889、47.222 → 45.889 ms，约下降 1.6%／2.8%；CPU 单样本精度为 10 ms，只比较整档均值。大型控制组的普通改名为 64.291 → 64.344、63.961 → 64.664 ms，没有稳定收益；hook 名称定义为 39.252 → 38.574、39.395 → 38.857 ms，没有发现明显新增开销。
+The p50 of both groups improved by about 3% for large local definition; about 1% for normal definition of large. The large global definition is that one group is flat/slightly slower, the other group improves by about 2.4%, and a stable improvement of 5% cannot be considered. The server CPU averages are 47.667 → 46.889, 47.222 → 45.889 ms respectively, a decrease of approximately 1.6%/2.8%; the CPU single sample accuracy is 10 ms, and only the entire average is compared. The common renaming of a large control group is 64.291 → 64.344, 63.961 → 64.664 ms, and there is no stable benefit; the hook name is defined as 39.252 → 38.574, 39.395 → 38.857 ms, and no obvious new overhead is found.
 
-完整连续会话每档三个新进程，各预热三个周期、测量二十个周期。large p50 如下；会话仍有时序波动，不以此替代配对结论，也不宣称全面加速：
+A complete continuous session has three new processes per session, each with three cycles of warm-up and twenty cycles of measurement. The large p50 is as follows; the session still has timing fluctuations, and does not replace the pairing conclusion, nor does it claim full acceleration:
 
-| 操作 | 优化前 p50 · ms | 优化后 p50 · ms |
+| Operation | Before optimization p50 · ms | After optimization p50 · ms |
 | --- | ---: | ---: |
-| 普通定义 | 77.861 | 75.167 |
-| 局部标签定义 | 46.114 | 45.197 |
-| 全局标签定义 | 55.005 | 49.577 |
-| 全局标签引用 | 54.619 | 51.330 |
-| 全局标签悬停 | 43.381 | 42.294 |
-| 全局标签补全 | 48.821 | 43.494 |
-| 普通改名 | 67.656 | 66.727 |
-| hook 名称改名 | 54.797 | 51.845 |
-| hook 参数提示 | 27.634 | 27.325 |
-| 连续八次编辑到补全 | 84.101 | 82.091 |
+| Common definition | 77.861 | 75.167 |
+| Local label definition | 46.114 | 45.197 |
+| Global label definition | 55.005 | 49.577 |
+| Global label reference | 54.619 | 51.330 |
+| Global Label Hover | 43.381 | 42.294 |
+| Global tag completion | 48.821 | 43.494 |
+| Ordinary name change | 67.656 | 66.727 |
+| Hook name changed | 54.797 | 51.845 |
+| hook signature help | 27.634 | 27.325 |
+| Eight consecutive edits to completion | 84.101 | 82.091 |
 
-十二份正式报告合计 487300 bytes，另保留十份初步探测；全部二十二份为 562096 bytes、16236 个墙钟样本，统计量、CPU 均值、fixture、脚本与两版 release SHA 均已复算。测试使用合成论文、pull 诊断，关闭发行版发现，不包含 PDF 编译或外部格式化。
+The twelve formal reports total 487,300 bytes, and ten preliminary detections are retained; all twenty-two are 562,096 bytes, 16,236 wall clock samples, and statistics, CPU averages, fixtures, scripts, and two versions of release SHA have been recalculated. Tested using synthetic papers, pull diagnostics, closed release discovery, and does not include PDF compilation or external formatting.
 
-- [完整会话优化前](../benchmarks/results/2026-10-26/round11-global-rules-before.json)、[优化后](../benchmarks/results/2026-10-26/round11-global-rules-after.json)
-- [普通定义配对](../benchmarks/results/2026-10-26/round11-query-signatures-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round11-query-signatures-definition-pairs-reversed.json)
-- [局部标签定义配对](../benchmarks/results/2026-10-26/round11-query-signatures-hook-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round11-query-signatures-hook-definition-pairs-reversed.json)
-- [全局标签定义配对](../benchmarks/results/2026-10-26/round11-query-signatures-global-hook-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round11-query-signatures-global-hook-definition-pairs-reversed.json)
-- [普通改名控制](../benchmarks/results/2026-10-26/round11-query-signatures-rename-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round11-query-signatures-rename-pairs-reversed.json)
-- [hook 名称定义控制](../benchmarks/results/2026-10-26/round11-query-signatures-hook-name-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round11-query-signatures-hook-name-definition-pairs-reversed.json)
+- [Full session before optimization](../benchmarks/results/2026-10-26/round11-global-rules-before.json), [After optimization](../benchmarks/results/2026-10-26/round11-global-rules-after.json)
+- [Normal definition pairing](../benchmarks/results/2026-10-26/round11-query-signatures-definition-pairs.json), [Exchange order](../benchmarks/results/2026-10-26/round11-query-signatures-definition-pairs-reversed.json)
+- [Partial label definition pairing](../benchmarks/results/2026-10-26/round11-query-signatures-hook-definition-pairs.json), [Exchange order](../benchmarks/results/2026-10-26/round11-query-signatures-hook-definition-pairs-reversed.json)
+- [Global label definition pairing](../benchmarks/results/2026-10-26/round11-query-signatures-global-hook-definition-pairs.json), [Exchange order](../benchmarks/results/2026-10-26/round11-query-signatures-global-hook-definition-pairs-reversed.json)
+- [Normal name change control](../benchmarks/results/2026-10-26/round11-query-signatures-rename-pairs.json), [Exchange sequence](../benchmarks/results/2026-10-26/round11-query-signatures-rename-pairs-reversed.json)
+- [hook name definition control](../benchmarks/results/2026-10-26/round11-query-signatures-hook-name-definition-pairs.json), [exchange sequence](../benchmarks/results/2026-10-26/round11-query-signatures-hook-name-definition-pairs-reversed.json)
 
 ```sh
-python3 benchmarks/editing.py --server target/benchmarks/latex-lsp-round11-global-rules \
+python3 benchmarks/editing.py --server target/benchmarks/texquill-round11-global-rules \
   --global-hook-rules --lifecycle-labels --hook-wrappers --hook-environments \
   --hook-interfaces --hook-renames --runs 3 --iterations 20 --warmup 3 \
   --output target/benchmarks/round11-before.json
 python3 benchmarks/rename_pairs.py \
-  --before target/benchmarks/latex-lsp-round11-global-rules \
-  --after target/benchmarks/latex-lsp-round11-query-signatures \
+  --before target/benchmarks/texquill-round11-global-rules \
+  --after target/benchmarks/texquill-round11-query-signatures \
   --query global-hook-definition --lifecycle-labels --hook-wrappers \
   --hook-environments --hook-interfaces --runs 3 --iterations 30 --warmup 5 \
   --output target/benchmarks/round11-pairs.json
 ```
 
-实际优化版 release 的八组全局规则及九组生命周期审核通过，包含精确导航、补全、普通引用实际编辑后的原生事件／完整 AUX 和保留名称拒绝。交互报告已发布，JS VM 校验覆盖三档、p50／p95、全部指标及全局配对标签；`html_preview` 返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计视觉验证通过。旧生命周期报告也可继续生成。
+The eight sets of global rules and nine sets of life cycle reviews of the actual optimized version of the release have been approved, including precise navigation, completion, common references, actual edited native events/complete AUX, and reserved name rejection. The interaction report has been released, and the JS VM verification covers three levels, p50/p95, all indicators and global pairing labels; `html_preview` returns `Headless Chrome could not render the page: the browser exited unexpectedly.`, excluding visual verification. Old lifecycle reports can also continue to be generated.
 
-优化版最终冻结回归通过：322 个目标、3401 项通过、0 失败、504 项默认跳过，其中完整串行 stdio 为 411 项通过、29 项默认跳过。90 项含原生 hook 专项、严格全目标 Clippy、文档、格式及差异检查通过；481 份 Rust 源码集合和 hash 与冻结清单一致，两版 release SHA 与原始报告一致。新增所有权、作用域／workspace 隔离、请求后刷新、嵌套 panic 恢复和缓存预算回退回归通过。测量后清理本包 dev 产物，保留 release 基线、依赖和原始样本。
+Optimized final freeze regression passes: 322 targets, 3401 passes, 0 failures, 504 default skips, including 411 passes, 29 default skips for full serial stdio. 90 special projects with native hooks, strict full-target Clippy, documentation, format and difference checks passed; 481 Rust source code collections and hashes are consistent with the frozen list, and the two versions of release SHA are consistent with the original report. Added ownership, scope/workspace isolation, post-request refresh, nested panic recovery, and cache budget fallback pass. After measurement, clean the dev products of this package and retain the release baseline, dependencies and original samples.
 
-## 2026-10-26 第十二轮：默认标签设置与跨分析签名复用
+## 2026-10-26 Round 12: Default label settings and cross-analysis signature reuse
 
-功能基线为 `ee618a4`。新负载在每节执行 Push／Set／省略标签注册／Pop，并查询设置字段的定义、引用、悬停和完整后缀补全；与全局规则、生命周期、命令／环境包装及环境生成接口组合。三档分别为 3／6／10 文件、20208／110247／405435 bytes。局部定义／引用为 17／36、129／269、513／1049，全局和默认设置为 33／52、257／397、1025／1561。所有位置独立计算；只计当前已认证的显式注册，不把省略注册计作已支持的定义。普通引用及 hook 名称的完整编辑继续逐项检查。
+The functional baseline is `ee618a4`. The new payload executes Push/Set/omitted tag registration/Pop in each section, and queries the definition, reference, hover and complete suffix completion of the set field; combined with global rules, life cycle, command/environment packaging and environment generation interface. The three project sizes are 3/6/10 files and 20208/110247/405435 bytes respectively. Local definitions/references are 17/36, 129/269, 513/1049, global and default settings are 33/52, 257/397, 1025/1561. All positions are counted independently; only explicit registrations that are currently authenticated are counted, omitted registrations are not counted as supported definitions. Complete edits of common references and hook names continue to be checked item by item.
 
-源码审阅确认，hook 索引已共享命令签名，但同一请求的命名引用分析与标签声明数据证明仍为相同作用域重复构造签名。优化统一按精确作用域和 URI 次序选取 LaTeX 源码，三种分析共用已有的请求内签名缓存。无查询缓存时保留借用键，避免强制复制；查询内保留的结果继续拥有全部键。各自的源码／命令预算、数据角色与共享消费者检查保持，缓存仍每类最多四项、共享 8 MiB 计量预算，不跨请求复用。
+Source code review confirmed that the hook index has shared the command signature, but the named reference analysis and label declaration data of the same request still prove that the signature is repeatedly constructed in the same scope. The optimization uniformly selects LaTeX source code according to precise scope and URI order, and the three types of analysis share the existing in-request signature cache. Borrowed keys are retained when there is no query cache to avoid forced copying; results retained within the query continue to have all keys. Respective source/command budgets, data roles, and shared consumer checks remain, caches still have a maximum of four items per category, a shared 8 MiB metered budget, and are not reused across requests.
 
-正式配对将两个常驻 release 进程绑定同一 CPU，并核验全部线程；交替请求，每档三组进程、各预热五对并测量三十对，然后交换启动顺序完整复测。普通定义／改名均在同一组合项目内查询普通引用键，默认设置和 hook 名称定义作为控制。下表统一按功能基线 → 优化版列出，单位 ms；反向 JSON 保留其实际参数顺序。
+Formal pairing binds two resident release processes to the same CPU and verifies all threads; alternate requests, three groups of processes in each stage, warm up five pairs each and measure thirty pairs, and then exchange the startup sequence for complete retest. Normal definitions/renames query common reference keys within the same composite project, with default settings and hook name definitions as controls. The following table is uniformly listed by functional baseline → optimized version, in ms; the reverse JSON retains its actual parameter order.
 
-| 查询／项目 | 首组 p50 | 交换后 p50 |
+| Query/Project | First set of p50 | After exchange p50 |
 | --- | ---: | ---: |
-| 普通定义 · small | 4.453 → 4.016 | 4.379 → 4.044 |
-| 普通定义 · medium | 22.040 → 21.413 | 21.764 → 21.183 |
-| 普通定义 · large | 88.565 → 83.916 | 87.936 → 83.216 |
-| 默认标签设置定义 · small | 2.832 → 2.817 | 2.724 → 2.708 |
-| 默认标签设置定义 · medium | 14.695 → 14.557 | 14.325 → 13.929 |
-| 默认标签设置定义 · large | 59.237 → 58.318 | 57.713 → 57.061 |
-| 普通改名 · large | 76.919 → 74.244 | 76.998 → 74.586 |
-| hook 名称定义 · large | 47.737 → 46.987 | 47.037 → 46.685 |
+| Common definition · small | 4.453 → 4.016 | 4.379 → 4.044 |
+| Common definition · medium | 22.040 → 21.413 | 21.764 → 21.183 |
+| Common definition · large | 88.565 → 83.916 | 87.936 → 83.216 |
+| Default label setting definition · small | 2.832 → 2.817 | 2.724 → 2.708 |
+| Default label setting definition · medium | 14.695 → 14.557 | 14.325 → 13.929 |
+| Default label setting definition · large | 59.237 → 58.318 | 57.713 → 57.061 |
+| Ordinary name change · large | 76.919 → 74.244 | 76.998 → 74.586 |
+| hook name definition · large | 47.737 → 46.987 | 47.037 → 46.685 |
 
-大型普通定义两组 p50 分别改善约 5.2%／5.4%，服务器 CPU 均值为 87.778 → 83.111、87.889 → 83.000 ms，约下降 5.3%／5.6%。大型普通改名 p50 改善约 3.5%／3.1%，CPU 均值为 75.333 → 71.889、75.000 → 72.667 ms。默认字段和 hook 名称定义的变化较小，不把普通定义的收益推广到所有 hook 查询。CPU 单样本精度为 10 ms，只比较整档均值。
+The p50 of the two groups of large ordinary definitions improved by about 5.2%/5.4% respectively, and the average server CPU was 87.778 → 83.111, 87.889 → 83.000 ms, a decrease of about 5.3%/5.6%. Large normal renamed p50 improved by about 3.5%/3.1%, with average CPU values of 75.333 → 71.889, 75.000 → 72.667 ms. The changes to default field and hook name definitions are minor and do not extend the benefits of ordinary definitions to all hook queries. The CPU single-sample accuracy is 10 ms, and only the mean of the entire range is compared.
 
-完整连续会话每档启动三个新进程，各预热三个周期、测量二十个周期，large p50 如下。全局／默认定义、默认引用、hook 名称改名及输入突发仍有波动，不能据配对普通定义的收益宣称全面加速：
+A complete continuous session starts three new processes at each stage, each of which is warmed up for three cycles and measured for twenty cycles. The large p50 is as follows. Global/default definitions, default references, hook name renames, and input bursts still fluctuate, and full acceleration cannot be claimed based on the benefits of pairing ordinary definitions:
 
-| 操作 | 优化前 p50 · ms | 优化后 p50 · ms |
+| Operation | Before optimization p50 · ms | After optimization p50 · ms |
 | --- | ---: | ---: |
-| 普通定义 | 91.309 | 87.321 |
-| 普通引用 | 94.126 | 92.173 |
-| 普通标签补全 | 69.195 | 67.228 |
-| 局部 hook 标签定义 | 53.510 | 53.446 |
-| 全局 hook 标签定义 | 60.883 | 62.348 |
-| 默认标签设置定义 | 61.784 | 62.238 |
-| 默认标签设置引用 | 67.547 | 67.914 |
-| 默认标签设置悬停 | 51.748 | 50.662 |
-| 默认标签设置补全 | 55.508 | 53.724 |
-| 普通改名 | 78.838 | 75.812 |
-| hook 名称改名 | 61.988 | 62.763 |
-| hook 参数提示 | 32.391 | 31.923 |
-| 连续八次编辑到补全 | 97.531 | 97.869 |
+| Common definition | 91.309 | 87.321 |
+| Common Quotes | 94.126 | 92.173 |
+| Common tag completion | 69.195 | 67.228 |
+| Local hook tag definition | 53.510 | 53.446 |
+| Global hook tag definition | 60.883 | 62.348 |
+| Default label settings definition | 61.784 | 62.238 |
+| Default label settings reference | 67.547 | 67.914 |
+| Default label settings on hover | 51.748 | 50.662 |
+| Default label setting completion | 55.508 | 53.724 |
+| Ordinary name change | 78.838 | 75.812 |
+| hook name renamed | 61.988 | 62.763 |
+| hook signature help | 32.391 | 31.923 |
+| Eight consecutive edits to completion | 97.531 | 97.869 |
 
-十份正式报告为 465282 bytes、15516 个墙钟样本；另保留两份初探，全部十二份为 475482 bytes、15636 个样本。统计量、CPU 均值、fixture、脚本与两版 release SHA 均已复算。完整普通／组合 smoke 和七种配对查询模式通过。测试关闭发行版发现、采用 pull 诊断，不包含 PDF 编译或外部格式化；结果依赖合成负载与机器。
+Ten official reports are 465282 bytes and 15516 wall clock samples; two preliminary reports are retained, and all twelve are 475482 bytes and 15636 samples. Statistics, CPU averages, fixtures, scripts and two versions of release SHA have been recalculated. Complete normal/combined smoke and seven paired query modes passed. Tests close distribution discovery, uses pull diagnostics, and does not include PDF compilation or external formatting; results are dependent on synthetic load and machine.
 
-- [完整会话优化前](../benchmarks/results/2026-10-26/round12-default-settings-before.json)、[优化后](../benchmarks/results/2026-10-26/round12-default-settings-after.json)
-- [普通定义配对](../benchmarks/results/2026-10-26/round12-project-signatures-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round12-project-signatures-definition-pairs-reversed.json)
-- [默认设置定义配对](../benchmarks/results/2026-10-26/round12-project-signatures-default-hook-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round12-project-signatures-default-hook-definition-pairs-reversed.json)
-- [普通改名控制](../benchmarks/results/2026-10-26/round12-project-signatures-rename-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round12-project-signatures-rename-pairs-reversed.json)
-- [hook 名称定义控制](../benchmarks/results/2026-10-26/round12-project-signatures-hook-name-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round12-project-signatures-hook-name-definition-pairs-reversed.json)
-- [普通定义初探](../benchmarks/results/2026-10-26/round12-project-signatures-definition-probe.json)、[默认设置初探](../benchmarks/results/2026-10-26/round12-project-signatures-default-hook-definition-probe.json)
+- [Full session before optimization](../benchmarks/results/2026-10-26/round12-default-settings-before.json), [After optimization](../benchmarks/results/2026-10-26/round12-default-settings-after.json)
+- [Normal definition pairing](../benchmarks/results/2026-10-26/round12-project-signatures-definition-pairs.json), [Exchange order](../benchmarks/results/2026-10-26/round12-project-signatures-definition-pairs-reversed.json)
+- [Default setting definition pairing](../benchmarks/results/2026-10-26/round12-project-signatures-default-hook-definition-pairs.json), [Exchange order](../benchmarks/results/2026-10-26/round12-project-signatures-default-hook-definition-pairs-reversed.json)
+- [Normal name change control](../benchmarks/results/2026-10-26/round12-project-signatures-rename-pairs.json), [Exchange sequence](../benchmarks/results/2026-10-26/round12-project-signatures-rename-pairs-reversed.json)
+- [hook name definition control](../benchmarks/results/2026-10-26/round12-project-signatures-hook-name-definition-pairs.json), [exchange sequence](../benchmarks/results/2026-10-26/round12-project-signatures-hook-name-definition-pairs-reversed.json)
+- [Initial exploration of common definitions](../benchmarks/results/2026-10-26/round12-project-signatures-definition-probe.json), [Initial exploration of default settings](../benchmarks/results/2026-10-26/round12-project-signatures-default-hook-definition-probe.json)
 
 ```sh
-python3 benchmarks/editing.py --server target/benchmarks/latex-lsp-round12-default-settings \
+python3 benchmarks/editing.py --server target/benchmarks/texquill-round12-default-settings \
   --default-hook-labels --global-hook-rules --lifecycle-labels --hook-wrappers \
   --hook-environments --hook-interfaces --hook-renames --runs 3 --iterations 20 \
   --warmup 3 --output target/benchmarks/round12-before.json
 python3 benchmarks/rename_pairs.py \
-  --before target/benchmarks/latex-lsp-round12-default-settings \
-  --after target/benchmarks/latex-lsp-round12-project-signatures \
+  --before target/benchmarks/texquill-round12-default-settings \
+  --after target/benchmarks/texquill-round12-project-signatures \
   --query definition --default-hook-labels --global-hook-rules --lifecycle-labels \
   --hook-wrappers --hook-environments --hook-interfaces --runs 3 --iterations 30 \
   --warmup 5 --output target/benchmarks/round12-pairs.json
 ```
 
-优化版六项请求缓存测试、严格全目标 Clippy 及七组实际 release／原生审核通过；后者检查精确字段、补全、代码块移除及普通引用实际编辑后的事件和完整 AUX。最终冻结整仓回归为 322 个目标、3408 项通过、0 失败、505 项默认跳过，其中完整串行 stdio 为 412 项通过、29 项默认跳过。96 项含原生 hook 专项、文档、格式及差异检查通过；481 份 Rust 源码集合与 hash 匹配冻结清单，两版 release SHA 与全部原始报告一致。测量后清理本包 dev 产物，保留依赖、release 基线及原始样本。
+Optimized version of six request cache tests, strict full-target Clippy and seven sets of actual release/native review passes; the latter checks for precise fields, completion, code block removal and common references after actual editing of events and complete AUX. The final freeze return was 322 targets, 3408 passes, 0 failures, and 505 default skips, of which the full serial stdio was 412 passes and 29 default skips. 96 projects including native hooks, documentation, format, and difference checks passed; 481 Rust source code collections and hash matching frozen lists, and the two versions of release SHA are consistent with all original reports. After measurement, clean up the dev products of this package and retain dependencies, release baselines and original samples.
 
-交互报告已发布；普通定义、默认字段配对及上一轮全局报告各通过十八种档位／统计量／指标组合的 JS VM 校验。`html_preview` 仍返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计视觉验证通过。
+The interactive report has been released; the normal definition, default field pairing and the last round of global reports each passed JS VM verification of eighteen combinations of gears/statistics/indicators. `html_preview` still returns `Headless Chrome could not render the page: the browser exited unexpectedly.`, and the visual verification is not passed.
 
-## 2026-10-26 第十三轮：文档级代码槽与局部读取器位置分析
+## 2026-10-26 Round 13: Document-level code slots and partial reader location analysis
 
-功能基线 `af73876` 新增显式 `top-level` 文档级代码槽的定义、引用、悬停、高亮和补全。注册／移除保持本 hook 的独立身份，排序规则及默认设置不关联或推荐该槽，保留槽不提供改名。本轮新增 `--document-hook-slots`，与默认设置、全局规则、生命周期、包装宏、环境及接口负载组合；完整会话还校验 hook 名称的全部编辑。三档为 3／6／10 文件、22236／125286／464574 bytes，独立核验 17／129／513 个槽定义及 18／133／521 项引用。普通与组合会话、全部八种配对查询的 smoke 均通过。
+Feature Baseline `af73876` Added explicit `top-level` document-level code slot definition, referencing, hovering, highlighting and completion. Registration/removal maintains the independent identity of this hook. The sorting rules and default settings are not associated with or recommended for this slot. The reserved slot does not provide name changes. `--document-hook-slots` is added in this round, combined with default settings, global rules, life cycle, packaging macros, environment and interface loads; a complete session also verifies all edits to hook names. The three project sizes is 3/6/10 files, 22236/125286/464574 bytes, independently verified 17/129/513 slot definitions and 18/133/521 references. Smoke passes for both normal and combined sessions, and for all eight paired queries.
 
-审阅发现 `label_declarations::readers` 为每个消费者重新计算所有含定义文件的命令执行位置，随后局部读取器认证却要求来源就是当前消费者。优化仅为当前文件构造这些位置；其他文件的定义仍进入冲突集合，工作预算与全部来源检查保持原样。没有新增缓存，也未扩大读取器或编辑身份认证。两类声明保护专项（含原生）及七组实际 release 审核通过。
+Review found that `label_declarations::readers` recalculates the execution position of all commands with definition files for each consumer, and then partial reader authentication requires that the source is the current consumer. Optimization only constructs these locations for the current file; definitions for other files still go into the conflict set, and the job budget and full source checks remain intact. No new caches were added, no readers were expanded, or authentication was edited. Two types of declaration protection projects (including native) and seven groups of actual releases have been reviewed and approved.
 
-正式配对使用每档三组新进程、每组预热五对并测量三十对，请求交替执行；启动前将所有服务器线程绑定到同一允许 CPU，打开后核验线程亲和性。交换两版启动顺序再测；下表统一按功能基线 → 优化版列出 p50（ms）。
+Formal pairing uses three groups of new processes in each gear, each group warms up five pairs and measures thirty pairs, and requests are executed alternately; all server threads are bound to the same allowed CPU before starting, and thread affinity is verified after opening. Swap the startup sequence of the two versions and test again; the following table lists p50 (ms) according to functional baseline → optimized version.
 
-| 查询 | 首组 | 交换后 |
+| Query | First group | After exchange |
 | --- | ---: | ---: |
-| 普通定义 · small | 4.569 → 4.465 | 4.551 → 4.488 |
-| 普通定义 · medium | 24.539 → 23.950 | 24.524 → 24.033 |
-| 普通定义 · large | 97.765 → 95.253 | 99.048 → 96.812 |
-| 文档级槽定义 · large | 59.341 → 59.463 | 61.342 → 61.365 |
-| 普通改名 · large | 85.143 → 85.015 | 86.239 → 85.648 |
-| hook 名称定义 · large | 54.412 → 54.612 | 54.955 → 54.517 |
+| Common definition · small | 4.569 → 4.465 | 4.551 → 4.488 |
+| Common definition · medium | 24.539 → 23.950 | 24.524 → 24.033 |
+| Common definition · large | 97.765 → 95.253 | 99.048 → 96.812 |
+| Document-level slot definition · large | 59.341 → 59.463 | 61.342 → 61.365 |
+| Ordinary name change · large | 85.143 → 85.015 | 86.239 → 85.648 |
+| hook name definition · large | 54.412 → 54.612 | 54.955 → 54.517 |
 
-大型普通定义分别改善约 2.6%／2.3%，服务器 CPU 均值为 97.778 → 95.556、103.222 → 98.444 ms，下降约 2.3%／4.6%。单个 CPU 样本只有 10 ms 精度，这里比较各档九十个样本的均值。四份前置探测的普通定义也在两种顺序改善约 2%–3%，全部保留；文档级槽不经过该读取器分析，定义耗时基本持平。普通改名和 hook 名称定义没有稳定的实质收益。
+Large common definitions improved by about 2.6%/2.3% respectively, and the server CPU averages were 97.778 → 95.556, 103.222 → 98.444 ms, a decrease of about 2.3%/4.6%. A single CPU sample has only 10 ms accuracy. Here we compare the average of ninety samples in each file. The common definitions of the four forward probes are also improved by about 2%–3% in both orders, and are all retained; the document-level slots are not analyzed by the reader, and the definition time is basically the same. Ordinary name changes and hook name definitions have no stable and substantial benefits.
 
-完整编辑会话仍为三档、每档三组新进程、三次预热和二十个测量周期，无 CPU 绑定。large 的普通定义略有改善，但多个指标回退，不宣称全面加速：
+A full edit session is still three gears, three new sets of processes per gear, three warm-ups, and twenty measurement cycles, with no CPU binding. The common definition of large improves slightly, but multiple metrics fall back and no overall acceleration is claimed:
 
-| large 完整会话 | 功能基线 p50 ms | 优化版 p50 ms |
+| large full session | feature baseline p50 ms | optimized version p50 ms |
 | --- | ---: | ---: |
-| 普通定义 | 98.992 | 98.566 |
-| 普通改名 | 85.088 | 87.020 |
-| 文档级槽定义 | 60.266 | 61.902 |
-| 文档级槽引用 | 61.111 | 61.957 |
-| 文档级槽补全 | 59.315 | 59.724 |
-| 默认设置定义 | 64.606 | 68.013 |
-| 全局规则定义 | 66.485 | 65.790 |
-| hook 名称改名 | 67.203 | 67.583 |
-| 连续八次编辑到补全 | 104.136 | 105.833 |
+| Common definition | 98.992 | 98.566 |
+| Ordinary name change | 85.088 | 87.020 |
+| Document-level slot definition | 60.266 | 61.902 |
+| Document-level slot reference | 61.111 | 61.957 |
+| Document-level slot completion | 59.315 | 59.724 |
+| Default settings definition | 64.606 | 68.013 |
+| Global Rule Definition | 66.485 | 65.790 |
+| hook name renamed | 67.203 | 67.583 |
+| Eight consecutive edits to completion | 104.136 | 105.833 |
 
-测量未与构建、测试或浏览器渲染并行。十四份原始 JSON 共 533447 bytes、17436 个墙钟样本，全部统计量、CPU 均值、fixture、脚本和二进制 SHA 已复算。两版 release SHA-256 分别为 `9a7a54430b5e5b2ff4ca02c0cf7b0d65cb26a2a8d0bb8ebf419a00aa9e058076`、`01e97f0b65d3b16a42d8ac73640cc29f63c509d1ee462e5d967779b58a895b0d`。主报告、文档级槽报告及第十二轮旧报告兼容性各十八种交互状态通过 JS 检查。headless 预览仍返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计视觉验证通过。
+Measurements are not done in parallel with builds, tests, or browser rendering. Fourteen original JSONs totaling 533447 bytes, 17436 wall clock samples, all statistics, CPU averages, fixtures, scripts and binary SHA have been recalculated. The two versions of release SHA-256 are `9a7a54430b5e5b2ff4ca02c0cf7b0d65cb26a2a8d0bb8ebf419a00aa9e058076` and `01e97f0b65d3b16a42d8ac73640cc29f63c509d1ee462e5d967779b58a895b0d`. Eighteen interaction states each of the main report, document-level slot report, and twelfth-round old report compatibility are checked through JS. The headless preview still returns `Headless Chrome could not render the page: the browser exited unexpectedly.`, without visual verification passing.
 
-原始报告：
+Original report:
 
-- [功能基线完整会话](../benchmarks/results/2026-10-26/round13-document-slots-baseline.json)、[优化版完整会话](../benchmarks/results/2026-10-26/round13-local-reader-positions-editing.json)
-- [普通定义配对](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-pairs-reversed.json)
-- [文档级槽定义配对](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-pairs-reversed.json)
-- [普通改名配对](../benchmarks/results/2026-10-26/round13-local-reader-positions-rename-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-rename-pairs-reversed.json)
-- [hook 名称定义配对](../benchmarks/results/2026-10-26/round13-local-reader-positions-hook-name-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-hook-name-definition-pairs-reversed.json)
-- [普通定义前置探测](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-probe.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-probe-reversed.json)
-- [文档级槽前置探测](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-probe.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-probe-reversed.json)
+- [Functional Baseline Full Session](../benchmarks/results/2026-10-26/round13-document-slots-baseline.json), [Optimized Version Full Session](../benchmarks/results/2026-10-26/round13-local-reader-positions-editing.json)
+- [Normal definition pairing](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-pairs.json), [Exchange order](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-pairs-reversed.json)
+- [Document-level slot definition pairing](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-pairs.json), [Swap order](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-pairs-reversed.json)
+- [Normal name change pairing](../benchmarks/results/2026-10-26/round13-local-reader-positions-rename-pairs.json), [Swap order](../benchmarks/results/2026-10-26/round13-local-reader-positions-rename-pairs-reversed.json)
+- [hook name definition pairing](../benchmarks/results/2026-10-26/round13-local-reader-positions-hook-name-definition-pairs.json), [exchange order](../benchmarks/results/2026-10-26/round13-local-reader-positions-hook-name-definition-pairs-reversed.json)
+- [Normal definition pre-detection](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-probe.json), [Exchange sequence](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-probe-reversed.json)
+- [Document level slot pre-detection](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-probe.json), [Exchange sequence](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-probe-reversed.json)
 
 
-## 2026-10-26 第十四轮：相对标签与共享读取器上下文
+## 2026-10-26 Round 14: Relative tags and shared reader context
 
-功能基线为 `9f7c3cc`。新增 `--relative-hook-labels`，与文档级槽、默认设置、全局规则、生命周期、包装宏、环境及接口组合；完整会话还逐项检查 hook 名称的全部编辑。主文档显式注册 `relative/tail`，每节在字面 Push 后紧邻注册 `./tail`，每章加入相对移除和完整后缀补全，另一个 hook 放置同名干扰。三档分别为 3／6／10 文件、24301／140105／521977 bytes，独立核验 17／129／513 个定义及 18／133／521 项引用。普通／组合完整会话和全部九种配对查询 smoke 均通过；关闭新选项时既有 fixture 字节保持一致。
+The functional baseline is `9f7c3cc`. Added `--relative-hook-labels`, combined with document-level slots, default settings, global rules, lifecycle, wrapper macros, environments and interfaces; the full session also checks all edits to hook names one by one. The main document explicitly registers `relative/tail`, and each section registers `./tail` immediately after the literal Push. Relative removal and complete suffix completion are added to each chapter, and another hook is placed to interfere with the same name. The three project sizes are 3/6/10 documents, 24301/140105/521977 bytes, and independently verified 17/129/513 definitions and 18/133/521 citations. Normal/combined full sessions and all nine paired query smokes pass; existing fixture bytes remain consistent when the new option is turned off.
 
-审阅发现 `label_declarations::readers` 为每个消费者重复扫描同一源码作用域，检查修改接口、动态命名／加载和条件／分组。优化在一次不可变项目分析中共享三个布尔事实：两个原生读取器是否保持原义，以及自定义读取器证明是否可用。每个消费者自己的定义冲突、工作预算、局部执行位置和别名不动点仍独立核验；本地单文件路径使用相同上下文。没有新增缓存或扩大认证范围。两类声明保护专项（含原生）和七组候选 release／原生相对标签审核通过。
+Review found that `label_declarations::readers` repeatedly scans the same source code scope for each consumer, checking for modified interfaces, dynamic naming/loading, and conditions/grouping. The optimization shares three boolean facts in an immutable item analysis: whether the two native readers remain literal, and whether the custom reader proves to be available. Each consumer's own definition conflicts, job budgets, local execution locations, and alias fixed points are still independently verified; local single file paths use the same context. There is no new cache or expansion of certification scope. Two categories of claim protection special items (including native) and seven groups of candidate release/native relative labels were reviewed and approved.
 
-正式配对为每档三组新进程、各预热五对并测量三十对；两版所有服务器线程绑定同一允许 CPU，交替请求，交换启动顺序再测。下表统一按功能基线 → 优化版列出 p50（ms），反向 JSON 保留实际参数顺序。
+The formal pairing is three groups of new processes in each stage, five pairs are warmed up and thirty pairs are measured; all server threads in the two versions are bound to the same allowed CPU, alternate requests, exchange the startup sequence and test again. The following table lists p50 (ms) by functional baseline → optimized version, and the reverse JSON retains the actual parameter order.
 
-| 查询 | 首组 | 交换后 |
+| Query | First group | After exchange |
 | --- | ---: | ---: |
-| 普通定义 · small | 4.838 → 4.727 | 4.933 → 4.874 |
-| 普通定义 · medium | 26.283 → 25.285 | 26.079 → 25.273 |
-| 普通定义 · large | 107.404 → 99.148 | 106.189 → 98.717 |
-| 相对标签定义 · small | 3.101 → 3.081 | 3.094 → 3.052 |
-| 相对标签定义 · medium | 16.780 → 16.614 | 16.779 → 16.477 |
-| 相对标签定义 · large | 67.517 → 66.117 | 66.413 → 65.374 |
-| 普通改名 · large | 92.423 → 91.479 | 93.324 → 91.154 |
-| hook 名称定义 · large | 59.620 → 58.758 | 59.489 → 58.893 |
+| Common definition · small | 4.838 → 4.727 | 4.933 → 4.874 |
+| Common definition · medium | 26.283 → 25.285 | 26.079 → 25.273 |
+| Common definition · large | 107.404 → 99.148 | 106.189 → 98.717 |
+| Relative label definition · small | 3.101 → 3.081 | 3.094 → 3.052 |
+| Relative label definition · medium | 16.780 → 16.614 | 16.779 → 16.477 |
+| Relative label definition · large | 67.517 → 66.117 | 66.413 → 65.374 |
+| Ordinary name change · large | 92.423 → 91.479 | 93.324 → 91.154 |
+| hook name definition · large | 59.620 → 58.758 | 59.489 → 58.893 |
 
-大型普通定义两组 p50 分别改善约 7.7%／7.0%，服务器 CPU 均值为 111.222 → 102.556、108.333 → 101.000 ms，下降约 7.8%／6.8%。CPU 单样本精度为 10 ms，只比较整档均值。四份前置探测同样保留，普通定义在两种顺序分别改善约 5.3%／7.5%。相对标签查询不经过本次读取器分析，虽墙钟小幅变化，CPU 未一致下降，不归因于此优化；普通改名和 hook 名称定义的变化也不足以宣称全面加速。
+The p50 of the two groups of large ordinary definitions improved by about 7.7%/7.0% respectively, and the average server CPU was 111.222 → 102.556, 108.333 → 101.000 ms, a decrease of about 7.8%/6.8%. The CPU single-sample accuracy is 10 ms, and only the mean of the entire range is compared. The four forward detections are also retained, and the normal definition is improved by about 5.3%/7.5% in the two orders respectively. Relative tag queries are not analyzed by this reader, and although the wall clock changes slightly, the CPU does not drop uniformly, which is not attributed to this optimization; ordinary renames and hook name definition changes are not enough to claim full acceleration.
 
-- [完整会话功能基线](../benchmarks/results/2026-10-26/round14-relative-fields-baseline.json)、[优化版](../benchmarks/results/2026-10-26/round14-reader-context-editing.json)
-- [普通定义配对](../benchmarks/results/2026-10-26/round14-reader-context-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round14-reader-context-definition-pairs-reversed.json)
-- [相对标签定义配对](../benchmarks/results/2026-10-26/round14-reader-context-relative-hook-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round14-reader-context-relative-hook-definition-pairs-reversed.json)
-- [普通改名控制](../benchmarks/results/2026-10-26/round14-reader-context-rename-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round14-reader-context-rename-pairs-reversed.json)
-- [hook 名称定义控制](../benchmarks/results/2026-10-26/round14-reader-context-hook-name-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round14-reader-context-hook-name-definition-pairs-reversed.json)
-- [普通定义初探](../benchmarks/results/2026-10-26/round14-reader-context-definition-probe.json)、[交换顺序](../benchmarks/results/2026-10-26/round14-reader-context-definition-probe-reversed.json)
-- [相对标签初探](../benchmarks/results/2026-10-26/round14-reader-context-relative-hook-definition-probe.json)、[交换顺序](../benchmarks/results/2026-10-26/round14-reader-context-relative-hook-definition-probe-reversed.json)
+- [Full session function baseline](../benchmarks/results/2026-10-26/round14-relative-fields-baseline.json), [Optimized version](../benchmarks/results/2026-10-26/round14-reader-context-editing.json)
+- [Normal definition pairing](../benchmarks/results/2026-10-26/round14-reader-context-definition-pairs.json), [Exchange order](../benchmarks/results/2026-10-26/round14-reader-context-definition-pairs-reversed.json)
+- [Relative tag definition pairing](../benchmarks/results/2026-10-26/round14-reader-context-relative-hook-definition-pairs.json), [Exchange order](../benchmarks/results/2026-10-26/round14-reader-context-relative-hook-definition-pairs-reversed.json)
+- [Normal name change control](../benchmarks/results/2026-10-26/round14-reader-context-rename-pairs.json), [Exchange sequence](../benchmarks/results/2026-10-26/round14-reader-context-rename-pairs-reversed.json)
+- [hook name definition control](../benchmarks/results/2026-10-26/round14-reader-context-hook-name-definition-pairs.json), [exchange sequence](../benchmarks/results/2026-10-26/round14-reader-context-hook-name-definition-pairs-reversed.json)
+- [Preliminary exploration of common definitions](../benchmarks/results/2026-10-26/round14-reader-context-definition-probe.json), [Exchange order](../benchmarks/results/2026-10-26/round14-reader-context-definition-probe-reversed.json)
+- [Initial exploration of relative tags](../benchmarks/results/2026-10-26/round14-reader-context-relative-hook-definition-probe.json), [Exchange order](../benchmarks/results/2026-10-26/round14-reader-context-relative-hook-definition-probe-reversed.json)
 
-完整编辑会话每档三组新进程、各预热三次并测量二十个周期，无 CPU 绑定。中断时大型档未写入完整报告，因此候选完整会话单独重新运行三档；配对报告无需重跑。large 的 p50 如下。包括未经过本次读取器分析的查询在内，多项指标均有改善，表明会话间存在整体运行条件差异，不能将全部变化归因于此优化；因果判断仍以同核双顺序配对为主。
+Full edit session with three new sets of processes per run, warmed up three times each and measured for twenty cycles, no CPU binding. The full report was not written for the large file at the time of the interruption, so the candidate full session reruns the three project sizes separately; the paired report does not need to be rerun. The p50 of large is as follows. Including queries that have not been analyzed by this reader, many indicators have improved, indicating that there are differences in overall operating conditions between sessions, and all changes cannot be attributed to this optimization; causal judgment is still based on same-core dual-sequence pairing.
 
-| large 完整会话 | 功能基线 p50 ms | 优化版 p50 ms |
+| large full session | feature baseline p50 ms | optimized version p50 ms |
 | --- | ---: | ---: |
-| 普通定义 | 117.478 | 101.917 |
-| 普通改名 | 101.747 | 93.266 |
-| 相对标签定义 | 74.659 | 67.595 |
-| 相对标签引用 | 75.666 | 68.492 |
-| 相对标签悬停 | 70.818 | 64.487 |
-| 相对标签补全 | 71.435 | 66.856 |
-| 默认设置定义 | 82.416 | 72.888 |
-| 全局规则定义 | 78.811 | 72.413 |
-| hook 名称改名 | 79.460 | 73.595 |
-| 连续八次编辑到补全 | 125.726 | 109.789 |
+| Common definition | 117.478 | 101.917 |
+| Ordinary name change | 101.747 | 93.266 |
+| Relative label definition | 74.659 | 67.595 |
+| Relative label reference | 75.666 | 68.492 |
+| relative label hover | 70.818 | 64.487 |
+| Relative tag completion | 71.435 | 66.856 |
+| Default settings definition | 82.416 | 72.888 |
+| Global Rule Definition | 78.811 | 72.413 |
+| Hook name renamed | 79.460 | 73.595 |
+| Eight consecutive edits to completion | 125.726 | 109.789 |
 
-测量未与构建、测试或浏览器渲染并行。十四份原始 JSON 共 570256 bytes、18876 个墙钟样本；统计量、CPU 均值、fixture、脚本及二进制 SHA 全部复算通过。功能版与优化版 release SHA-256 分别为 `e306aaa41754e5b5281f0665912482d180c64aa10febb26f97c867323d2f776f`、`9463007f8640a6fcf57636a0775bd27eeda84e119d1e6bcf52fda0ceb46f90e2`。测试关闭发行版发现、使用 pull 诊断，不包含 PDF 编译或外部格式化；结果依赖合成负载与机器。
+Measurements are not done in parallel with builds, tests, or browser rendering. Fourteen original JSONs totaling 570256 bytes and 18876 wall clock samples; statistics, CPU averages, fixtures, scripts and binary SHA all passed the recalculation. The functional version and optimized version release SHA-256 are `e306aaa41754e5b5281f0665912482d180c64aa10febb26f97c867323d2f776f` and `9463007f8640a6fcf57636a0775bd27eeda84e119d1e6bcf52fda0ceb46f90e2` respectively. Tests off distribution discovery, uses pull diagnostics, and does not include PDF compilation or external formatting; results depend on synthetic load and machine.
 
 ```sh
-python3 benchmarks/editing.py --server target/benchmarks/latex-lsp-round14-reader-context \
+python3 benchmarks/editing.py --server target/benchmarks/texquill-round14-reader-context \
   --relative-hook-labels --document-hook-slots --default-hook-labels \
   --global-hook-rules --lifecycle-labels --hook-wrappers --hook-environments \
   --hook-interfaces --hook-renames --runs 3 --iterations 20 --warmup 3 \
   --baseline benchmarks/results/2026-10-26/round14-relative-fields-baseline.json \
   --output target/benchmarks/round14-editing.json
 python3 benchmarks/rename_pairs.py \
-  --before target/benchmarks/latex-lsp-round14-relative-fields \
-  --after target/benchmarks/latex-lsp-round14-reader-context \
+  --before target/benchmarks/texquill-round14-relative-fields \
+  --after target/benchmarks/texquill-round14-reader-context \
   --query definition --relative-hook-labels --document-hook-slots \
   --default-hook-labels --global-hook-rules --lifecycle-labels --hook-wrappers \
   --hook-environments --hook-interfaces --runs 3 --iterations 30 --warmup 5 \
   --output target/benchmarks/round14-definition-pairs.json
 ```
 
-交互报告已发布。普通定义、相对标签定义及第十三轮旧报告兼容性各通过十八种档位／统计量／指标组合的 JS VM 校验。`html_preview` 返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计视觉验证通过。
+Interaction report published. Ordinary definitions, relative label definitions, and the compatibility of the thirteenth round of old reports each pass JS VM verification of eighteen combinations of gears/statistics/indicators. `html_preview` returns `Headless Chrome could not render the page: the browser exited unexpectedly.`, excluding visual verification.
 
-优化版最终冻结验证通过：322 个目标、3421 项通过、0 失败、507 项默认跳过，其中完整串行 stdio 为 414 项通过、29 项默认跳过。109 项含原生 hook 专项、严格全目标 Clippy、文档、格式及差异检查通过；481 份 Rust 源码集合及 hash 与冻结清单一致。七组实际优化版 release／原生审核通过，精确导航、补全及普通引用实际编辑保持事件和完整 AUX；两版 release SHA 与原始报告一致。
+The optimized version of the final freeze verification passes: 322 targets, 3421 passes, 0 failures, 507 default skips, of which the full serial stdio is 414 passes, 29 default skips. 109 projects including native hooks, strict full-target Clippy, documentation, format and difference checks passed; 481 Rust source code collections and hashes are consistent with the frozen list. Seven sets of actual optimized versions release/native review passed, precise navigation, completion and common reference actual editing to maintain events and complete AUX; the release SHA of the two versions is consistent with the original report.
 
-最终验证后清理本包 dev 产物，释放 9.4 GiB，磁盘可用空间恢复到约 20 GiB；release 基线、依赖与全部原始测量数据保留。
+After the final verification, the dev product of this package was cleaned up, 9.4 GiB was released, and the available disk space was restored to about 20 GiB; the release baseline, dependencies, and all original measurement data were retained.

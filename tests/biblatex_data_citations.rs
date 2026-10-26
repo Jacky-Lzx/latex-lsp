@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::features,
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 const COMMANDS: &[(&str, &str)] = &[
     ("citefield", "field"),
@@ -56,11 +56,11 @@ fn data_citations_index_only_keys_and_preserve_formats_fields_and_notes() {
         assert!(features::hover(&workspace, &main, at).is_some());
         assert_eq!(features::references(&workspace, &main, at, true).len(), 2);
         assert_eq!(
-            latex_lsp::editing::highlights(&workspace, &main, at).len(),
+            texquill::editing::highlights(&workspace, &main, at).len(),
             1
         );
         let semantic =
-            latex_lsp::language::semantic::tokens(&workspace.documents[&main], None).unwrap();
+            texquill::language::semantic::tokens(&workspace.documents[&main], None).unwrap();
         let mut line = 0;
         let mut character = 0;
         let mut keys = Vec::new();
@@ -127,7 +127,7 @@ fn data_citation_completion_and_signatures_follow_each_argument_role() {
             let at = workspace.documents[&main]
                 .text
                 .position(marked.find('¦').unwrap());
-            let help = latex_lsp::language::signature::help(&workspace, &main, at)
+            let help = texquill::language::signature::help(&workspace, &main, at)
                 .unwrap_or_else(|| panic!("{marked}"));
             assert_eq!(help.active_parameter, Some(expected), "{marked}");
             assert_eq!(
@@ -167,7 +167,7 @@ fn data_citation_completion_and_signatures_follow_each_argument_role() {
         for following in ["", "{alpha}{field}", "[pre]{alpha}[fmt]{field}"] {
             let source = format!("\\{name}{following}");
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     snippets: true,
                     ..Default::default()
                 },
@@ -196,7 +196,7 @@ fn data_citation_completion_and_signatures_follow_each_argument_role() {
             .text
             .position(source.find("custom").unwrap() + 2);
         assert_eq!(
-            latex_lsp::language::signature::help(&workspace, &main, at)
+            texquill::language::signature::help(&workspace, &main, at)
                 .unwrap()
                 .signatures[0]
                 .label,
@@ -276,7 +276,7 @@ fn multiline_data_citation_warnings_and_spelling_fixes_target_keys_before_the_se
         let uri = Url::from_file_path(&main).unwrap();
         for line in [5, 6] {
             let log=format!("Package biblatex Warning: Citation 'alphaa' on page 1 undefined on input line {line}.\n");
-            let diagnostics = latex_lsp::compilation::build_log::parse(&main, &log);
+            let diagnostics = texquill::compilation::build_log::parse(&main, &log);
             let items = &diagnostics[&uri];
             let text = Text::new(source.clone());
             let start = source.find("{alphaa}").unwrap() + 1;
@@ -287,7 +287,7 @@ fn multiline_data_citation_warnings_and_spelling_fixes_target_keys_before_the_se
                 "{name}/{line}"
             );
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     code_action_literals: true,
                     ..Default::default()
                 },
@@ -303,7 +303,7 @@ fn multiline_data_citation_warnings_and_spelling_fixes_target_keys_before_the_se
                 .project
                 .build_diagnostics
                 .insert(uri.clone(), diagnostics.clone());
-            let actions = latex_lsp::editing::code_actions(
+            let actions = texquill::editing::code_actions(
                 &workspace,
                 &uri,
                 items[0].range,
@@ -424,7 +424,7 @@ fn real_data_citation_warnings_and_key_renames_compile_with_formats_and_key_list
     let log = fs::read_to_string(root.join("main.log")).unwrap();
     let uri = Url::from_file_path(&main).unwrap();
     let bib_uri = Url::from_file_path(&bib).unwrap();
-    let diagnostics = latex_lsp::compilation::build_log::parse(&main, &log);
+    let diagnostics = texquill::compilation::build_log::parse(&main, &log);
     let citations = diagnostics[&uri]
         .iter()
         .filter(|d| d.message.contains("Citation '"))

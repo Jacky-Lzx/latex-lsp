@@ -1,8 +1,8 @@
-# biblatex 文献分类
+# biblatex categories
 
-[文档目录](README.md) · [文献](bibliography.md) · [biblatex 引用](biblatex.md)
+[Document Catalog](README.md) · [Documentation](bibliography.md) · [biblatex Reference](biblatex.md)
 
-使用 `\DeclareBibliographyCategory{category}` 声明分类，再通过 `\addtocategory{category}{keys}` 分配文献键。例如：
+Use `\DeclareBibliographyCategory{category}` to declare the category, and then assign the citation key via `\addtocategory{category}{keys}`. For example:
 
 ```tex
 \documentclass{article}
@@ -16,28 +16,28 @@
 \end{document}
 ```
 
-`refs.bib` 中需要有 `alpha` 和 `beta` 两个条目。分类分配本身不会引用条目；仍需通过 `\cite` 或 `\nocite` 将它们纳入参考文献。编译工具和配置见[编译指南](build.md)。
+`refs.bib` requires two entries: `alpha` and `beta`. The classification assignments themselves do not reference the entries; they still need to be included in the reference via `\cite` or `\nocite`. For compilation tools and configuration, see [Build guide](build.md).
 
-两个分类命令提供命令片段和参数提示。`\addtocategory` 的第二个参数支持文献键补全、悬停、定义跳转、引用查找、文档高亮、语义高亮及跨文件重命名。键列表支持跨行和注释，未闭合列表也可补全；编辑只替换当前键，保留其他键、注释和原始换行。
+Two category commands provide command snippets and signature help. The second parameter of `\addtocategory` supports citation key completion, hover, definition jump, reference search, document highlighting, semantic highlighting and cross-file renaming. The key list supports spanning lines and comments, and unclosed lists can also be completed; editing only replaces the current key, retaining other keys, comments, and original line breaks.
 
-重命名 `.bib` 条目时，会同步更新使用该数据库的分类分配和引用。第一个参数是分类名，即使与文献键同名也会保留；分类名称使用独立符号索引，支持补全、悬浮、定义跳转、引用查找、文档高亮、准备重命名及跨文件重命名。共享数据库和歧义处理遵循[文献重命名规则](bibliography.md#条目关系与重命名)。
+When you rename the `.bib` entry, the classification assignments and references using that database are updated simultaneously. The first parameter is the category name, which will be retained even if it has the same name as the citation key; the category name uses independent symbol indexing and supports completion, suspension, definition jump, reference search, document highlighting, preparation for renaming, and cross-file renaming. Shared databases and ambiguity handling follow [Document Renaming Rules](bibliography.md#entry-relationships-and-rename).
 
-文献键编辑只识别第二个花括号参数中的静态键列表；不推断宏展开、嵌套键或由注释拼接的非连续键名。该命令不接受星号和可选说明，也不将后续第三个分组或正文当作文献键。
+Citation key editing only recognizes static key lists in the second curly brace argument; macro expansion, nested keys, or non-contiguous key names spliced by comments are not inferred. This command does not accept asterisks and optional descriptions, nor does it treat the subsequent third group or text as a citation key.
 
-分类分配不会产生缺失文献键的引用警告，因此同一行真实引用的警告和拼写修复只定位到引用命令。
+Classification assignments do not generate citation warnings for missing citation keys, so warnings and spelling fixes for real citations on the same line are only targeted to the citation command.
 
-`\ifentrycategory{key}{category}{true}{false}` 的第一个参数支持单个文献键的补全、导航、悬停、引用、高亮和重命名；第二个参数使用分类名称。条目改名只更新键，分类改名只更新分类，保留分支中的普通文字。查询不产生普通缺失文献引用警告，不接受星号、可选说明或逗号键列表。
+The first parameter of `\ifentrycategory{key}{category}{true}{false}` supports completion, navigation, hover, citation, highlighting and renaming of a single citation key; the second parameter uses the category name. When an item is renamed, only the key is updated, when a category is renamed, only the category is updated, and the normal text in the branch is retained. The query does not produce ordinary missing reference warnings and does not accept asterisks, optional specifications, or comma key lists.
 
 
-分类名称可用于 `DeclareBibliographyCategory` 声明、`addtocategory` 的第一个参数、`ifentrycategory` 的第二个参数和 `ifcategory` 的第一个参数，以及 `printbibliography` 的 `category` / `notcategory` 选项。静态 `defbibfilter` 布尔表达式中的 `category=name` 也参与编辑；保留过滤器名、其他筛选值、成立／不成立代码和标题中的同名文字。无需安装 biblatex 或运行编译即可使用这些源码功能。
+Classification names are available for the `DeclareBibliographyCategory` declaration, the first parameter of `addtocategory`, the second parameter of `ifentrycategory` and the first parameter of `ifcategory`, and the `category` / `notcategory` options of `printbibliography`. The `category=name` in the static `defbibfilter` Boolean expression also participates in editing; the filter name, other filter values, the establishment/not establishment code and the text of the same name in the title are retained. There is no need to install biblatex or run a compile to use these source code features.
 
-普通调用、静态 `csuse` / `csname` 和唯一零参数纯转发别名使用当前项目的命令意义。完整宏正文中的潜在引用参与编辑；已知参数数据和 token 操作数中的潜在名称会阻止部分重命名，已确认的字面示例保留原文。命令重定义、未保存定义和独立项目分别处理；共享来源须在全部消费者中保持一致，且同一分类必须关联唯一声明。复制命令与有歧义的别名仅用于拒绝不完整的重命名，不据此提供可编辑调用。
+Normal calls, static `csuse` / `csname` and unique zero-argument pure forward aliases use the command meaning of the current project. Potential references in the full macro body participate in editing; known parameter data and latent names in token operands prevent partial renaming, and confirmed literal examples retain the original text. Command redefinitions, unsaved definitions, and independent projects are handled separately; shared sources must be consistent among all consumers, and the same category must be associated with unique claims. Copy commands with ambiguous aliases are used only to reject incomplete renames, not to provide editable calls accordingly.
 
-选项中的单层花括号保护、名称周围的注释和跨行空白保持原样。补全会替换名称的整个剩余后缀，支持尚未闭合的参数，并停在随后的 TeX token 或空白之前。名称内部的空白、动态名称、由注释拼接的名称及不受支持的过滤器表达式不作展开；项目中存在这些分类用法时，拒绝分类重命名。新名称须为不含方括号的静态标识符，不能与同命名空间中的其他名称冲突。
+Single brace protection in options, comments around names, and cross-line whitespace remain intact. Completion replaces the entire remaining suffix of the name, supports arguments that have not been closed, and stops before subsequent TeX tokens or whitespace. Whitespace within the name, dynamic names, names spliced by comments, and unsupported filter expressions are not expanded; category renaming is rejected when these category usages exist in the project. The new name must be a static identifier without square brackets and must not conflict with other names in the same namespace.
 
-单次索引仅覆盖相互关联的项目，限制为累计 32 MiB 源码、200000 个命令、8192 个声明、每个来源 20000 项及累计 100000 个名称解释。单个过滤器表达式最多读取 100000 个词法 token；超限、项目索引截断或消费者含义不一致时，不返回部分编辑。
+A single index covers only interrelated projects, with a limit of 32 MiB of source code cumulative, 200,000 commands, 8192 declarations, 20,000 items per source, and 100,000 cumulative name explanations. A single filter expression can read up to 100,000 lexical tokens; partial edits are not returned when the limit is exceeded, the item index is truncated, or the consumer meaning is inconsistent.
 
-验证：
+verify:
 
 ```sh
 cargo test --locked --test bibliography_categories
@@ -45,12 +45,12 @@ cargo test --locked --test protocol bibliography_category_names
 cargo test --locked --test bibliography_categories real_biblatex_category -- --include-ignored
 ```
 
-最后一项需要 pdfLaTeX、BibTeX 和 biblatex，验证改名后分类成员与筛选输出仍然有效。
+The last item requires pdfLaTeX, BibTeX and biblatex to verify that the category members and filter output are still valid after the name change.
 
-`\assignrefcontextcats[options]{categories}` 及其星号形式支持分类名称列表的补全、跳转、预览、引用、高亮与完整改名。方括号是必需参数，空选项写作 `[]{categories}`；命令片段和签名提示保留这个边界。静态命名及纯转发调用也参与索引，注释、其他列表项、上下文前缀、文献键和逐字内容保留原文。
+`\assignrefcontextcats[options]{categories}` and its asterisk form support completion, jump, preview, quotation, highlighting and complete renaming of the category name list. Square brackets are required parameters, and empty options are written as `[]{categories}`; command snippets and signature hints retain this boundary. Static naming and pure forward calls also participate in indexing, and comments, other list items, context prefixes, citation keys, and verbatim content remain in the original text.
 
-空列表不分配任何分类，可以在其中补全分类名。动态或未完成的分类列表、命令操作数、捕获的副本、共享文件含义不一致和超出分析预算的情况拒绝部分改名；目标名称也不能捕获仅在分配列表中出现的其他分类。上下文数字提示和关键词分配继续独立认证。
+An empty list does not assign any categories and can be used to complete category names. Dynamic or incomplete classification lists, command operands, captured duplicates, inconsistent meanings of shared files, and exceeding the analysis budget reject partial renames; target names also do not capture other classifications that appear only in the allocation list. Contextual numerical prompts and keyword assignments continue to be independently certified.
 
-新建且未保存的主文件同样参与共享分类的含义和声明身份认证；不同或缺失声明会阻止影响共享文件的改名，兼容声明和无关项目保持独立。
+New and unsaved master files also participate in shared classification meaning and claim identity authentication; different or missing claims prevent renaming that affects shared files, and compatibility claims and unrelated items remain separate.
 
-数据库 `execute` 字段及 `@preamble` 可从生成的 BBL 中调用分类命令。由于这些代码尚未纳入分类索引，关联项目存在此类记录时，拒绝准备或执行完整分类改名，避免遗漏字段中的分类参数而产生编译错误。检查覆盖全部共享消费者，包括新建且未保存的主文件；关闭或移除执行代码后重新认证。已知源码的分类导航继续可用，字面示例和无关项目保持独立。
+Database fields `execute` and `@preamble` can be used to call classification commands from the generated BBL. Since these codes have not yet been included in the classification index, when such records exist for related projects, we refuse to prepare or perform complete classification renaming to avoid compilation errors caused by missing classification parameters in fields. The check covers all shared consumers, including newly created and unsaved master files; re-authenticate after closing or removing the execution code. Category navigation for known source code continues to be available, and literal examples and unrelated projects remain separate.

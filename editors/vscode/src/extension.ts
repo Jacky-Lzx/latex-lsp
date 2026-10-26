@@ -27,10 +27,10 @@ class LatexExtension implements vscode.Disposable {
     return this.enqueue(async () => {
       await this.stopClient();
       if (this.disposed) return;
-      const config = vscode.workspace.getConfiguration('latex-lsp');
-      const command = config.get<string>('serverPath', 'latex-lsp').trim();
-      if (!command) throw new Error('Set latex-lsp.serverPath to the latex-lsp executable.');
-      const client = new LanguageClient('latex-lsp', 'LaTeX LSP', {
+      const config = vscode.workspace.getConfiguration('texquill');
+      const command = config.get<string>('serverPath', 'texquill').trim();
+      if (!command) throw new Error('Set texquill.serverPath to the texquill executable.');
+      const client = new LanguageClient('texquill', 'TeXquill', {
         command,
         args: ['--stdio'],
         transport: TransportKind.stdio,
@@ -50,14 +50,14 @@ class LatexExtension implements vscode.Disposable {
       client.onNotification('latex/buildFinished', (result: BuildStatus) => {
         this.output.appendLine(`Build finished: ${JSON.stringify(result, null, 2)}`);
         if (!result.stale && (result.status === 'error' || result.status === 'timeout')) {
-          void vscode.window.showErrorMessage(`LaTeX LSP: ${result.message ?? result.status}`);
+          void vscode.window.showErrorMessage(`TeXquill: ${result.message ?? result.status}`);
         }
       });
       try {
         await client.start();
       } catch (error) {
         await this.stopClient();
-        throw new Error(`Could not start ${command}. Check latex-lsp.serverPath and PATH, then run “LaTeX LSP: Restart Server”. ${String(error)}`);
+        throw new Error(`Could not start ${command}. Check texquill.serverPath and PATH, then run “TeXquill: Restart Server”. ${String(error)}`);
       }
     });
   }
@@ -66,7 +66,7 @@ class LatexExtension implements vscode.Disposable {
     return this.enqueue(async () => {
       if (this.client?.isRunning()) {
         await this.client.sendNotification('workspace/didChangeConfiguration', {
-          settings: vscode.workspace.getConfiguration('latex-lsp').get<object>('settings', {}),
+          settings: vscode.workspace.getConfiguration('texquill').get<object>('settings', {}),
         });
       }
     });
@@ -75,7 +75,7 @@ class LatexExtension implements vscode.Disposable {
   async execute<T>(command: string, args: unknown[]): Promise<T> {
     await this.pending;
     if (!this.client?.isRunning()) {
-      throw new Error('The server is not running. Check the LaTeX LSP output and run “LaTeX LSP: Restart Server”.');
+      throw new Error('The server is not running. Check the TeXquill output and run “TeXquill: Restart Server”.');
     }
     return this.client.sendRequest<T>('workspace/executeCommand', { command, arguments: args });
   }
@@ -117,18 +117,18 @@ function documentUri(argument?: vscode.Uri): string {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const output = vscode.window.createOutputChannel('LaTeX LSP');
+  const output = vscode.window.createOutputChannel('TeXquill');
   const controller = new LatexExtension(output);
   extension = controller;
   context.subscriptions.push(output, controller);
 
   function register(name: string, action: (uri?: vscode.Uri) => unknown) {
-    context.subscriptions.push(vscode.commands.registerCommand(`latex-lsp.${name}`, async (uri?: vscode.Uri) => {
+    context.subscriptions.push(vscode.commands.registerCommand(`texquill.${name}`, async (uri?: vscode.Uri) => {
       try {
         return await action(uri);
       } catch (error) {
         output.appendLine(String(error));
-        void vscode.window.showErrorMessage(`LaTeX LSP: ${error instanceof Error ? error.message : String(error)}`);
+        void vscode.window.showErrorMessage(`TeXquill: ${error instanceof Error ? error.message : String(error)}`);
         // Preserve rejection for callers of executeCommand, including tests.
         throw error;
       }
@@ -157,13 +157,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   register('restart', () => controller.restart());
   register('showOutput', () => output.show(true));
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
-    const changedProcess = event.affectsConfiguration('latex-lsp.serverPath')
-      || event.affectsConfiguration('latex-lsp.serverEnvironment');
+    const changedProcess = event.affectsConfiguration('texquill.serverPath')
+      || event.affectsConfiguration('texquill.serverEnvironment');
     const operation = changedProcess ? controller.restart()
-      : event.affectsConfiguration('latex-lsp.settings') ? controller.updateSettings() : undefined;
+      : event.affectsConfiguration('texquill.settings') ? controller.updateSettings() : undefined;
     void operation?.catch(error => {
       output.appendLine(String(error));
-      void vscode.window.showErrorMessage(`LaTeX LSP: ${String(error)}`);
+      void vscode.window.showErrorMessage(`TeXquill: ${String(error)}`);
     });
   }));
 
@@ -173,7 +173,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await controller.restart();
   } catch (error) {
     output.appendLine(String(error));
-    void vscode.window.showErrorMessage(`LaTeX LSP: ${String(error)}`);
+    void vscode.window.showErrorMessage(`TeXquill: ${String(error)}`);
   }
 }
 

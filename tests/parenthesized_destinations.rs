@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     editing,
     language::{features, semantic},
     project::workspace::{Document, Workspace},
     text::Text,
 };
-use lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str, version: i32) -> Url {
     let uri = Url::parse(&format!("file:///parenthesized-destinations/{name}")).unwrap();
@@ -46,7 +46,7 @@ fn parenthesized_pdf_destinations_rename_across_simple_compound_and_bookmark_for
         ];
         for (full, declaration, calls, new_name, expected_declaration, expected_calls) in fixtures {
             let mut workspace = Workspace {
-                client: latex_lsp::project::state::ClientCapabilities {
+                client: texquill::project::state::ClientCapabilities {
                     versioned_edits: true,
                     ..Default::default()
                 },
@@ -312,7 +312,7 @@ fn parenthesized_pdf_destination_spelling_fixes_preserve_compound_comments_and_l
             format!("pdfTeX warning (dest): name{{{encoded}}} has been referenced but does not exist, replaced by a fixed one"),
         ] {
         let mut workspace = Workspace {
-            client: latex_lsp::project::state::ClientCapabilities {
+            client: texquill::project::state::ClientCapabilities {
                 code_action_literals: true,
                 ..Default::default()
             },

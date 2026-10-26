@@ -189,7 +189,7 @@ pub fn diagnostic(text: &Text, span: Range<usize>, message: String) -> Diagnosti
     Diagnostic {
         range: text.range(span.start, span.end),
         severity: Some(DiagnosticSeverity::ERROR),
-        source: Some("latex-lsp".into()),
+        source: Some("texquill".into()),
         message,
         ..Diagnostic::default()
     }

@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::{collections::BTreeSet, path::Path};
+use texquill::{
     editing::file_operations,
     language::{features, navigation},
     project::workspace::{Document, Workspace},
 };
-use lsp_types::*;
-use std::{collections::BTreeSet, path::Path};
 
 const COMMANDS: [&str; 6] = [
     "input",
@@ -24,7 +24,7 @@ fn setup(root: &Path, files: &[(&str, &str)]) -> Workspace {
         std::fs::write(path, source).unwrap();
     }
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },
@@ -252,5 +252,5 @@ fn shared_source_edits_require_file_meaning_to_agree_across_build_roots() {
     let error =
         file_operations::will_rename(&workspace, &[rename(root, "chapter.tex", "renamed.tex")])
             .unwrap_err();
-    assert_eq!(error.code, latex_lsp::rpc::ErrorCode::InvalidParams);
+    assert_eq!(error.code, texquill::rpc::ErrorCode::InvalidParams);
 }

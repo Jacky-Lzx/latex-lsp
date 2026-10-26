@@ -1,41 +1,41 @@
-# 标签与交叉引用
+# Labels and cross-references
 
-[文档目录](README.md) · [编辑功能](editing.md) · [PDF 目标与书签](pdf-destinations.md)
+[Documentation](README.md) · [Editing features](editing.md) · [PDF Target and Bookmark](pdf-destinations.md)
 
-标签支持补全、导航、悬停、引用查找、高亮和跨文件重命名。下文说明键名边界、各宏包接口及编译诊断的定位规则。
+Tags support completion, navigation, hover, reference lookup, highlighting and cross-file renaming. The following describes key name boundaries, each package interface, and positioning rules for compilation diagnostics.
 
-## 键名与编辑范围
+## Key name and editing range
 
-- 标签键中的普通括号（包括不配对的括号）支持导航、补全、悬停、引用查找、语义高亮及跨文件重命名；单标签、列表、范围端点和 hyperref / refcount 参数共用字面键边界，保留名称周围的注释。
+- Normal brackets in tag keys (including unpaired brackets) support navigation, completion, hover, reference lookup, semantic highlighting, and cross-file renaming; single tags, lists, range endpoints, and hyperref / refcount parameters share literal key boundaries, preserving comments around names.
 
-普通标签引用也按完整键名匹配，`label{plain}` 与 `label{ plain }` 属于不同的标签。导航、引用、重复定义诊断及重命名不会合并含空白的其他标签；含空白的标签暂不进入静态符号索引。`cref` / `Cref` 的键列表继续按列表规则处理，重命名保留逗号及各键之间的空白，未定义引用诊断也按调用类型核对键名。
+Ordinary tag references are also matched according to the complete key name. `label{plain}` and `label{ plain }` belong to different tags. Navigation, reference, duplicate definition diagnostics and renaming will not merge other tags with blank spaces; tags with blank spaces will not be entered into the static symbol index for the time being. The key list of `cref` / `Cref` continues to be processed according to the list rules. Renaming retains commas and spaces between keys. Undefined reference diagnostics also checks key names according to the call type.
 
-标签与文献列表中，键名前后的 TeX 注释会保留，注释里的逗号和括号不参与键名解析；导航、重命名、补全、编译警告修复和语义高亮共用实际源码范围。宏展开、嵌套分组和由注释拼接的非连续键名不作静态推断。
+In tags and document lists, TeX comments before and after key names will be retained, and commas and brackets in comments are not involved in key name resolution; navigation, renaming, completion, compilation warning repair, and semantic highlighting share the actual source code scope. Macro expansion, nested grouping, and non-contiguous key names spliced by comments are not statically inferred.
 
-单标签的声明、引用、范围端点，以及 hyperref 和 refcount 的标签参数也识别名称前后的 TeX 注释。导航和重命名保留名称中的普通空白语义；接受补全时单独清除旧名称外围空白并保留注释，编译警告仍按实际闭合参数的行号核对位置。
+Single-tagged declarations, references, range endpoints, and the tag parameters of hyperref and refcount also recognize TeX comments before and after the name. Navigation and renaming retain normal whitespace semantics in names; when completion is accepted, peripheral whitespace in the old name is cleared individually and comments are retained, and compile warnings are still checked against the line number of the actual closing argument.
 
-## 常用标签引用
+## Common tag references
 
-- `subcaption` 的 `subref` / `subref*` 子图、子表引用支持标签导航、补全、悬停、引用查找和跨文件重命名；编译警告定位到源码键，并提供标签拼写修复。保留星号、标题、注释和逐字文本。
+- `subref` / `subref*` subgraphs and subtable references of `subcaption` support label navigation, completion, hover, reference search and cross-file renaming; compilation warnings are located in the source code key, and label spelling fixes are provided. Keep asterisks, titles, comments, and verbatim text.
 
-- varioref 引用：`\vref`、`\Vref`、`\vpageref` 和 `\fullref` 共用标签导航、引用查找、重命名、补全和编译警告的拼写修复。保留注释、可选说明及合法星号，提供命令片段和参数提示；`vref` / `Vref` 接受一个同页说明，`vpageref` 接受同页说明与异页前缀，`fullref` 使用单个标签参数。不支持的星号或多余可选参数会跳过标签编辑。`\vrefrange[same-page]{first}{last}` 和 `\vpagerefrange[same-page]{first}{last}` 的两个端点分别支持这些功能；后者接受星号。跨行调用的编译警告即使报告第二个参数的结束行，也会定位到实际缺失的端点。说明在首个未受花括号保护的 `]` 处结束，保留说明中的字面量 `[`；提前结束说明后遗留的正文不会被误当作标签编辑，参数提示遵循相同规则。
+- varioref references: `\vref`, `\Vref`, `\vpageref` and `\fullref` Spelling fixes for shared tab navigation, reference lookup, renaming, completion and compile warnings. Comments, optional descriptions and legal asterisks are retained, and command snippets and signature help are provided; `vref` / `Vref` accepts a same-page description, `vpageref` accepts a same-page description and a different-page prefix, and `fullref` uses a single label parameter. Unsupported asterisks or redundant optional parameters skip label editing. The two endpoints `\vrefrange[same-page]{first}{last}` and `\vpagerefrange[same-page]{first}{last}` respectively support these features; the latter accepts asterisks. Compilation warnings for cross-line calls, even if the end line of the second argument is reported, locates the actual missing endpoint. The description ends at the first `]` that is not protected by curly braces, and the literal `[` in the description is retained; the text left after ending the description early will not be mistaken for label editing, and signature help follow the same rules.
 
-- `cleveref` 的 `crefrange` / `Crefrange`、`cpagerefrange` / `Cpagerefrange` 及星号形式支持两个端点的标签导航、补全、悬停、引用查找和跨文件重命名，并提供参数提示、命令片段、语义高亮和编译警告的拼写修复。端点按单个标签处理，保留星号、注释和换行；不将无效的可选说明当作标签。
+- `crefrange` / `Crefrange`, `cpagerefrange` / `Cpagerefrange` and asterisk forms of `cleveref` support tab navigation, completion, hover, reference lookup and cross-file renaming for both endpoints, and provide signature help, command snippets, semantic highlighting and spelling fixes for compile warnings. Endpoints are treated as individual labels, preserving asterisks, comments, and newlines; invalid optional descriptions are not treated as labels.
 
-- `cleveref` 的 `cpageref` / `Cpageref` 页码列表及星号形式使用相同的标签编辑功能，逐个识别逗号分隔的标签；补全、重命名和编译警告修复保留其他标签、分隔逗号和空白。
+- `cpageref` / `Cpageref` page number lists and asterisk forms of `cleveref` use the same tag editing function to recognize comma-separated tags one by one; completion, renaming and compile warning fixes preserve other tags, separated commas and whitespace.
 
-标签列表补全支持跨行调用，`cref` / `Cref` 同样遵循实际的星号与参数边界，不在无效的可选说明之后提供标签编辑。
+Tag list completion supports cross-line calls. `cref` / `Cref` also follows the actual asterisk and parameter boundaries, and does not provide tag editing after invalid optional descriptions.
 
-`refcount` 的 `getrefnumber` / `getpagerefnumber`、`getrefbykeydefault`、`IfRefUndefinedExpandable` / `IfRefUndefinedBabel` 和 `refused` 支持标签补全、导航、悬停、引用及重命名，并提供命令片段与参数提示。只将首个参数作为标签，保留字段名、默认值和条件分支；不会将同一行其他引用的编译警告归到不产生警告的读取或条件判断命令上。
+`getrefnumber` / `getpagerefnumber`, `getrefbykeydefault`, `IfRefUndefinedExpandable` / `IfRefUndefinedBabel` and `refused` of `refcount` support tag completion, navigation, hover, referencing and renaming, and provide command snippets and signature help. Only the first parameter is used as a label, and field names, default values, and conditional branches are retained; compilation warnings from other references in the same line will not be assigned to read or conditional judgment commands that do not generate warnings.
 
-refcount 的 `\getrefbykeydefault`、`\IfRefUndefinedExpandable`、`\IfRefUndefinedBabel` 及四种 `setcounterref`/`addtocounterref`/`setcounterpageref`/`addtocounterpageref` 接口也支持键参数内单个宏的精确编译错误和拼写修复。匹配各接口实际的参数消费边界及内部错误前缀，保留默认值、条件分支和计数器名称。字段选择参数为空时可提取引用编号；动态字段选择参数或计数器名称暂保留行级诊断。
+refcount's `\getrefbykeydefault`, `\IfRefUndefinedExpandable`, `\IfRefUndefinedBabel` and four `setcounterref`/`addtocounterref`/`setcounterpageref`/`addtocounterpageref` interfaces also support precise compilation error and spelling fixes for individual macros within key parameters. Match the actual parameter consumption boundaries and internal error prefixes of each interface, and retain the default values, conditional branches and counter names. The reference number can be extracted when the field selection parameter is empty; row-level diagnostics are temporarily reserved for dynamic field selection parameters or counter names.
 
-`Ref` 与 `autopageref` 的标签及星号形式也支持上述编辑功能，识别星号前的空白或注释。不带星号时可能同时产生普通引用与超链接引用警告，诊断和拼写修复分别核对调用；不会把超链接警告归给只产生普通警告的星号调用或不产生警告的读取命令。
+The label and asterisk forms of `Ref` and `autopageref` also support the above editing functions and recognize the blank or comment before the asterisk. Without an asterisk, ordinary reference and hyperlink reference warnings may be generated at the same time. Diagnostics and spelling repair calls are checked separately; hyperlink warnings will not be attributed to asterisk calls that only generate ordinary warnings or read commands that do not generate warnings.
 
-## hyperref 标签
+## hyperref tag
 
-- `\hyperref[label]{文字}` 和 `\hyperref[{label}]{文字}` 的静态标签支持补全、导航、悬停、引用和跨文件重命名；编译后的 `Hyper reference` 警告定位到标签，并提供拼写修复，支持跨行链接。四个必选参数的 URL 形式单独提供参数提示，保留链接文字、地址及其中的百分号。补全、拼写修复和重命名引入含 `[` / `]` 的名称时，自动用花括号保护标签；已有保护括号会保留。未受花括号保护的标签在首个 `]` 处结束，区分含字面量 `[` 的标签与其他名称；导航、补全、重命名及警告定位使用实际标签边界，`hyperdef` 的可选标签也遵循此规则。
+- Static tags for `\hyperref[label]{text}` and `\hyperref[{label}]{text}` support completion, navigation, hover, referencing and cross-file renaming; compiled `Hyper reference` warns about targeting tags and provides spelling fixes, supporting cross-line links. The URL form of the four required parameters provides separate signature help, retaining the link text, address and percent signs therein. When completion, spelling repair, and renaming introduce names containing `[` / `]`, labels are automatically protected with curly braces; existing protective braces are retained. Tags not protected by curly braces end at the first `]` to distinguish tags with the literal `[` from other names; navigation, completion, renaming, and warning positioning use actual tag boundaries, and optional tags of `hyperdef` also follow this rule.
 
-- `\hyperdef[label]{类别}{名称}{文字}` 的可选标签作为声明加入索引，与普通标签共用导航、补全、重复定义检查和安全重命名。重命名保留 PDF 目标的类别、名称和显示文字；支持 `[{label}]` 保护形式，并提供命令片段及参数提示。
+- The optional tag of `\hyperdef[label]{category}{name}{text}` is added to the index as a declaration and shares navigation, completion, duplicate definition checking and safe renaming with ordinary tags. Renaming preserves the category, name, and display text of the PDF target; supports `[{label}]` protection form, and provides command snippets and signature help.
 
-hyperref 的保护花括号内外均可保留注释；补全或改名为含方括号的名称后，仍可继续导航和重命名。
+Comments can be preserved inside and outside hyperref's protective curly braces; navigation and renaming can continue after completion or renaming of names containing square brackets.

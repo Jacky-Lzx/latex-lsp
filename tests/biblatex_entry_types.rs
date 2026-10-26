@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use texquill::{
     language::{features, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
 
 fn open(workspace: &mut Workspace, source: &str) -> Url {
     let uri = Url::parse("file:///entry-type-tests/local.bbx").unwrap();
@@ -14,7 +14,7 @@ fn open(workspace: &mut Workspace, source: &str) -> Url {
 #[test]
 fn entry_type_conditions_offer_output_types_and_share_database_descriptions() {
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             snippets: true,
             ..Default::default()
         },

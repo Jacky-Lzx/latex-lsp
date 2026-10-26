@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
+use texquill::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 
 const CODE: &str = "invalid-bibliography-namepart";
 fn uri(root: &Path, name: &str) -> Url {
@@ -117,7 +117,7 @@ fn unknown_history_unreadable_sources_and_normalized_owner_collisions_keep_root_
         format!("{}{}{message}", found("refs.data"), found("duplicate.data")),
         format!("{}ERROR - Unknown failure\n{message}", found("refs.data")),
         format!(
-            "{}[latex-lsp: middle of compiler output omitted]\n{message}",
+            "{}[texquill: middle of compiler output omitted]\n{message}",
             found("refs.data")
         ),
     ] {

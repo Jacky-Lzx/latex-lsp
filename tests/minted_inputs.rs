@@ -1,11 +1,11 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     editing::file_operations,
     language::{features, navigation, signature},
     project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
@@ -129,7 +129,7 @@ fn file_moves_use_the_project_root_and_versioned_edits_preserve_language_and_opt
     let source = "% 😀\r\n\\inputminted[linenos]{rust}% path\r\n{code/sample.rs}\r\n";
     std::fs::write(child.to_file_path().unwrap(), source).unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },

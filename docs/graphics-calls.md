@@ -1,10 +1,10 @@
-# 图片命令的静态别名
+# Static aliases for graphics commands
 
-[返回文档目录](README.md) · [图片搜索与移动](graphics.md)
+[Back to documentation](README.md) · [Image search and movement](graphics.md)
 
-## 图片调用
+## Image call
 
-图片跳转、路径补全、依赖跟踪和文件重命名支持无参数、正文仅含单个控制序列的纯别名、别名链，以及静态 `\csuse` / `\csname` 调用：
+Image jumps, path completion, dependency tracking, and file renaming support pure aliases, alias chains, and static `\csuse` / `\csname` calls with no parameters and whose body contains only a single control sequence:
 
 ```tex
 \usepackage{graphicx,etoolbox}
@@ -18,15 +18,15 @@
 \csname Image\endcsname{plot}
 ```
 
-通过静态输入文件和本地宏包定义的别名同样可用。图片目录和扩展名按实际调用位置的设置解析；路径尚未输入完整时也可补全。移动图片或主文档时保留调用形式、星号与选项，并核对移动后的实际图片目标。共享源码在不同主文档下解析不一致时，不猜测单一目标。
+Aliases defined via static input files and local packages are also available. The image directory and extension are parsed according to the settings of the actual calling location; the path can also be completed even if the path has not been fully entered. Keep the calling form, stars, and options when moving an image or main document, and check the actual image destination after the move. When shared source code is parsed inconsistently under different root documents, no single target is guessed.
 
-编译后由 recorder 发现的项目源码也参与图片调用分析，包括这些文件中的直接图片调用、静态别名和宏参数边界。相关图片可跳转、补全、跟踪依赖和随文件移动更新引用；仅被代码展示命令读取的文件不会因此安装宏定义。共享源码仍按各编译根文档分别解析。recorder 文件中的重定义或参数消费会阻止不可靠的图片引用编辑；搜索设置的执行顺序无法确认时继续跳过目标推断。
+Project source code discovered by recorder after compilation also participates in image call analysis, including direct image calls, static aliases, and macro parameter boundaries in these files. Related images can be jumped, completed, tracked for dependencies, and referenced as files are moved; files that are only read by the code display command will not have macro definitions installed. Shared source code is still parsed separately for each compilation root document. Redefinition or parameter consumption in the recorder file prevents unreliable image reference editing; search settings continue to skip target inference when the execution order of the search settings cannot be confirmed.
 
-编译器确认缺图且源码回显能唯一对应调用时，诊断标出文件名，并按当前有效目录和扩展名提供拼写建议；修复只替换文件名。源码、别名含义或候选文件变化后，旧修复会重新校验。详细规则见[编译诊断](diagnostics.md)。
+When the compiler confirms that the image is missing and the source code echo can uniquely correspond to the call, the diagnostics will mark the file name and provide spelling suggestions based on the current valid directory and extension; the repair will only replace the file name. When the source code, alias meaning, or candidate files change, old fixes are re-verified. For detailed rules, see [Build diagnostics](diagnostics.md).
 
-## 搜索设置
+## Search settings
 
-目录和扩展名声明也支持上述纯别名和静态命名调用：
+Directory and extension declarations also support the pure alias and static named calls described above:
 
 ```tex
 \def\Paths{\graphicspath}
@@ -36,10 +36,10 @@
 \csname DeclareGraphicsExtensions\endcsname{.pdf,.png}
 ```
 
-服务器使用调用位置后面的参数，按源码顺序、分组和全局赋值规则跟踪设置。搜索优先级及作用域示例见[图片搜索与移动](graphics.md)。
+The server tracks settings by source order, grouping, and global assignment rules using the parameters following the call site. For examples of search priority and scope, see [Image Search and Movement](graphics.md).
 
-## 支持边界
+## Support boundaries
 
-`\csuse` 需要文档加载提供该命令的宏包，例如 etoolbox。静态分析不执行任意宏展开：带参数的转发宏、`\let` 捕获的含义、复杂包装、动态命令名和含义不确定的重定义不作推断。作为其他宏参数消费、用于逐字展示或仅出现在未执行宏正文中的调用，不作为实际图片依赖。
+`\csuse` requires document loading of a package that provides this command, such as etoolbox. Static analysis does not perform arbitrary macro expansion: forwarded macros with parameters, the meaning of `\let` capture, complex wrappers, dynamic command names, and redefinitions of uncertain meaning are not inferred. As a call consumed as other macro parameters, used for verbatim display, or only appearing in the body of an unexecuted macro, it is not relied upon as an actual image.
 
-无法确认的调用、参数不完整或格式错误、共享执行上下文冲突，以及 recorder 独有且执行顺序未知的设置，不推测单一图片目标。recorder 仍用于跟踪编译器实际读取的文件。构建有效性检查关注选中图片及优先于它的候选；增加低优先级图片不会使结果过期。
+Unconfirmed calls, incomplete or malformed parameters, shared execution context conflicts, and recorder-unique settings with unknown execution order do not speculate on a single image target. The recorder is still used to keep track of which files the compiler actually read. Build validity checks focus on the selected image and the candidates that precede it; adding low-priority images does not expire the results.

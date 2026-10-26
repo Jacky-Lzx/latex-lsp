@@ -1,6 +1,6 @@
-use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace};
 use lsp_types::*;
 use std::collections::BTreeMap;
+use texquill::{compilation::build_log, editing, project::workspace::Workspace};
 
 const REQUESTS: &[&str] = &[
     "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.",
@@ -15,7 +15,7 @@ const REQUESTS: &[&str] = &[
 
 fn actions(root: &Url, diagnostics: &BTreeMap<Url, Vec<Diagnostic>>) -> CodeActionResponse {
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             code_action_literals: true,
             ..Default::default()
         },
@@ -134,7 +134,7 @@ fn partial_requests_and_extra_prose_do_not_borrow_adjacent_file_errors_or_other_
     let partial = &REQUESTS[0][..60];
     for boundary in [
         "(./child.tex\n./child.tex:1: Undefined control sequence.\nl.1 \\unknown\n)",
-        "[latex-lsp: middle of compiler output omitted]",
+        "[texquill: middle of compiler output omitted]",
     ] {
         let parsed = build_log::parse(
             &main,
@@ -246,8 +246,8 @@ fn incomplete_last_page_requests_preserve_following_source_boundaries() {
 #[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX and LuaLaTeX"]
 fn real_last_page_requests_follow_shrinking_and_growing_documents_until_stable() {
-    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig};
 
     let cache = tempfile::tempdir().unwrap();
     for engine in ["pdflatex", "xelatex", "lualatex"] {
@@ -356,8 +356,8 @@ fn real_last_page_requests_follow_shrinking_and_growing_documents_until_stable()
 #[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX, LuaLaTeX, natbib and longtable"]
 fn real_standard_requests_follow_cross_file_renames_and_table_changes_until_stable() {
-    use latex_lsp::{compilation::build, config::BuildConfig, language::features};
     use std::os::unix::fs::PermissionsExt;
+    use texquill::{compilation::build, config::BuildConfig, language::features};
 
     let cache = tempfile::tempdir().unwrap();
     for engine in ["pdflatex", "xelatex", "lualatex"] {

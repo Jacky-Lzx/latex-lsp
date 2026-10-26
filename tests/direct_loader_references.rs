@@ -1,10 +1,10 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     editing::file_operations,
     language::{features, navigation},
     project::workspace::Workspace,
 };
-use lsp_types::*;
-use std::path::Path;
 
 const COMMANDS: [(&str, &str); 8] = [
     ("usepackage", "sty"),
@@ -27,7 +27,7 @@ fn project(root: &Path, body: &str, extension: &str) -> (Workspace, Url, Url) {
     .unwrap();
     std::fs::write(root.join(format!("refs.{extension}")), "Data.").unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             versioned_edits: true,
             ..Default::default()
         },

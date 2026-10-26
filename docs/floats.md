@@ -1,12 +1,12 @@
-# 浮动体高度警告
+# Float height warnings
 
-[返回文档目录](README.md) · [编译](build.md) · [排版警告分析](typesetting.md)
+[Back to documentation](README.md) · [Compile](build.md) · [Typesetting warning analysis](typesetting.md)
 
-LaTeX 报告 `Float too large for page by ...pt` 时，图或表的高度超过当前页面允许的浮动体高度。服务器保留原警告，在来源可确认时定位到日志所报的行（通常是浮动体结束命令），并附带 `oversized-float` 诊断代码和 `data.excessPt`。
+LaTeX reports `Float too large for page by ...pt` when the height of the figure or table exceeds the allowed height of the float on the current page. The server retains the original warning and locates the line reported in the log (usually the end-of-float command) when the source can be confirmed, along with diagnostic codes `oversized-float` and `data.excessPt`.
 
-## 编译结果
+## Compilation results
 
-`analysis.oversizedFloats` 汇总最终日志中的警告数量和最大超出量，例如：
+`analysis.oversizedFloats` summarizes the number of warnings and maximum exceedances in the final log, for example:
 
 ```json
 {
@@ -17,14 +17,14 @@ LaTeX 报告 `Float too large for page by ...pt` 时，图或表的高度超过�
 }
 ```
 
-- `count`：已分析的浮动体过高警告数量。同一来源、位置和消息的重复诊断只计一次。
-- `maxExcessPt`：最大超出量，单位为 TeX pt。保留编译器的十进制字符串，按精确数值比较；没有此类警告时为 `null`，`count` 为 `0`。
+- `count`: The number of analyzed float warnings is too high. Duplicate diagnoses from the same source, location and message are counted only once.
+- `maxExcessPt`: Maximum excess in TeX pt. Compiler-preserved decimal strings are compared as exact values; `null` when there is no such warning, `0` for `count`.
 
-浮动体警告单独统计，不并入 `analysis.boxWarnings`，也不要求再次编译。警告本身不把成功生成 PDF 的构建改为失败。`latex/buildFinished` 与 `latex.buildStatus` 返回相同摘要；只使用最终 TeX 日志，早期轮次的警告不保留。修改版面并重新编译后，已解决的诊断清除，摘要归零。
+Floating body warnings are counted separately and are not merged into `analysis.boxWarnings`, nor do they require compilation again. The warning itself does not change builds that successfully generate PDF to failure. `latex/buildFinished` returns the same digest as `latex.buildStatus`; only the final TeX log is used, warnings from earlier rounds are not retained. After modifying the layout and recompiling, the resolved diagnostics were cleared and the summary was reset to zero.
 
-## 调整内容
+## Adjust content
 
-检查图或表的实际高度、标题和类文件的页面设置，根据内容缩小图片、拆分表格或调整版面。例如，测试时下面的规则会生成过高的图：
+Check the actual height of the figure or table, the title, and the page settings of the class file, and shrink the image, split the table, or adjust the layout based on the content. For example, the following rule will produce an overly tall plot when tested:
 
 ```tex
 \begin{figure}
@@ -32,12 +32,12 @@ LaTeX 报告 `Float too large for page by ...pt` 时，图或表的高度超过�
 \end{figure}
 ```
 
-将高度缩小到页面可容纳的范围后重新编译。服务器提供度量与来源，具体尺寸由内容决定。
+Reduce the height to the range that the page can accommodate and then recompile. The server provides measurements and sources, and the exact size is determined by the content.
 
-## 识别与预算
+## Identification and Budgeting
 
-只统计完整的标准 LaTeX 警告，包括 `pt on input line N.` 后缀；宏包中的示例、不完整消息、负数、指数和非有限数值不参与摘要。支持 60 / 79 列日志按字节折行，包括小数点及 `input` 单词中间的断行，兼容传统和文件行号格式。
+Only complete standard LaTeX warnings, including the `pt on input line N.` suffix, are counted; examples, incomplete messages, negative numbers, exponents, and non-finite values in packages are not included in the summary. Supports 60 / 79 column log line wrapping by bytes, including decimal points and line breaks in the middle of `input` words, and is compatible with traditional and file line number formats.
 
-来源或行号无法确认时，原警告使用有效的回退位置，仍可统计消息中明确报告的超出量。生成文件已被重写时，附加的行号说明不会影响摘要。
+When the source or line number cannot be confirmed, the original warning uses a valid fallback position, and the excess reported explicitly in the message can still be counted. When the makefile has been rewritten, additional line number descriptions do not affect the summary.
 
-单个超出量最多保留 128 个 ASCII 字符。超过预算的整条记录不参与计数和最大值，并设置 `analysis.truncated: true`。诊断输入被省略时也设置此标记，摘要只代表已观测部分。取消、超时、无法观测最终日志或输入变化导致的过期结果继续返回 `analysis: null`。
+A maximum of 128 ASCII characters are reserved for a single overage. The entire record that exceeds the budget does not participate in the count and maximum value, and `analysis.truncated: true` is set. This flag is also set when diagnostic input is omitted and the summary only represents the observed portion. Expired results caused by cancellation, timeout, inability to observe the final log, or input changes continue to return `analysis: null`.

@@ -25,7 +25,7 @@ struct Server {
 
 #[test]
 fn hook_name_renames_keep_exact_namespaces_versions_and_shared_consumer_guards() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -133,7 +133,7 @@ fn hook_name_renames_keep_exact_namespaces_versions_and_shared_consumer_guards()
 
 #[test]
 fn hook_argument_data_guards_track_unsaved_arities_and_exact_utf16_edits() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -199,7 +199,7 @@ fn hook_argument_data_guards_track_unsaved_arities_and_exact_utf16_edits() {
 
 #[test]
 fn hook_wrapper_data_guards_track_unsaved_bodies_and_exact_utf16_edits() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -276,7 +276,7 @@ fn hook_wrapper_data_guards_track_unsaved_bodies_and_exact_utf16_edits() {
 
 #[test]
 fn hook_environment_data_guards_track_unsaved_bodies_and_exact_utf16_edits() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -357,7 +357,7 @@ fn hook_environment_data_guards_track_unsaved_bodies_and_exact_utf16_edits() {
 
 #[test]
 fn generated_environment_interface_guards_follow_unsaved_meanings_and_exact_utf16_edits() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -434,7 +434,7 @@ fn generated_environment_interface_guards_follow_unsaved_meanings_and_exact_utf1
 
 #[test]
 fn variadic_hook_help_names_and_reference_boundaries_refresh_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
     let provider = main.join("hooks.tex").unwrap();
@@ -497,7 +497,7 @@ fn variadic_hook_help_names_and_reference_boundaries_refresh_over_stdio() {
 
 #[test]
 fn declaration_navigation_tracks_unsaved_cross_file_sources() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
     let provider = main.join("definitions.tex").unwrap();
@@ -616,11 +616,11 @@ fn cached_pull_diagnostics_observe_auxiliary_and_configuration_changes_without_w
             2 => std::fs::write(root.join("external.aux"), r"\newlabel{x}{{1}{2}}").unwrap(),
             3 => std::fs::remove_file(root.join("external.aux")).unwrap(),
             4 => std::fs::write(
-                root.join(".latex-lsp.json"),
+                root.join(".texquill.json"),
                 r#"{"diagnostics":{"undefinedReferences":false}}"#,
             )
             .unwrap(),
-            5 => std::fs::remove_file(root.join(".latex-lsp.json")).unwrap(),
+            5 => std::fs::remove_file(root.join(".texquill.json")).unwrap(),
             _ => {}
         }
         let mut params = json!({"textDocument":{"uri":uri}});
@@ -652,7 +652,7 @@ fn cached_pull_diagnostics_observe_auxiliary_and_configuration_changes_without_w
 
 #[test]
 fn hook_condition_guards_refresh_aliases_and_exact_edits_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -804,7 +804,7 @@ fn hook_condition_guards_refresh_aliases_and_exact_edits_over_stdio() {
 
 #[test]
 fn lifecycle_hook_labels_refresh_underlying_interfaces_and_exact_ranges_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -946,7 +946,7 @@ fn lifecycle_hook_labels_refresh_underlying_interfaces_and_exact_ranges_over_std
 
 #[test]
 fn default_hook_label_settings_refresh_exact_fields_and_shared_consumers_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -1106,7 +1106,7 @@ fn default_hook_label_settings_refresh_exact_fields_and_shared_consumers_over_st
 
 #[test]
 fn global_hook_rules_refresh_exact_namespaces_and_shared_providers_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -1280,7 +1280,7 @@ fn global_hook_rules_refresh_exact_namespaces_and_shared_providers_over_stdio() 
 
 #[test]
 fn document_level_hook_slots_refresh_exact_ranges_and_shared_consumers_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -1417,7 +1417,7 @@ fn document_level_hook_slots_refresh_exact_ranges_and_shared_consumers_over_stdi
 
 #[test]
 fn hook_code_labels_refresh_exact_ranges_and_shared_consumers_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -1538,7 +1538,7 @@ fn hook_code_labels_refresh_exact_ranges_and_shared_consumers_over_stdio() {
 
 #[test]
 fn hook_names_keep_exact_ranges_and_refresh_unsaved_forwarders_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -1644,7 +1644,7 @@ fn hook_names_keep_exact_ranges_and_refresh_unsaved_forwarders_over_stdio() {
 
 #[test]
 fn macro_patch_guards_refresh_provider_aliases_and_exact_edits_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -1747,7 +1747,7 @@ fn macro_patch_guards_refresh_provider_aliases_and_exact_edits_over_stdio() {
 
 #[test]
 fn hook_string_mutation_guards_refresh_unsaved_providers_without_partial_macro_edits() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -1826,7 +1826,7 @@ fn hook_string_mutation_guards_refresh_unsaved_providers_without_partial_macro_e
 
 #[test]
 fn kernel_hooks_keep_exact_structural_edits_and_refresh_unsaved_parameter_meanings() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -1944,7 +1944,7 @@ fn kernel_hooks_keep_exact_structural_edits_and_refresh_unsaved_parameter_meanin
 
 #[test]
 fn literal_label_readers_refresh_exact_ranges_and_safe_edits_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -2070,7 +2070,7 @@ fn literal_label_readers_refresh_exact_ranges_and_safe_edits_over_stdio() {
 
 #[test]
 fn repeated_parameter_grammars_follow_unsaved_providers_without_certifying_bodies() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -2166,7 +2166,7 @@ fn repeated_parameter_grammars_follow_unsaved_providers_without_certifying_bodie
 
 #[test]
 fn pdf_destination_edits_require_complete_executable_uses_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
 
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
@@ -2285,7 +2285,7 @@ fn pdf_destination_edits_require_complete_executable_uses_over_stdio() {
 
 #[test]
 fn inert_label_declarations_refresh_navigation_and_diagnostics_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
 
     let directory = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -2370,7 +2370,7 @@ fn inert_label_declarations_refresh_navigation_and_diagnostics_over_stdio() {
 
 #[test]
 fn expanded_messages_keep_keys_inert_and_macro_names_editable_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
 
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
@@ -2505,7 +2505,7 @@ fn expanded_messages_keep_keys_inert_and_macro_names_editable_over_stdio() {
 
 #[test]
 fn label_declaration_data_rejects_edits_and_refreshes_unsaved_provider_arities() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
 
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
@@ -2591,7 +2591,7 @@ fn label_declaration_data_rejects_edits_and_refreshes_unsaved_provider_arities()
 
 #[test]
 fn standard_footnotes_negotiate_completion_and_refresh_cross_file_overrides() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
 
     for snippets in [false, true] {
         let directory = tempfile::tempdir().unwrap();
@@ -2933,8 +2933,8 @@ fn formatting_params(uri: &Url) -> Value {
 #[test]
 #[cfg(unix)]
 fn formatting_uses_buffer_text_default_tex_fmt_and_configurable_latexindent() {
-    use latex_lsp::text::Text;
     use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use texquill::text::Text;
     let (mut server, directory, uri) = formatting_server(
         "printf '%s\\n' \"$@\" > arguments\ncat > input\nsed 's/hello/formatted/' input",
         10,
@@ -3150,8 +3150,8 @@ fn formatting_with_real_latexindent_preserves_verbatim_and_is_idempotent() {
 }
 
 fn real_formatter_roundtrip(formatter: &str) {
-    use latex_lsp::text::Text;
     use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
     let source = "% 😀\r\n\\begin{itemize}\r\n\\item hello\r\n\\end{itemize}\r\n\\begin{verbatim}\r\n   raw   data\r\n\\end{verbatim}\r\n";
@@ -3196,7 +3196,7 @@ fn real_formatter_roundtrip(formatter: &str) {
 
 #[test]
 fn minted_inline_code_stays_opaque_after_incremental_changes_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main = Url::from_file_path(root.join("main.tex")).unwrap();
@@ -3359,8 +3359,8 @@ fn minted_inline_code_stays_opaque_after_incremental_changes_over_stdio() {
 #[test]
 #[cfg(unix)]
 fn minted_missing_files_publish_and_pull_versioned_repairs_and_clear_after_rebuilding() {
-    use latex_lsp::text::Text;
     use lsp_types::TextEdit;
+    use texquill::text::Text;
     for pull in [false, true] {
         let script = r#"cp "${2%/*}/fixture.log" "$1/main.log"
 printf '%%PDF-1.4\n' > "$1/main.pdf"
@@ -3478,7 +3478,7 @@ printf 'PWD %s\nINPUT %s\n' "$PWD" "$2" > "$1/main.fls"
 
 #[test]
 fn minted_environment_boundaries_refresh_diagnostics_and_linked_names_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main = Url::from_file_path(root.join("main.tex")).unwrap();
@@ -3581,7 +3581,7 @@ fn minted_environment_boundaries_refresh_diagnostics_and_linked_names_over_stdio
 
 #[test]
 fn listings_inline_literal_boundaries_follow_incremental_edits_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main = Url::from_file_path(root.join("main.tex")).unwrap();
@@ -3709,7 +3709,7 @@ fn listings_inline_literal_boundaries_follow_incremental_edits_over_stdio() {
 
 #[test]
 fn listings_environment_header_boundaries_refresh_after_incremental_changes_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main = Url::from_file_path(root.join("main.tex")).unwrap();
@@ -3848,7 +3848,7 @@ fn listings_environment_header_boundaries_refresh_after_incremental_changes_over
 
 #[test]
 fn listings_environment_option_signatures_follow_incremental_edits_and_project_overrides() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main = Url::from_file_path(root.join("main.tex")).unwrap();
@@ -3939,7 +3939,7 @@ fn listings_environment_option_signatures_follow_incremental_edits_and_project_o
 
 #[test]
 fn fancyvrb_environment_header_signatures_follow_incremental_edits_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main = Url::from_file_path(root.join("main.tex")).unwrap();
@@ -4026,7 +4026,7 @@ fn fancyvrb_environment_header_signatures_follow_incremental_edits_over_stdio() 
 
 #[test]
 fn minted_environment_header_signatures_follow_incremental_edits_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main = Url::from_file_path(root.join("main.tex")).unwrap();
@@ -4177,7 +4177,7 @@ printf 'PWD %s\nINPUT %s\n' "$PWD" "$2" > "$1/main.fls"
         let start = source.find("JoUrAnL").unwrap();
         assert_eq!(
             diagnostic["range"],
-            json!(latex_lsp::text::Text::new(source.into()).range(start, start + 7))
+            json!(texquill::text::Text::new(source.into()).range(start, start + 7))
         );
         assert_eq!(diagnostic["severity"], 2);
         let params = json!({"textDocument":{"uri":refs},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}});
@@ -4809,7 +4809,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.bib" > "$1/main.
                 assert_eq!(item["range"]["start"], json!({"line":0,"character":0}));
             } else {
                 let at = source.find("中😀").unwrap();
-                let range = latex_lsp::text::Text::new(source.into()).range(at, at + "中😀".len());
+                let range = texquill::text::Text::new(source.into()).range(at, at + "中😀".len());
                 assert_eq!(item["range"], serde_json::to_value(range).unwrap());
             }
         }
@@ -4897,7 +4897,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" 
             } else if stage == 2 {
                 let at = current.find(key).unwrap();
                 let end = at + key.len();
-                let range = latex_lsp::text::Text::new(current.clone()).range(at, end);
+                let range = texquill::text::Text::new(current.clone()).range(at, end);
                 current.replace_range(at..end, "different😀");
                 std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
                 server.notify("textDocument/didChange", json!({"textDocument":{"uri":refs,"version":9},"contentChanges":[{"range":range,"text":"different😀"}]}));
@@ -4961,7 +4961,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" 
             assert_eq!(
                 item["range"],
                 serde_json::to_value(
-                    latex_lsp::text::Text::new(current.clone()).range(at, at + key.len())
+                    texquill::text::Text::new(current.clone()).range(at, at + key.len())
                 )
                 .unwrap()
             );
@@ -4973,7 +4973,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" 
             let at = earlier.find(other).unwrap();
             assert_eq!(
                 item["relatedInformation"][0]["location"],
-                json!({"uri":parents,"range":latex_lsp::text::Text::new(earlier.clone()).range(at, at + other.len())})
+                json!({"uri":parents,"range":texquill::text::Text::new(earlier.clone()).range(at, at + other.len())})
             );
         }
         server.request(8, "shutdown", Value::Null);
@@ -5027,7 +5027,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 for (marker, text) in edits {
                     let at = current.find(marker).unwrap();
                     let end = at + if stage == 1 { 0 } else { marker.len() };
-                    let range = latex_lsp::text::Text::new(current.clone()).range(at, end);
+                    let range = texquill::text::Text::new(current.clone()).range(at, end);
                     current.replace_range(at..end, text);
                     changes.push(json!({"range":range,"text":text}));
                 }
@@ -5097,7 +5097,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 assert_eq!(
                     item["range"],
                     serde_json::to_value(
-                        latex_lsp::text::Text::new(current.clone()).range(at, at + marker.len())
+                        texquill::text::Text::new(current.clone()).range(at, at + marker.len())
                     )
                     .unwrap()
                 );
@@ -5160,7 +5160,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 for (marker, replacement, insert) in edits {
                     let at = current.find(marker).unwrap();
                     let end = at + if insert { 0 } else { marker.len() };
-                    let range = latex_lsp::text::Text::new(current.clone()).range(at, end);
+                    let range = texquill::text::Text::new(current.clone()).range(at, end);
                     current.replace_range(at..end, replacement);
                     changes.push(json!({"range":range,"text":replacement}));
                 }
@@ -5211,8 +5211,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                         code,
                         field,
                         serde_json::to_value(
-                            latex_lsp::text::Text::new(current.clone())
-                                .range(at, at + marker.len()),
+                            texquill::text::Text::new(current.clone()).range(at, at + marker.len()),
                         )
                         .unwrap(),
                         unresolved,
@@ -5319,7 +5318,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 for (marker, replacement) in edits {
                     let at = current.find(marker).unwrap();
                     let end = at + if stage == 1 { 0 } else { marker.len() };
-                    let range = latex_lsp::text::Text::new(current.clone()).range(at, end);
+                    let range = texquill::text::Text::new(current.clone()).range(at, end);
                     current.replace_range(at..end, replacement);
                     changes.push(json!({"range":range,"text":replacement}));
                 }
@@ -5393,7 +5392,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 assert_eq!(
                     item["range"],
                     serde_json::to_value(
-                        latex_lsp::text::Text::new(current.clone()).range(at, at + marker.len())
+                        texquill::text::Text::new(current.clone()).range(at, at + marker.len())
                     )
                     .unwrap()
                 );
@@ -5453,7 +5452,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 for (marker, replacement, insert) in edits {
                     let at = current.find(marker).unwrap();
                     let end = at + if insert { 0 } else { marker.len() };
-                    let range = latex_lsp::text::Text::new(current.clone()).range(at, end);
+                    let range = texquill::text::Text::new(current.clone()).range(at, end);
                     current.replace_range(at..end, replacement);
                     changes.push(json!({"range":range,"text":replacement}));
                 }
@@ -5478,7 +5477,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                         (current.find(prefix).unwrap() + prefix.len(), marker.len())
                     };
                     let range = serde_json::to_value(
-                        latex_lsp::text::Text::new(current.clone()).range(start, start + length),
+                        texquill::text::Text::new(current.clone()).range(start, start + length),
                     )
                     .unwrap();
                     let mut data = json!({"key":"café😀","field":field,"overwrittenBy":"date"});
@@ -5489,7 +5488,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                         let at = current.find("2026-10-23").unwrap();
                         Some(
                             serde_json::to_value(
-                                latex_lsp::text::Text::new(current.clone()).range(at, at + 10),
+                                texquill::text::Text::new(current.clone()).range(at, at + 10),
                             )
                             .unwrap(),
                         )
@@ -5609,7 +5608,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 for (marker, replacement, insert) in edits {
                     let start = current.find(marker).unwrap();
                     let end = start + if insert { 0 } else { marker.len() };
-                    let range = latex_lsp::text::Text::new(current.clone()).range(start, end);
+                    let range = texquill::text::Text::new(current.clone()).range(start, end);
                     current.replace_range(start..end, replacement);
                     changes.push(json!({"range":range,"text":replacement}));
                 }
@@ -5653,7 +5652,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 .into_iter()
                 .map(|(code, marker, severity, data)| {
                     let start = current.find(marker).unwrap();
-                    let range = latex_lsp::text::Text::new(current.clone())
+                    let range = texquill::text::Text::new(current.clone())
                         .range(start, start + marker.len());
                     (code, serde_json::to_value(range).unwrap(), severity, data)
                 })
@@ -5759,8 +5758,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 _ => None,
             };
             if let Some((start, length, replacement)) = replacement {
-                let range =
-                    latex_lsp::text::Text::new(current.clone()).range(start, start + length);
+                let range = texquill::text::Text::new(current.clone()).range(start, start + length);
                 current.replace_range(start..start + length, replacement);
                 std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
                 server.notify("textDocument/didChange",json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":[{"range":range,"text":replacement}]}));
@@ -5785,7 +5783,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
             let expected_range = (stage < 4).then(|| {
                 let start = current.find(marker).unwrap();
                 serde_json::to_value(
-                    latex_lsp::text::Text::new(current.clone()).range(start, start + marker.len()),
+                    texquill::text::Text::new(current.clone()).range(start, start + marker.len()),
                 )
                 .unwrap()
             });
@@ -5866,7 +5864,7 @@ fn bibliography_alias_symbols_negotiate_hierarchy_refresh_search_and_restore_dis
         let mut current = source.to_string();
         for stage in 0..4 {
             if stage == 1 {
-                let range = latex_lsp::text::Text::new(current.clone()).range(0, 0);
+                let range = texquill::text::Text::new(current.clone()).range(0, 0);
                 current.insert_str(0, "% moved 😀\r\n");
                 server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":8},"contentChanges":[{"range":range,"text":"% moved 😀\r\n"}]}));
             } else if stage == 2 {
@@ -5914,7 +5912,7 @@ fn bibliography_alias_symbols_negotiate_hierarchy_refresh_search_and_restore_dis
             assert_eq!(found.as_array().unwrap().len(), usize::from(stage != 2));
             if stage != 2 {
                 let start = current.rfind("legacy😀").unwrap();
-                let expected = latex_lsp::text::Text::new(current.clone())
+                let expected = texquill::text::Text::new(current.clone())
                     .range(start, start + "legacy😀".len());
                 let alias = aliases
                     .iter()
@@ -5974,7 +5972,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
         let message="Invalid namepart 'bogus' found in extended name format name 'translator' in entry 'café😀', ignoring";
         for stage in 0..5 {
             let changes = if stage == 1 {
-                let range = latex_lsp::text::Text::new(current.clone()).range(0, 0);
+                let range = texquill::text::Text::new(current.clone()).range(0, 0);
                 current.insert_str(0, "% moved 😀\r\n");
                 vec![json!({"range":range,"text":"% moved 😀\r\n"})]
             } else if stage == 2 {
@@ -6053,7 +6051,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 (current.find("café😀").unwrap(), "café😀")
             };
             let expected =
-                latex_lsp::text::Text::new(current.clone()).range(start, start + marker.len());
+                texquill::text::Text::new(current.clone()).range(start, start + marker.len());
             assert_eq!(item["range"], json!(expected));
             assert_eq!(item["severity"], 2);
             assert_eq!(item["message"], format!("Biber: {message}"));
@@ -6097,7 +6095,7 @@ fn bibliography_dynamic_sets_refresh_declarations_and_independent_renames_over_s
         let mut current = source.to_string();
         for stage in 0..4 {
             if stage == 1 {
-                let range = latex_lsp::text::Text::new(current.clone()).range(0, 0);
+                let range = texquill::text::Text::new(current.clone()).range(0, 0);
                 current.insert_str(0, "% moved 😀\r\n");
                 server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":8},"contentChanges":[{"range":range,"text":"% moved 😀\r\n"}]}));
             } else if stage == 2 {
@@ -6110,7 +6108,7 @@ fn bibliography_dynamic_sets_refresh_declarations_and_independent_renames_over_s
                 );
                 current = source.into();
             }
-            let text = latex_lsp::text::Text::new(current.clone());
+            let text = texquill::text::Text::new(current.clone());
             let at = text.position(current.find("\\cite{group😀").unwrap() + "\\cite{gr".len());
             let target = json!({"textDocument":{"uri":main},"position":at});
             let definition =
@@ -6253,7 +6251,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
         ];
         for stage in 0..4 {
             let changes = if stage == 1 {
-                let range = latex_lsp::text::Text::new(current.clone()).range(0, 0);
+                let range = texquill::text::Text::new(current.clone()).range(0, 0);
                 current.insert_str(0, "% moved 😀\r\n");
                 vec![json!({"range":range,"text":"% moved 😀\r\n"})]
             } else if stage == 2 {
@@ -6327,9 +6325,9 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                         item["code"] == "invalid-bibliography-set" && item["data"]["key"] == key
                     })
                     .unwrap();
-                let text = latex_lsp::text::Text::new(current.clone());
+                let text = texquill::text::Text::new(current.clone());
                 let range = if stage == 2 || reason == "missing-entryset" {
-                    let syntax = latex_lsp::parser::syntax::Syntax::bibtex(&text);
+                    let syntax = texquill::parser::syntax::Syntax::bibtex(&text);
                     let entry = syntax
                         .citations
                         .iter()
@@ -6398,12 +6396,12 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
         for stage in 0..4 {
             let mut changes = Vec::new();
             if stage == 1 {
-                let range = latex_lsp::text::Text::new(current.clone()).range(0, 0);
+                let range = texquill::text::Text::new(current.clone()).range(0, 0);
                 current.insert_str(0, "% moved 😀\r\n");
                 changes.push(json!({"range":range,"text":"% moved 😀\r\n"}));
                 if !xdata {
                     let at = current.rfind("crossref={").unwrap() + "crossref={".len();
-                    let range = latex_lsp::text::Text::new(current.clone()).range(at, at);
+                    let range = texquill::text::Text::new(current.clone()).range(at, at);
                     current.insert_str(at, "\r\n ");
                     changes.push(json!({"range":range,"text":"\r\n "}));
                 }
@@ -6493,8 +6491,8 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 }
                 assert_eq!(item["severity"], 1);
                 assert_eq!(item["message"], format!("Biber: {message}"));
-                let text = latex_lsp::text::Text::new(current.clone());
-                let syntax = latex_lsp::parser::syntax::Syntax::bibtex(&text);
+                let text = texquill::text::Text::new(current.clone());
+                let syntax = texquill::parser::syntax::Syntax::bibtex(&text);
                 let entry = syntax
                     .citations
                     .iter()
@@ -6587,7 +6585,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
             if stage == 1 {
                 for marker in ["IDS={pére😀", "ids={real😀", "ids={self😀"] {
                     let at = current.find(marker).unwrap() + marker.find('{').unwrap() + 1;
-                    let range = latex_lsp::text::Text::new(current.clone()).range(at, at);
+                    let range = texquill::text::Text::new(current.clone()).range(at, at);
                     current.insert_str(at, "\r\n ");
                     changes.push(json!({"range":range,"text":"\r\n "}));
                 }
@@ -6663,7 +6661,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 if expected == 0 {
                     continue;
                 }
-                let text = latex_lsp::text::Text::new(current.clone());
+                let text = texquill::text::Text::new(current.clone());
                 for (message, alias, reason, owner) in cases {
                     let item = items
                         .as_array()
@@ -6744,20 +6742,20 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 for field in ["crossref", "xref", "related", "entryset"] {
                     let field_start = current.find(&format!("{field}=")).unwrap();
                     let start = field_start + current[field_start..].find("pére😀").unwrap();
-                    let range = latex_lsp::text::Text::new(current.clone()).range(start, start);
+                    let range = texquill::text::Text::new(current.clone()).range(start, start);
                     current.insert_str(start, "\r\n ");
                     changes.push(json!({"range":range,"text":"\r\n "}));
                 }
             } else if stage == 2 {
                 let start = current.find("crossref=").unwrap() + "crossref=".len();
                 let end = start + current[start..].find('}').unwrap() + 1;
-                let range = latex_lsp::text::Text::new(current.clone()).range(start, end);
+                let range = texquill::text::Text::new(current.clone()).range(start, end);
                 current.replace_range(start..end, "inherit");
                 changes.push(json!({"range":range,"text":"inherit"}));
             } else if stage == 3 {
                 let start = current.len();
                 let text = "@book{pére😀,title={Parent}}\r\n";
-                let range = latex_lsp::text::Text::new(current.clone()).range(start, start);
+                let range = texquill::text::Text::new(current.clone()).range(start, start);
                 current.push_str(text);
                 changes.push(json!({"range":range,"text":text}));
             }
@@ -6789,7 +6787,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                     };
                     let marker = if fallback { "café😀" } else { "pére😀" };
                     let range = serde_json::to_value(
-                        latex_lsp::text::Text::new(current.clone())
+                        texquill::text::Text::new(current.clone())
                             .range(start, start + marker.len()),
                     )
                     .unwrap();
@@ -6886,18 +6884,18 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
             if stage == 1 {
                 for field in ["title", "author", "publisher", "subtitle"] {
                     let start = current.find(&format!("{field}=")).unwrap();
-                    let range = latex_lsp::text::Text::new(current.clone()).range(start, start);
+                    let range = texquill::text::Text::new(current.clone()).range(start, start);
                     current.insert_str(start, "\r\n ");
                     changes.push(json!({"range":range,"text":"\r\n "}));
                 }
             } else if stage == 2 {
                 let start = current.find("title=").unwrap();
                 let range =
-                    latex_lsp::text::Text::new(current.clone()).range(start, start + "title".len());
+                    texquill::text::Text::new(current.clone()).range(start, start + "title".len());
                 current.replace_range(start..start + "title".len(), "inherit");
                 changes.push(json!({"range":range,"text":"inherit"}));
             } else if stage == 3 {
-                let range = latex_lsp::text::Text::new(current.clone()).range(0, current.len());
+                let range = texquill::text::Text::new(current.clone()).range(0, current.len());
                 current="% 😀\r\n@book{café😀,title={xdata=pére😀-title},author={xdata=pére😀-author-2},publisher={xdata=pére😀-publisher},subtitle={xdata=pére😀-subtitle}}\r\n@xdata{pére😀,title={Parent},subtitle={Subtitle},publisher={Publisher},author={Doe, Jane and Smith, John}}\r\n".into();
                 changes.push(json!({"range":range,"text":current}));
             }
@@ -6923,11 +6921,11 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                     let fallback=stage==2 && field=="title";
                     let range=if fallback {
                         let start=current.find("café😀").unwrap();
-                        latex_lsp::text::Text::new(current.clone()).range(start,start+"café😀".len())
+                        texquill::text::Text::new(current.clone()).range(start,start+"café😀".len())
                     } else {
                         let start=current.find(&format!("{field}={{")).unwrap()+field.len()+2;
                         let end=start+current[start..].find('}').unwrap();
-                        latex_lsp::text::Text::new(current.clone()).range(start,end)
+                        texquill::text::Text::new(current.clone()).range(start,end)
                     };
                     let mut data=json!({"key":"café😀","field":field,"section":0,"reason":reason});
                     if let Some(source_field)=source_field {data["parent"]="pére😀".into();data["sourceField"]=source_field.into();}
@@ -7027,7 +7025,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                         "title={Title},author={Doe, Jane},date={2026}",
                     )
                 };
-                let range = latex_lsp::text::Text::new(current.clone()).range(at, at);
+                let range = texquill::text::Text::new(current.clone()).range(at, at);
                 current.insert_str(at, replacement);
                 std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
                 server.notify("textDocument/didChange", json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":[{"range":range,"text":replacement}]}));
@@ -7085,7 +7083,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
             assert_eq!(items.len(), 3, "{items:?}");
             let at = current.find("café😀").unwrap();
             let range = serde_json::to_value(
-                latex_lsp::text::Text::new(current.clone()).range(at, at + "café😀".len()),
+                texquill::text::Text::new(current.clone()).range(at, at + "café😀".len()),
             )
             .unwrap();
             for item in items {
@@ -7144,7 +7142,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 let at = current.find("Straße").unwrap();
                 let end = at + if stage == 1 { 0 } else { "Straße".len() };
                 let replacement = if stage == 1 { "\r\n " } else { "book" };
-                let range = latex_lsp::text::Text::new(current.clone()).range(at, end);
+                let range = texquill::text::Text::new(current.clone()).range(at, end);
                 current.replace_range(at..end, replacement);
                 std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
                 server.notify("textDocument/didChange", json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":[{"range":range,"text":replacement}]}));
@@ -7167,7 +7165,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
             let expected = (stage < 3).then(|| {
                 let at = current.find(marker).unwrap();
                 serde_json::to_value(
-                    latex_lsp::text::Text::new(current.clone()).range(at, at + marker.len()),
+                    texquill::text::Text::new(current.clone()).range(at, at + marker.len()),
                 )
                 .unwrap()
             });
@@ -7266,7 +7264,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.bib" > "$1/main.
                 for (marker, new_text) in edits {
                     let at = live.find(marker).unwrap();
                     let end = at + if stage == 1 { 0 } else { marker.len() };
-                    let range = latex_lsp::text::Text::new(live.clone()).range(at, end);
+                    let range = texquill::text::Text::new(live.clone()).range(at, end);
                     live.replace_range(at..end, new_text);
                     changes.push(json!({"range":range,"text":new_text}));
                 }
@@ -7330,7 +7328,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.bib" > "$1/main.
             assert_eq!(items.len(), 2);
             for (item, marker) in items.into_iter().zip(["TiTlE", "TITLE"]) {
                 let at = live.find(marker).unwrap();
-                let range = latex_lsp::text::Text::new(live.clone()).range(at, at + marker.len());
+                let range = texquill::text::Text::new(live.clone()).range(at, at + marker.len());
                 assert_eq!(item["range"], serde_json::to_value(range).unwrap());
                 assert_eq!(item["severity"], 2);
                 assert_eq!(item["data"]["key"], "😀");
@@ -7368,12 +7366,12 @@ fn bibliography_ids_aliases_refresh_navigation_and_independent_renames_over_stdi
         {
             server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":source}}));
         }
-        let position = latex_lsp::text::Text::new(main_source.into())
+        let position = texquill::text::Text::new(main_source.into())
             .position(main_source.find("legacy😀").unwrap() + "legacy😀".len());
         let target = json!({"textDocument":{"uri":main},"position":position});
         let alias_start = saved.find("IDS={ ").unwrap() + "IDS={ ".len();
         let alias_range = serde_json::to_value(
-            latex_lsp::text::Text::new(saved.into())
+            texquill::text::Text::new(saved.into())
                 .range(alias_start, alias_start + "legacy😀".len()),
         )
         .unwrap();
@@ -7439,7 +7437,7 @@ fn bibliography_ids_aliases_refresh_navigation_and_independent_renames_over_stdi
             } else {
                 main_source
             };
-            let text = latex_lsp::text::Text::new(source.into());
+            let text = texquill::text::Text::new(source.into());
             let range: lsp_types::Range = serde_json::from_value(edit["range"].clone()).unwrap();
             assert_eq!(
                 &source[text.offset(range.start).unwrap()..text.offset(range.end).unwrap()],
@@ -7455,17 +7453,17 @@ fn bibliography_ids_aliases_refresh_navigation_and_independent_renames_over_stdi
         }
         let mut live = saved.to_string();
         live.insert_str(alias_start, "\r\n ");
-        let insert = latex_lsp::text::Text::new(saved.into()).range(alias_start, alias_start);
+        let insert = texquill::text::Text::new(saved.into()).range(alias_start, alias_start);
         server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":8},"contentChanges":[{"range":insert,"text":"\r\n "}]}));
         let definition = server.request(8, "textDocument/definition", target.clone());
         let start = alias_start + "\r\n ".len();
         assert_eq!(
             definition[0]["range"],
-            json!(latex_lsp::text::Text::new(live.clone()).range(start, start + "legacy😀".len()))
+            json!(texquill::text::Text::new(live.clone()).range(start, start + "legacy😀".len()))
         );
         let begin = live.find("IDS=").unwrap() + "IDS=".len();
         let end = begin + live[begin..].find('}').unwrap() + 1;
-        let replace = latex_lsp::text::Text::new(live).range(begin, end);
+        let replace = texquill::text::Text::new(live).range(begin, end);
         server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":9},"contentChanges":[{"range":replace,"text":"dynamic"}]}));
         assert_eq!(
             server.request(9, "textDocument/definition", target.clone()),
@@ -7627,7 +7625,7 @@ fn bibliography_outlines_negotiate_field_hierarchy_and_refresh_incremental_edits
                 json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":1,"text":source}}),
             );
             let check = |symbols: &Value, source: &str, fields: &[&str]| {
-                let text = latex_lsp::text::Text::new(source.into());
+                let text = texquill::text::Text::new(source.into());
                 let key_start = source.find("entry😀").unwrap();
                 let key_range = json!(text.range(key_start, key_start + "entry😀".len()));
                 if hierarchy {
@@ -7696,7 +7694,7 @@ fn bibliography_outlines_negotiate_field_hierarchy_and_refresh_incremental_edits
                 json!({"textDocument":{"uri":uri}}),
             );
             check(&symbols, source, &["TITLE", "year"]);
-            let text = latex_lsp::text::Text::new(source.into());
+            let text = texquill::text::Text::new(source.into());
             let field = source.find("TITLE").unwrap();
             let year = source.find("year = 2026").unwrap();
             let replacement = "year = 2027,\r\n  url = {https://example.org}";
@@ -7772,7 +7770,7 @@ fn bibtex_language_ids_enable_untitled_and_nonstandard_buffers_over_stdio() {
             json!({"textDocument":{"uri":uri}}),
         );
         assert_eq!(folding.as_array().unwrap().len(), 1, "{folding}");
-        let text = latex_lsp::text::Text::new(source.into());
+        let text = texquill::text::Text::new(source.into());
         let start = source.find("alpha").unwrap();
         server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":text.range(start,start+5),"text":"beta"}]}));
         let symbols = server.request(
@@ -7906,7 +7904,7 @@ fn imported_string_predicate_operands_refresh_signatures_and_renames_without_mai
         "textDocument/didOpen",
         json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
     );
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     let target = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("draft").unwrap()+1)});
     let predicate = source.find(r"\ifblank").unwrap();
     let operand = json!({"textDocument":{"uri":main},"position":text.position(predicate+3)});
@@ -8017,7 +8015,7 @@ fn string_undefinitions_follow_incremental_dependency_edits_close_and_disk_notif
         "textDocument/didOpen",
         json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
     );
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     let target = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("draft").unwrap()+1)});
     let rename = json!({"textDocument":{"uri":main},"position":text.position(source.find("draft").unwrap()+1),"newName":"release"});
     assert_eq!(
@@ -8106,7 +8104,7 @@ fn copied_string_predicate_arities_follow_dependency_changes_over_stdio() {
         "textDocument/didOpen",
         json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
     );
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     let target = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("draft").unwrap()+1)});
     let rename = json!({"textDocument":{"uri":main},"position":text.position(source.find("draft").unwrap()+1),"newName":"release"});
     assert_eq!(
@@ -8205,7 +8203,7 @@ fn restored_string_predicates_follow_incremental_edits_close_and_disk_changes_ov
         "textDocument/didOpen",
         json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
     );
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     let target = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("draft").unwrap()+1)});
     assert_eq!(
         server
@@ -8300,7 +8298,7 @@ fn selected_string_predicates_refresh_on_selector_edits_close_and_disk_changes_o
         "textDocument/didOpen",
         json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
     );
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     let target = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("draft").unwrap()+1)});
     assert_eq!(
         server.request(2, "textDocument/definition", target.clone()),
@@ -8381,7 +8379,7 @@ fn conditional_string_hooks_refresh_after_non_source_file_events_over_stdio() {
         "textDocument/didOpen",
         json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
     );
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     let target = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("draft").unwrap()+1)});
     assert_eq!(
         server.request(2, "textDocument/definition", target.clone()),
@@ -8448,7 +8446,7 @@ fn imported_string_predicates_refresh_on_edits_close_and_disk_changes_over_stdio
         "textDocument/didOpen",
         json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
     );
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     let target = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("draft").unwrap()+1)});
     assert_eq!(
         server.request(2, "textDocument/definition", target.clone()),
@@ -8549,7 +8547,7 @@ fn string_predicates_keep_literal_tokens_and_versioned_branch_renames_over_stdio
         message["method"] == "textDocument/publishDiagnostics"
             && message["params"]["uri"] == main.as_str()
     });
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     let literal = text.position(source.find("draft").unwrap() + 2);
     let literal_target = json!({"textDocument":{"uri":main},"position":literal});
     assert_eq!(
@@ -9165,7 +9163,7 @@ printf ')\n' >> "$1/$build_name.log"
                 .as_str()
                 .unwrap()
                 .contains("code actions again"));
-            assert!(!root.join("build/latex-lsp/other.pdf").exists());
+            assert!(!root.join("build/texquill/other.pdf").exists());
             assert_eq!(
                 std::fs::read_to_string(root.join("compiler-calls"))
                     .unwrap()
@@ -9476,7 +9474,7 @@ fn real_builds_from_sources_ignore_deleted_roots_and_document_examples_in_packag
             .to_str()
             .unwrap();
         assert!(root
-            .join("build/latex-lsp")
+            .join("build/texquill")
             .join(format!("{stem}.pdf"))
             .is_file());
         server.request(3, "shutdown", Value::Null);
@@ -9906,14 +9904,14 @@ fn destination_diagnostics_exclude_chapters_only_probed_by_the_tex_recorder() {
             );
         }
     }
-    let range = latex_lsp::text::Text::new(excluded_source.into()).range(11, 15);
+    let range = texquill::text::Text::new(excluded_source.into()).range(11, 15);
     let actions = server.request(
         3,
         "textDocument/codeAction",
         json!({"textDocument":{"uri":excluded},"range":range,"context":{"diagnostics":[]}}),
     );
     assert!(actions.as_array().unwrap().is_empty(), "{actions}");
-    let range = latex_lsp::text::Text::new(active_source.into()).range(11, 15);
+    let range = texquill::text::Text::new(active_source.into()).range(11, 15);
     let actions = server.request(
         4,
         "textDocument/codeAction",
@@ -10027,7 +10025,7 @@ fn duplicate_compiler_destinations_link_declarations_and_clear_after_resolving_t
         let actions = server.request(id, "textDocument/codeAction", json!({"textDocument":{"uri":uri},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic]}}));
         assert!(actions.as_array().unwrap().is_empty(), "{actions}");
     }
-    let position = latex_lsp::text::Text::new(main_source.into())
+    let position = texquill::text::Text::new(main_source.into())
         .position(main_source.find("section.1").unwrap() + 2);
     server.send(json!({"jsonrpc":"2.0","id":5,"method":"textDocument/rename","params":{"textDocument":{"uri":main},"position":position,"newName":"custom.section"}}));
     let rejected = server.until(|message| message["id"] == 5);
@@ -10052,7 +10050,7 @@ fn duplicate_compiler_destinations_link_declarations_and_clear_after_resolving_t
         let mut edits: Vec<lsp_types::TextEdit> =
             serde_json::from_value(change["edits"].clone()).unwrap();
         edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
-        let changed = latex_lsp::text::Text::new(source.into())
+        let changed = texquill::text::Text::new(source.into())
             .changed(
                 edits
                     .into_iter()
@@ -10159,7 +10157,7 @@ fn compiler_destination_diagnostics_follow_recorded_children_and_offer_preservin
         );
     }
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
-    let repaired = latex_lsp::text::Text::new(source.into())
+    let repaired = texquill::text::Text::new(source.into())
         .changed(
             edits
                 .into_iter()
@@ -10236,7 +10234,7 @@ fn equivalent_file_uris_share_open_versions_navigation_rename_watch_and_close_st
         json!({"textDocument":{"uri":child}}),
     );
     assert_eq!(symbols[0]["name"], "draft", "{symbols}");
-    let main_position = latex_lsp::text::Text::new(main_source.into())
+    let main_position = texquill::text::Text::new(main_source.into())
         .position(main_source.find("draft").unwrap() + 1);
     let definitions = server.request(
         3,
@@ -10251,7 +10249,7 @@ fn equivalent_file_uris_share_open_versions_navigation_rename_watch_and_close_st
         json!({"textDocument":{"uri":child,"version":2},"contentChanges":[{"text":changed}]}),
     );
     let position =
-        latex_lsp::text::Text::new(changed.into()).position(changed.find("draft").unwrap() + 1);
+        texquill::text::Text::new(changed.into()).position(changed.find("draft").unwrap() + 1);
     let references = server.request(4, "textDocument/references", json!({"textDocument":{"uri":child_lower},"position":position,"context":{"includeDeclaration":true}}));
     assert_eq!(references.as_array().unwrap().len(), 4, "{references}");
     let edit = server.request(
@@ -10422,7 +10420,7 @@ fn real_command_spelling_fixes_preserve_arguments_and_compile_after_repair() {
         );
     }
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
-    let repaired = latex_lsp::text::Text::new(source.into())
+    let repaired = texquill::text::Text::new(source.into())
         .changed(
             edits
                 .into_iter()
@@ -10461,7 +10459,7 @@ impl Server {
     }
 
     fn start_with_env(environment: &[(&str, &str)]) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_latex-lsp"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_texquill"))
             .arg("--stdio")
             .envs(environment.iter().copied())
             .stdin(Stdio::piped())
@@ -10675,12 +10673,11 @@ fn startup_distribution_discovery_does_not_block_documents_or_restore_obsolete_s
     );
     std::fs::write(directory.path().join("release"), "").unwrap();
     server.until(|message| {
-        message["method"] == "window/logMessage"
-            && message["params"]["message"] == "latex-lsp ready"
+        message["method"] == "window/logMessage" && message["params"]["message"] == "texquill ready"
     });
     let at = source.find("stale_startup_package").unwrap();
     let definitions = server.request(4, "textDocument/definition", json!({
-        "textDocument":{"uri":uri},"position":latex_lsp::text::Text::new(source.into()).position(at+1)
+        "textDocument":{"uri":uri},"position":texquill::text::Text::new(source.into()).position(at+1)
     }));
     assert_eq!(
         definitions,
@@ -10790,7 +10787,7 @@ fn builds_with_the_same_job_name_cannot_write_the_same_artifacts_concurrently() 
     );
     let started = server.until(|message| message["method"] == "latex/buildStarted");
     assert_eq!(started["params"]["jobName"], "draft");
-    let ready = root.join("build/latex-lsp/ready");
+    let ready = root.join("build/texquill/ready");
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while !ready.exists() {
         assert!(std::time::Instant::now() < deadline);
@@ -10805,7 +10802,7 @@ fn builds_with_the_same_job_name_cannot_write_the_same_artifacts_concurrently() 
             .contains("same output file"),
         "{rejected}"
     );
-    std::fs::write(root.join("build/latex-lsp/release"), "").unwrap();
+    std::fs::write(root.join("build/texquill/release"), "").unwrap();
     let first = server.until(|message| message["method"] == "latex/buildFinished");
     assert_eq!(first["params"]["status"], "success", "{first}");
     server.request(
@@ -10819,7 +10816,7 @@ fn builds_with_the_same_job_name_cannot_write_the_same_artifacts_concurrently() 
     assert_eq!(second["params"]["jobName"], "draft");
     assert_eq!(
         second["params"]["pdfUri"],
-        Url::from_file_path(root.join("build/latex-lsp/draft.pdf"))
+        Url::from_file_path(root.join("build/texquill/draft.pdf"))
             .unwrap()
             .as_str()
     );
@@ -10994,7 +10991,7 @@ fn local_bibtex_styles_require_saving_and_edits_during_compilation_make_results_
         "workspace/executeCommand",
         json!({"command":"latex.build","arguments":[style]}),
     );
-    let ready = root.join("build/latex-lsp/ready");
+    let ready = root.join("build/texquill/ready");
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while !ready.exists() {
         assert!(std::time::Instant::now() < deadline);
@@ -11007,7 +11004,7 @@ fn local_bibtex_styles_require_saving_and_edits_during_compilation_make_results_
         "textDocument/documentSymbol",
         json!({"textDocument":{"uri":style}}),
     );
-    std::fs::write(root.join("build/latex-lsp/release"), "").unwrap();
+    std::fs::write(root.join("build/texquill/release"), "").unwrap();
     let finished = server.until(|message| message["method"] == "latex/buildFinished");
     assert_eq!(finished["params"]["rootUri"], main.as_str());
     assert_eq!(finished["params"]["stale"], true, "{finished}");
@@ -11044,11 +11041,11 @@ fn real_custom_job_names_preserve_build_analysis_recorded_dependencies_and_synct
     assert_eq!(result["stale"], false);
     assert_eq!(result["jobName"], "论文 draft.v2");
     assert_eq!(result["dependenciesCount"], 2);
-    let pdf = Url::from_file_path(root.join("build/latex-lsp/论文 draft.v2.pdf")).unwrap();
+    let pdf = Url::from_file_path(root.join("build/texquill/论文 draft.v2.pdf")).unwrap();
     assert_eq!(result["pdfUri"], pdf.as_str());
     assert_eq!(
         result["logUri"],
-        Url::from_file_path(root.join("build/latex-lsp/论文 draft.v2.log"))
+        Url::from_file_path(root.join("build/texquill/论文 draft.v2.log"))
             .unwrap()
             .as_str()
     );
@@ -11334,7 +11331,7 @@ while [ ! -f "$1/release" ]; do sleep 0.02; done
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = root.join("build/latex-lsp");
+        let output = root.join("build/texquill");
         wait_for_file(&output.join("ready"));
         // An excluded or later extension must not make the selected image stale.
         let other = if extension == "png" { "pdf" } else { "png" };
@@ -11432,7 +11429,7 @@ while [ ! -f "$1/release" ]; do sleep 0.02; done
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = root.join("build/latex-lsp");
+        let output = root.join("build/texquill");
         wait_for_file(&output.join("ready"));
         // A file in the replaced or restored-away directory cannot invalidate this build.
         let other = if selected == "first" {
@@ -11456,7 +11453,7 @@ while [ ! -f "$1/release" ]; do sleep 0.02; done
 #[test]
 #[cfg(unix)]
 fn wrapped_box_warnings_publish_complete_child_ranges_and_clear_after_recompilation() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let script =
         "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\ncat \"${2%/*}/fixture.log\" > \"$1/main.log\"\n";
     let (mut server, directory, main) = fake_build_server(script, false);
@@ -11553,7 +11550,7 @@ fn wrapped_box_warnings_publish_complete_child_ranges_and_clear_after_recompilat
 #[test]
 #[cfg(unix)]
 fn missing_character_errors_publish_precise_ranges_and_correct_build_counts() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for numbered in [false, true] {
         let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\ncat \"${2%/*}/fixture.log\" > \"$1/main.log\"\nif [ -f \"${2%/*}/fail\" ]; then exit 1; fi\n";
         let (mut server, directory, main) = fake_build_server(script, false);
@@ -11631,7 +11628,7 @@ fn missing_character_errors_publish_precise_ranges_and_correct_build_counts() {
 #[test]
 #[cfg(unix)]
 fn shared_glyph_contexts_publish_each_utf16_range_and_count_each_missing_character() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for numbered in [false, true] {
         let script = "cat \"${2%/*}/fixture.log\" > \"$1/main.log\"\nexit 1\n";
         let (mut server, directory, main) = fake_build_server(script, false);
@@ -11974,7 +11971,7 @@ fn unchanged_pdf_older_than_an_included_source_is_rejected_but_fresh_noop_builds
         "textDocument/didChange",
         json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":source}]}),
     );
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     std::fs::create_dir_all(&output).unwrap();
     let pdf = output.join("main.pdf");
     std::fs::write(&pdf, "%PDF-1.4\n").unwrap();
@@ -12056,7 +12053,7 @@ fn unchanged_input_contents_allow_noop_builds_after_repeated_saves() {
         );
         let first = server.until(|message| message["method"] == "latex/buildFinished");
         assert_eq!(first["params"]["status"], "success", "{first}");
-        let pdf = directory.path().join("build/latex-lsp/main.pdf");
+        let pdf = directory.path().join("build/texquill/main.pdf");
         let pdf_before = std::fs::read(&pdf).unwrap();
         let pdf_modified = std::fs::metadata(&pdf).unwrap().modified().unwrap();
         for (index, name) in [
@@ -12141,7 +12138,7 @@ fn first_latexmk_build_refreshes_existing_artifacts_for_newer_root_or_child_inpu
         let source = "\\documentclass{article}\n\\input{chapter}\n";
         std::fs::write(&main_path, source).unwrap();
         std::fs::write(root.join("chapter.tex"), "Chapter\n").unwrap();
-        let output = root.join("build/latex-lsp");
+        let output = root.join("build/texquill");
         std::fs::create_dir_all(&output).unwrap();
         let pdf = output.join("main.pdf");
         std::fs::write(&pdf, "%PDF-1.4\nExisting\n").unwrap();
@@ -12256,7 +12253,7 @@ fn real_latexmk_refreshes_preexisting_pdf_then_reuses_it_after_identical_saves()
     let source = "\\documentclass{article}\n\\begin{document}\nHello, world.\n\\end{document}\n";
     std::fs::write(&main_path, source).unwrap();
     let initial =
-        latex_lsp::compilation::build::run(&main_path, &Default::default(), &Default::default());
+        texquill::compilation::build::run(&main_path, &Default::default(), &Default::default());
     assert_eq!(initial.status, "success", "{}", initial.output);
     let existing_pdf = initial.pdf.unwrap();
     let modified = std::fs::metadata(existing_pdf).unwrap().modified().unwrap();
@@ -12285,7 +12282,7 @@ fn real_latexmk_refreshes_preexisting_pdf_then_reuses_it_after_identical_saves()
             .contains("applying rule"),
         "{first}"
     );
-    let pdf = directory.path().join("build/latex-lsp/main.pdf");
+    let pdf = directory.path().join("build/texquill/main.pdf");
     let pdf_before = std::fs::read(&pdf).unwrap();
     let pdf_modified = std::fs::metadata(&pdf).unwrap().modified().unwrap();
     for _ in 0..2 {
@@ -12338,7 +12335,7 @@ fn bibliography_styles_invalidate_old_pdfs_even_when_missing_from_tex_recorder()
     );
     let first = server.until(|message| message["method"] == "latex/buildFinished");
     assert_eq!(first["params"]["status"], "success", "{first}");
-    let pdf = directory.path().join("build/latex-lsp/main.pdf");
+    let pdf = directory.path().join("build/texquill/main.pdf");
     let pdf_time = std::fs::metadata(&pdf).unwrap().modified().unwrap();
     std::fs::write(&style, "Changed style\n").unwrap();
     std::fs::File::open(&style)
@@ -12434,7 +12431,7 @@ fn fake_synctex_server(script: &str) -> (Server, tempfile::TempDir, Url) {
     let source = "\\documentclass{article}\n\\section{Title}\n";
     let main = directory.path().join("main.tex");
     std::fs::write(&main, source).unwrap();
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     std::fs::create_dir_all(&output).unwrap();
     std::fs::write(output.join("main.pdf"), "%PDF-1.4").unwrap();
     std::fs::write(output.join("main.synctex"), "SyncTeX data").unwrap();
@@ -12481,7 +12478,7 @@ fn synctex_accepts_identical_saves_after_adopting_existing_artifacts_in_a_noop_b
         json!({"settings":{"build":{"executable":"/bin/sh","arguments":[compiler,"%o","%f"]}}}),
     );
     let source = main.to_file_path().unwrap();
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     let pdf = std::fs::read(output.join("main.pdf")).unwrap();
     let recorded = std::fs::metadata(output.join("main.synctex"))
         .unwrap()
@@ -12704,7 +12701,7 @@ fn cancelling_before_progress_acknowledgement_preserves_previous_build_artifacts
                 false,
                 json!({"window":{"workDoneProgress":true}}),
             );
-            let output = directory.path().join("build/latex-lsp");
+            let output = directory.path().join("build/texquill");
             let extensions = ["log", "pdf", "fls", "blg", "aux", "synctex.gz"];
             if existing {
                 std::fs::create_dir_all(&output).unwrap();
@@ -12802,7 +12799,7 @@ fn no_pages_builds_reject_preserved_pdfs_and_recover_after_a_real_output() {
     ] {
         let script = format!("printf '%s\\n' '{report}' > \"$1/main.log\"\n");
         let (mut server, directory, main) = fake_build_server(&script, false);
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::create_dir_all(&output).unwrap();
         let pdf = output.join("main.pdf");
         let previous = b"%PDF-1.4\nprevious output\n";
@@ -13094,7 +13091,7 @@ fn repeated_saves_during_a_build_compile_the_latest_saved_content_once_more() {
         "workspace/executeCommand",
         json!({"command":"latex.build","arguments":[uri]}),
     );
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     while !output.join("ready").exists() {
         assert!(
@@ -13301,7 +13298,7 @@ fn automatic_builds_accept_editor_newline_representations_and_track_exact_disk_i
         assert_eq!(finished["params"]["status"], "success", "{finished}");
         assert_eq!(finished["params"]["stale"], false, "{finished}");
         assert_eq!(
-            std::fs::read_to_string(directory.path().join("build/latex-lsp/compiled.tex")).unwrap(),
+            std::fs::read_to_string(directory.path().join("build/texquill/compiled.tex")).unwrap(),
             saved
         );
     }
@@ -13376,7 +13373,7 @@ fn save_text_resynchronizes_edit_bursts_and_keeps_automatic_builds_enabled() {
     let first = server.until(|message| message["method"] == "latex/buildFinished");
     assert_eq!(first["params"]["status"], "success", "{first}");
     assert_eq!(first["params"]["stale"], false, "{first}");
-    let compiled = directory.path().join("build/latex-lsp/compiled.tex");
+    let compiled = directory.path().join("build/texquill/compiled.tex");
     assert_eq!(std::fs::read_to_string(&compiled).unwrap(), source);
 
     // Later saves remain enabled and must discover dependencies from the saved
@@ -13866,7 +13863,7 @@ fn biber_unreported_unquoted_sources_restrict_diagnostics_to_the_complete_explic
 #[test]
 #[cfg(unix)]
 fn bibliography_logs_discover_inputs_without_replacing_or_losing_tex_recorder_dependencies() {
-    let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'INPUT main.tex\\nINPUT .inputs/chapter.tex\\n' > \"$1/main.fls\"\nif [ ! -f \"$1/main.blg\" ]; then\n printf 'The top-level auxiliary file: build/latex-lsp/main.aux\\nDatabase file #1: .inputs/refs.bib\\nThe style file: .inputs/local.bst\\n' > \"$1/main.blg\"\nfi\n";
+    let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'INPUT main.tex\\nINPUT .inputs/chapter.tex\\n' > \"$1/main.fls\"\nif [ ! -f \"$1/main.blg\" ]; then\n printf 'The top-level auxiliary file: build/texquill/main.aux\\nDatabase file #1: .inputs/refs.bib\\nThe style file: .inputs/local.bst\\n' > \"$1/main.blg\"\nfi\n";
     let (mut server, directory, main) = fake_build_server(script, false);
     let root = directory.path();
     std::fs::create_dir(root.join(".inputs")).unwrap();
@@ -13893,7 +13890,7 @@ fn bibliography_logs_discover_inputs_without_replacing_or_losing_tex_recorder_de
     // A later no-op build must still check the bibliography discovered earlier.
     std::fs::write(root.join("compiler.sh"), "exit 0\n").unwrap();
     let bib = root.join(".inputs/refs.bib");
-    let pdf_time = std::fs::metadata(root.join("build/latex-lsp/main.pdf"))
+    let pdf_time = std::fs::metadata(root.join("build/texquill/main.pdf"))
         .unwrap()
         .modified()
         .unwrap();
@@ -13961,11 +13958,11 @@ fn newly_discovered_bibliography_inputs_discard_results_for_unsaved_or_changed_s
                 "workspace/executeCommand",
                 json!({"command":"latex.build","arguments":[main]}),
             );
-            wait_for_file(&root.join("build/latex-lsp/ready"));
+            wait_for_file(&root.join("build/texquill/ready"));
             if changed_during_build {
                 std::fs::write(&path, "Changed during compilation\n").unwrap();
             }
-            std::fs::write(root.join("build/latex-lsp/release"), "").unwrap();
+            std::fs::write(root.join("build/texquill/release"), "").unwrap();
             let finished = server.until(|message| message["method"] == "latex/buildFinished");
             assert_eq!(finished["params"]["stale"], true, "{name}: {finished}");
             assert_eq!(finished["params"]["dependenciesCount"], 3, "{finished}");
@@ -13997,7 +13994,7 @@ fn newly_recorded_inputs_discard_stale_diagnostics_but_unrelated_buffers_do_not(
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         while !output.join("ready").exists() {
             assert!(
@@ -14037,7 +14034,7 @@ fn newly_recorded_inputs_discard_stale_diagnostics_but_unrelated_buffers_do_not(
 fn unchanged_recorder_files_are_not_treated_as_current_inputs() {
     let (mut server, directory, main) =
         fake_build_server("printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n", false);
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     std::fs::create_dir_all(&output).unwrap();
     std::fs::write(directory.path().join("old.tex"), "Old\n").unwrap();
     std::fs::write(output.join("main.fls"), "INPUT main.tex\nINPUT old.tex\n").unwrap();
@@ -14109,7 +14106,7 @@ fn real_synctex_round_trip_handles_spaces_and_rejects_unsaved_or_stale_sources()
     )
     .unwrap();
     let image_build =
-        latex_lsp::compilation::build::run(&image_source, &Default::default(), &Default::default());
+        texquill::compilation::build::run(&image_source, &Default::default(), &Default::default());
     assert_eq!(image_build.status, "success", "{}", image_build.output);
     let directory = tempfile::tempdir().unwrap();
     let folder = directory.path().join("project with spaces");
@@ -14161,7 +14158,7 @@ fn real_synctex_round_trip_handles_spaces_and_rejects_unsaved_or_stale_sources()
         finished["params"]["dependenciesCount"].as_u64().unwrap() >= 3,
         "{finished}"
     );
-    let recorded_time = std::fs::metadata(folder.join("build/latex-lsp/main.synctex.gz"))
+    let recorded_time = std::fs::metadata(folder.join("build/texquill/main.synctex.gz"))
         .unwrap()
         .modified()
         .unwrap();
@@ -14297,7 +14294,7 @@ fn bibliography_relations_support_navigation_completion_and_versioned_rename_ove
         json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":7,"text":source}}),
     );
     server.until(|message| message["method"] == "textDocument/publishDiagnostics");
-    let position = latex_lsp::text::Text::new(source.into())
+    let position = texquill::text::Text::new(source.into())
         .position(source.find("crossref={par").unwrap() + "crossref={par".len());
     let target = json!({"textDocument":{"uri":uri},"position":position});
     let definitions = server.request(2, "textDocument/definition", target.clone());
@@ -14619,7 +14616,7 @@ fn real_ltx_root_and_dynamically_input_definition_files_compile_and_keep_root_de
 
 #[test]
 fn nfss_declarations_and_selectors_negotiate_snippets_and_refresh_signatures_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
 
     let declarations = [
         (
@@ -14878,11 +14875,11 @@ fn signature_help_triggers_follow_custom_delimiters_flags_and_completed_argument
             let mut text = format!("{prefix}{base}");
             version += 1;
             server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"text":text}]}));
-            let at = latex_lsp::text::Text::new(text.clone()).position(text.len());
+            let at = texquill::text::Text::new(text.clone()).position(text.len());
             version += 1;
             server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"range":{"start":at,"end":at},"text":character}]}));
             text.push_str(character);
-            let position = latex_lsp::text::Text::new(text.clone()).position(text.len());
+            let position = texquill::text::Text::new(text.clone()).position(text.len());
             id += 1;
             let help = server.request(id, "textDocument/signatureHelp", json!({"textDocument":{"uri":main},"position":position,"context":{"triggerKind":2,"triggerCharacter":character,"isRetrigger":retrigger}}));
             if let Some(active) = active {
@@ -15179,7 +15176,7 @@ fn source_filename_renames_validate_tex_whitespace_and_keep_versioned_navigation
             serde_json::from_value(documents[0]["edits"].clone()).unwrap();
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].new_text, expected);
-        source = latex_lsp::text::Text::new(source)
+        source = texquill::text::Text::new(source)
             .changed(
                 edits
                     .into_iter()
@@ -15264,7 +15261,7 @@ fn file_url_rename_requests_preserve_destinations_in_versioned_edits() {
         serde_json::from_value(documents[0]["edits"].clone()).unwrap();
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
     for edit in edits {
-        let text = latex_lsp::text::Text::new(source.clone());
+        let text = texquill::text::Text::new(source.clone());
         updated.replace_range(
             text.offset(edit.range.start).unwrap()..text.offset(edit.range.end).unwrap(),
             &edit.new_text,
@@ -15679,7 +15676,7 @@ fn bibliography_type_and_field_completion_negotiate_snippets_and_refresh_over_st
             .iter()
             .any(|item| item["label"] == "publisher"));
         let at = source.find("@art").unwrap() + 4;
-        let empty = server.request(7, "textDocument/completion", json!({"textDocument":{"uri":uri},"position":latex_lsp::text::Text::new(source.into()).position(at)}));
+        let empty = server.request(7, "textDocument/completion", json!({"textDocument":{"uri":uri},"position":texquill::text::Text::new(source.into()).position(at)}));
         assert_eq!(empty, json!([]));
         server.request(8, "shutdown", Value::Null);
         server.notify("exit", Value::Null);
@@ -15722,7 +15719,7 @@ fn bibliography_links_refresh_unsaved_fields_and_restore_current_disk_content_ov
     assert_eq!(links[1]["target"], "https://doi.org/10.1234/a%3Fb%23c");
     let tokens = server.request(30, "textDocument/semanticTokens/full", request.clone());
     assert_eq!(tokens["data"].as_array().unwrap().len(), 60);
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     let start = source.find("10.1234/").unwrap();
     let end = source[start..].find('}').unwrap() + start;
     server.notify(
@@ -15735,7 +15732,7 @@ fn bibliography_links_refresh_unsaved_fields_and_restore_current_disk_content_ov
     let links = server.request(4, "textDocument/documentLink", request.clone());
     assert_eq!(links[1]["target"], "https://doi.org/10.5678/changed");
     let source = source.replace("10.1234/a?b#c", "10.5678/changed");
-    let text = latex_lsp::text::Text::new(source.clone());
+    let text = texquill::text::Text::new(source.clone());
     let start = source.find("{https://").unwrap();
     let end = source[start..].find('}').unwrap() + start + 1;
     server.notify(
@@ -16208,7 +16205,7 @@ fn recorded_images_remain_binary_and_invalidate_unchanged_pdf_artifacts() {
         ),
         json!([])
     );
-    let pdf = directory.path().join("build/latex-lsp/main.pdf");
+    let pdf = directory.path().join("build/texquill/main.pdf");
     let old_pdf = std::fs::read(&pdf).unwrap();
     let newer = std::fs::metadata(&pdf).unwrap().modified().unwrap() + Duration::from_secs(1);
     std::fs::File::open(&image)
@@ -16276,7 +16273,7 @@ fn static_graphicspath_images_changed_during_build_discard_diagnostics_without_a
         "workspace/executeCommand",
         json!({"command":"latex.build","arguments":[main]}),
     );
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     wait_for_file(&output.join("ready"));
     let modified = std::fs::metadata(&image).unwrap().modified().unwrap();
     std::fs::write(&image, [0, 255, 1, 2, 3, 4]).unwrap();
@@ -16325,7 +16322,7 @@ fn conditional_files_changed_during_build_discard_diagnostics_without_file_event
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         wait_for_file(&output.join("ready"));
         if existed {
             std::fs::remove_file(&target).unwrap();
@@ -16361,7 +16358,7 @@ fn conditional_first_stale_pdf_cannot_be_accepted_by_a_later_noop_build() {
         "workspace/executeCommand",
         json!({"command":"latex.build","arguments":[main]}),
     );
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     wait_for_file(&output.join("ready"));
     std::fs::write(directory.path().join("optional.bin"), "Created.").unwrap();
     std::fs::write(output.join("release"), "").unwrap();
@@ -16421,7 +16418,7 @@ fn missing_include_creation_invalidates_results_and_old_pdfs_unless_the_chapter_
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         wait_for_file(&output.join("ready"));
         std::fs::write(directory.path().join("chapter.tex"), "New chapter.").unwrap();
         std::fs::write(output.join("release"), "").unwrap();
@@ -16478,7 +16475,7 @@ fn missing_required_inputs_created_during_failed_builds_discard_obsolete_errors(
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         wait_for_file(&output.join("ready"));
         std::fs::write(directory.path().join(name), "New input.").unwrap();
         std::fs::write(output.join("release"), "").unwrap();
@@ -16533,7 +16530,7 @@ fn stale_builds_clear_previously_published_errors_without_file_notifications() {
         "workspace/executeCommand",
         json!({"command":"latex.build","arguments":[main]}),
     );
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     wait_for_file(&output.join("ready"));
     std::fs::write(directory.path().join("child.tex"), "Restored input.").unwrap();
     std::fs::write(output.join("release"), "").unwrap();
@@ -16579,7 +16576,7 @@ fn required_input_filename_selection_changes_invalidate_results_and_unchanged_pd
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         wait_for_file(&output.join("ready"));
         if symlink {
             std::fs::remove_file(&input).unwrap();
@@ -16630,7 +16627,7 @@ fn required_input_creation_notifications_cancel_builds_and_queues_despite_includ
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        wait_for_file(&directory.path().join("build/latex-lsp/ready"));
+        wait_for_file(&directory.path().join("build/texquill/ready"));
         server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
         assert_eq!(
             server.request(
@@ -16697,7 +16694,7 @@ fn real_required_input_restoration_discards_missing_file_errors_and_rebuilds_eac
                 "workspace/executeCommand",
                 json!({"command":"latex.build","arguments":[main]}),
             );
-            let output = directory.path().join("build/latex-lsp");
+            let output = directory.path().join("build/texquill");
             wait_for_file(&output.join("ready"));
             std::fs::write(
                 directory.path().join(name),
@@ -16768,7 +16765,7 @@ fn missing_include_directory_creation_cancels_selected_builds_and_their_queue_on
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        wait_for_file(&directory.path().join("build/latex-lsp/ready"));
+        wait_for_file(&directory.path().join("build/texquill/ready"));
         server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
         assert_eq!(
             server.request(
@@ -16899,7 +16896,7 @@ fn real_missing_include_creation_discards_the_incomplete_pdf_and_respects_includ
             let script = format!("if [ -f \"$1/noop\" ]; then exit 0; fi\n{engine} -interaction=nonstopmode -halt-on-error -recorder -synctex=1 -output-directory=\"$1\" \"$2\"\nresult=$?\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nexit \"$result\"\n");
             let (mut server, directory, main) = fake_build_server(&script, false);
             // This custom shell wrapper must prepare its own auxiliary folder.
-            std::fs::create_dir_all(directory.path().join("build/latex-lsp/chapters")).unwrap();
+            std::fs::create_dir_all(directory.path().join("build/texquill/chapters")).unwrap();
             let source = format!("\\documentclass{{article}}\n\\includeonly{{{selection}}}\n\\begin{{document}}Hello.\n\\include{{chapters/新章节}}\n\\end{{document}}\n");
             std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
             server.notify(
@@ -16911,7 +16908,7 @@ fn real_missing_include_creation_discards_the_incomplete_pdf_and_respects_includ
                 "workspace/executeCommand",
                 json!({"command":"latex.build","arguments":[main]}),
             );
-            let output = directory.path().join("build/latex-lsp");
+            let output = directory.path().join("build/texquill");
             wait_for_file(&output.join("ready"));
             std::fs::create_dir(directory.path().join("chapters")).unwrap();
             std::fs::write(
@@ -17010,7 +17007,7 @@ fn conditional_lookup_tracks_suffix_shadows_and_root_priority_without_other_proj
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         wait_for_file(&output.join("ready"));
         std::fs::write(directory.path().join(changed), "New candidate.").unwrap();
         std::fs::write(output.join("release"), "").unwrap();
@@ -17049,7 +17046,7 @@ fn conditional_symlink_retargets_are_stale_and_canonical_target_deletion_cancels
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         wait_for_file(&output.join("ready"));
         if notify {
             std::fs::remove_file(&first).unwrap();
@@ -17169,7 +17166,7 @@ fn conditional_file_events_cancel_active_and_queued_builds_but_unrelated_files_d
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        wait_for_file(&directory.path().join("build/latex-lsp/ready"));
+        wait_for_file(&directory.path().join("build/texquill/ready"));
         let other = directory.path().join("unrelated.bin");
         std::fs::write(&other, "Other.").unwrap();
         server.notify(
@@ -17241,7 +17238,7 @@ fn conditional_data_content_and_unsaved_buffers_do_not_change_existence_or_impor
         "workspace/executeCommand",
         json!({"command":"latex.build","arguments":[main]}),
     );
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     wait_for_file(&output.join("ready"));
     std::fs::write(&flag, "Different disk contents, still present.").unwrap();
     std::fs::write(output.join("release"), "").unwrap();
@@ -17250,7 +17247,7 @@ fn conditional_data_content_and_unsaved_buffers_do_not_change_existence_or_impor
     assert_eq!(finished["params"]["stale"], false, "{finished}");
     assert_eq!(finished["params"]["dependenciesCount"], 1);
     let at = source.find("hidden").unwrap();
-    let position = latex_lsp::text::Text::new(source.into()).position(at);
+    let position = texquill::text::Text::new(source.into()).position(at);
     assert_eq!(
         server.request(
             3,
@@ -17332,7 +17329,7 @@ fn conditional_file_events_clear_diagnostics_and_reject_old_pdf_and_synctex_unti
         assert!(old["params"]["pdfUri"].is_null());
         assert_eq!(old["params"]["stale"], false);
     }
-    std::fs::write(directory.path().join("build/latex-lsp/rebuild"), "").unwrap();
+    std::fs::write(directory.path().join("build/texquill/rebuild"), "").unwrap();
     server.request(
         6,
         "workspace/executeCommand",
@@ -17353,7 +17350,7 @@ fn conditional_generated_artifacts_and_include_auxiliaries_do_not_make_builds_st
     let (mut server, directory, main) = fake_build_server(script, false);
     std::fs::create_dir(directory.path().join("chapters")).unwrap();
     std::fs::write(directory.path().join("chapters/child.tex"), "Chapter.").unwrap();
-    let source="\\documentclass{article}\n\\IfFileExists{build/latex-lsp/main.pdf}{}{}\n\\IfFileExists{build/latex-lsp/main.aux}{}{}\n\\IfFileExists{build/latex-lsp/chapters/child.aux}{}{}\n\\include{chapters/child.tex}\n";
+    let source="\\documentclass{article}\n\\IfFileExists{build/texquill/main.pdf}{}{}\n\\IfFileExists{build/texquill/main.aux}{}{}\n\\IfFileExists{build/texquill/chapters/child.aux}{}{}\n\\include{chapters/child.tex}\n";
     std::fs::write(main.to_file_path().unwrap(), source).unwrap();
     server.notify(
         "textDocument/didChange",
@@ -17481,7 +17478,7 @@ fn watched_files_cancel_changed_project_inputs_but_preserve_existence_only_conte
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         wait_for_file(&output.join("ready"));
         if kind != "data-content" {
             server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
@@ -17572,7 +17569,7 @@ fn watched_delayed_notifications_do_not_cancel_a_build_of_the_same_saved_inputs(
         "workspace/executeCommand",
         json!({"command":"latex.build","arguments":[main]}),
     );
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     wait_for_file(&output.join("ready"));
     server.notify(
         "workspace/didChangeWatchedFiles",
@@ -17688,7 +17685,7 @@ fn real_conditional_file_changes_after_tex_runs_discard_old_results_and_rebuild_
             "textDocument/didChange",
             json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         for (id, second) in [(2, false), (3, true)] {
             if second {
                 std::fs::remove_file(output.join("ready")).unwrap();
@@ -17798,7 +17795,7 @@ fn real_compiler_reference_quick_fixes_remove_label_and_citation_typos_after_reb
             .push(serde_json::from_value::<lsp_types::TextEdit>(edit["edits"][0].clone()).unwrap());
     }
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
-    let repaired = latex_lsp::text::Text::new(source.into())
+    let repaired = texquill::text::Text::new(source.into())
         .changed(
             edits
                 .into_iter()
@@ -17853,7 +17850,7 @@ fn pull_diagnostics_refresh_without_blocking_and_keep_result_ids_scoped_to_docum
     let init = server.request(1000, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}},"workspace":{"diagnostic":{"refreshSupport":true}}}}));
     assert_eq!(
         init["capabilities"]["diagnosticProvider"],
-        json!({"identifier":"latex-lsp","interFileDependencies":true,"workspaceDiagnostics":true})
+        json!({"identifier":"texquill","interFileDependencies":true,"workspaceDiagnostics":true})
     );
     server.notify("initialized", json!({}));
     server.notify(
@@ -17865,7 +17862,7 @@ fn pull_diagnostics_refresh_without_blocking_and_keep_result_ids_scoped_to_docum
     let first = server.request(
         1001,
         "textDocument/diagnostic",
-        json!({"textDocument":{"uri":alternate},"identifier":"latex-lsp"}),
+        json!({"textDocument":{"uri":alternate},"identifier":"texquill"}),
     );
     assert_eq!(first["kind"], "full");
     assert_eq!(first["items"].as_array().unwrap().len(), 1, "{first}");
@@ -18672,7 +18669,7 @@ fn missing_inputs_under_symlink_directories_match_canonical_creation_notificatio
                 "workspace/executeCommand",
                 json!({"command":"latex.build","arguments":[main]}),
             );
-            let output = directory.path().join("build/latex-lsp");
+            let output = directory.path().join("build/texquill");
             wait_for_file(&output.join("ready"));
             server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
             let queued = server.request(
@@ -19030,7 +19027,7 @@ fn delayed_watchers_preserve_active_saved_builds_while_clearing_older_published_
         "{old}"
     );
     std::fs::write(&child, "New.\n").unwrap();
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     std::fs::write(output.join("hold"), "").unwrap();
     server.request(
         4,
@@ -19086,7 +19083,7 @@ fn binary_input_content_changes_are_detected_even_with_preserved_size_and_timest
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         wait_for_file(&output.join("ready"));
         if notify {
             server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
@@ -19211,7 +19208,7 @@ fn old_pdf_input_contents_remain_protected_through_noop_errors_until_regenerated
             assert!(noop["params"]["pdfUri"].is_null());
             assert!(noop["params"]["pages"].is_null());
         }
-        std::fs::write(directory.path().join("build/latex-lsp/rebuild"), "").unwrap();
+        std::fs::write(directory.path().join("build/texquill/rebuild"), "").unwrap();
         server.request(
             6,
             "workspace/executeCommand",
@@ -19245,7 +19242,7 @@ fn first_stale_pdf_retains_original_binary_input_contents_across_repeated_noops(
         "workspace/executeCommand",
         json!({"command":"latex.build","arguments":[main]}),
     );
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     wait_for_file(&output.join("ready"));
     std::fs::write(&input, [1, 255, 0]).unwrap();
     std::fs::File::open(&input)
@@ -19304,7 +19301,7 @@ fn stale_pdf_history_uses_disk_contents_for_initially_unsaved_dynamic_inputs() {
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         wait_for_file(&output.join("ready"));
         if save_during {
             std::fs::write(child.to_file_path().unwrap(), "New.\n").unwrap();
@@ -19338,7 +19335,7 @@ fn stale_pdf_history_uses_disk_contents_for_initially_unsaved_dynamic_inputs() {
             );
             assert!(noop["params"]["pdfUri"].is_null());
         }
-        std::fs::write(directory.path().join("build/latex-lsp/rebuild"), "").unwrap();
+        std::fs::write(directory.path().join("build/texquill/rebuild"), "").unwrap();
         server.request(
             5,
             "workspace/executeCommand",
@@ -19375,7 +19372,7 @@ fn overwritten_pdfs_and_failed_driver_outputs_cannot_reuse_successful_synctex_hi
         let params = json!({"command":"latex.forwardSearch","arguments":[{"uri":main,"position":{"line":1,"character":0}}]});
         let original = server.request(3, "workspace/executeCommand", params.clone());
         assert_eq!(original["locations"][0]["page"], 1, "{original}");
-        let output = root.join("build/latex-lsp");
+        let output = root.join("build/texquill");
         let pdf = output.join("main.pdf");
         let modified = std::fs::metadata(&pdf).unwrap().modified().unwrap();
         std::fs::File::open(&pdf)
@@ -19461,7 +19458,7 @@ fn successful_noop_builds_keep_the_actual_pdf_input_scope_when_recorder_output_c
     );
     let first = server.until(|message| message["method"] == "latex/buildFinished");
     assert_eq!(first["params"]["status"], "success", "{first}");
-    std::fs::write(directory.path().join("build/latex-lsp/omit"), "").unwrap();
+    std::fs::write(directory.path().join("build/texquill/omit"), "").unwrap();
     server.request(
         3,
         "workspace/executeCommand",
@@ -19490,7 +19487,7 @@ fn successful_noop_builds_keep_the_actual_pdf_input_scope_when_recorder_output_c
         );
         assert!(rejected["params"]["pdfUri"].is_null());
     }
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     std::fs::write(output.join("rebuild"), "").unwrap();
     server.request(
         6,
@@ -19543,7 +19540,7 @@ fn replaced_synctex_data_cannot_be_adopted_by_successful_noop_builds() {
             let inverse = json!({"command":"latex.inverseSearch","arguments":[{"uri":main,"page":1,"x":10,"y":20}]});
             let original = server.request(3, "workspace/executeCommand", forward.clone());
             assert_eq!(original["locations"][0]["page"], 1, "{original}");
-            let output = root.join("build/latex-lsp");
+            let output = root.join("build/texquill");
             let mapping = output.join(format!("main.{extension}"));
             let modified = std::fs::metadata(&mapping).unwrap().modified().unwrap();
             std::fs::File::open(&mapping)
@@ -19649,7 +19646,7 @@ fn equal_size_and_timestamp_artifact_replacements_during_synctex_queries_are_rej
         for inverse in [false, true] {
             let (mut server, directory, main) = fake_synctex_server("touch ready\nwhile [ ! -f release ]; do sleep 0.02; done\nif [ \"$1\" = edit ]; then\nprintf 'SyncTeX result begin\\nInput:%s/main.tex\\nLine:2\\nColumn:0\\nSyncTeX result end\\n' \"$PWD\"\nelse\nprintf 'SyncTeX result begin\\nPage:1\\nx:10\\ny:20\\nSyncTeX result end\\n'\nfi\n");
             let root = directory.path();
-            let output = root.join("build/latex-lsp");
+            let output = root.join("build/texquill");
             if extension == "synctex.gz" {
                 std::fs::rename(output.join("main.synctex"), output.join("main.synctex.gz"))
                     .unwrap();
@@ -19749,7 +19746,7 @@ fn recorded_external_images_keep_pdf_history_and_remain_binary() {
             "{dynamic}: {rejected}"
         );
         assert!(!directory.path().join("queried").exists());
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::write(output.join("noop"), "").unwrap();
         for id in [6, 7] {
             server.request(
@@ -19818,7 +19815,7 @@ fn changed_recorded_external_images_invalidate_active_builds_with_or_without_wat
                 .any(|item| item["source"] == "latex-build"),
             "{old}"
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::write(output.join("hold"), "").unwrap();
         server.request(
             3,
@@ -19891,7 +19888,7 @@ fn content_updates_to_pdf_and_recorder_are_accepted_with_preserved_output_metada
     );
     let first = server.until(|message| message["method"] == "latex/buildFinished");
     assert_eq!(first["params"]["status"], "success", "{first}");
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     let future = std::time::SystemTime::now() + Duration::from_secs(120);
     std::fs::write(output.join("clock"), "").unwrap();
     let paths = [output.join("main.pdf"), output.join("main.fls")];
@@ -19963,7 +19960,7 @@ fn bibliography_log_content_updates_are_analyzed_with_preserved_output_metadata(
     let first = server.until(|message| message["method"] == "latex/buildFinished");
     assert_eq!(first["params"]["status"], "success", "{first}");
     assert_eq!(first["params"]["warningsCount"], 1, "{first}");
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     let log = output.join("main.blg");
     let length = std::fs::metadata(&log).unwrap().len();
     let future = std::time::SystemTime::now() + Duration::from_secs(120);
@@ -20087,7 +20084,7 @@ fn recorded_data_inputs_keep_pdf_history_without_latex_indexing() {
             "{extension}: {rejected}"
         );
         assert!(!directory.path().join("queried").exists());
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::write(output.join("noop"), "").unwrap();
         for id in [6, 7] {
             server.request(
@@ -20159,7 +20156,7 @@ fn changed_recorded_data_invalidates_active_builds_with_or_without_watcher_event
                 .any(|item| item["source"] == "latex-build"),
             "{old}"
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::write(output.join("hold"), "").unwrap();
         server.request(
             3,
@@ -20287,7 +20284,7 @@ fn recorded_binary_aliases_keep_pdf_history_and_do_not_become_latex_sources() {
             "{extension}: {rejected}"
         );
         assert!(!directory.path().join("queried").exists());
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::write(output.join("noop"), "").unwrap();
         for id in [6, 7] {
             server.request(
@@ -20358,7 +20355,7 @@ fn changed_recorded_binary_aliases_invalidate_active_builds_with_or_without_watc
                 .any(|item| item["source"] == "latex-build"),
             "{old}"
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::write(output.join("hold"), "").unwrap();
         server.request(
             3,
@@ -20487,7 +20484,7 @@ fn recorded_alias_target_changes_reject_old_pdfs_and_allow_restored_or_rebuilt_b
             "{extension}: {rejected}"
         );
         assert!(!directory.path().join("queried").exists());
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::write(output.join("noop"), "").unwrap();
         for id in [6, 7] {
             server.request(
@@ -20577,7 +20574,7 @@ fn changed_alias_targets_invalidate_active_builds_with_or_without_watcher_events
                 .any(|item| item["source"] == "latex-build"),
             "{old}"
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::write(output.join("hold"), "").unwrap();
         server.request(
             3,
@@ -20658,7 +20655,7 @@ fn new_pdf_binding_histories_drop_unused_aliases_and_preserve_uncertain_provenan
         );
         let original = server.until(|message| message["method"] == "latex/buildFinished");
         assert_eq!(original["params"]["status"], "success", "{original}");
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::write(output.join(if omit { "omit" } else { "hold" }), "").unwrap();
         server.request(
             3,
@@ -20793,7 +20790,7 @@ fn bibliography_alias_history_survives_noop_log_updates_and_recovers_after_resto
                 .is_some_and(|s| s.contains("File conditions changed")),
             "{extension}: {rejected}"
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::write(output.join("noop"), "").unwrap();
         for id in [5, 6] {
             server.request(
@@ -20902,7 +20899,7 @@ fn bibliography_alias_changes_invalidate_active_builds_even_if_only_tex_refreshe
                 .any(|d| d["source"] == "latex-build"),
             "{old}"
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::write(output.join("hold"), "").unwrap();
         if keep_log {
             std::fs::write(output.join("keep-blg"), "").unwrap();
@@ -21032,7 +21029,7 @@ fn known_external_aliases_remain_observed_when_the_new_target_is_not_indexed() {
                     .any(|d| d["source"] == "latex-build"),
                 "{old}"
             );
-            let output = directory.path().join("build/latex-lsp");
+            let output = directory.path().join("build/texquill");
             std::fs::write(output.join("hold"), "").unwrap();
             server.request(
                 4,
@@ -21128,7 +21125,7 @@ fn bibliography_and_tex_bindings_keep_independent_scopes_and_reject_unrerun_tool
         let first = server.until(|m| m["method"] == "latex/buildFinished");
         assert_eq!(first["params"]["status"], "success", "{first}");
         assert_eq!(first["params"]["dependenciesCount"], 3, "{first}");
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         let (
             omit,
             keep,
@@ -21267,7 +21264,7 @@ fn tex_only_builds_do_not_adopt_changed_bibliography_contents_or_partial_tool_lo
                     .any(|d| d["source"] == "latex-build"),
                 "{old}"
             );
-            let output = directory.path().join("build/latex-lsp");
+            let output = directory.path().join("build/texquill");
             std::fs::write(output.join("keep-bib"), "").unwrap();
             if partial {
                 std::fs::write(
@@ -21465,7 +21462,7 @@ fn known_external_bindings_track_unindexed_target_contents_and_active_retargets(
                 "{rejected}"
             );
             assert!(!directory.path().join("queried").exists());
-            let output = directory.path().join("build/latex-lsp");
+            let output = directory.path().join("build/texquill");
             std::fs::write(output.join("noop"), "").unwrap();
             for id in [7, 8] {
                 server.request(
@@ -21620,7 +21617,7 @@ fn compiler_input_roles_survive_open_edits_close_and_versioned_cross_file_rename
         } else {
             "\\documentclass{article}\n\\def\\selected{.inputs/alias}\\usepackage{\\selected}\\fromalias\n"
         };
-        let at = latex_lsp::text::Text::new(source.into()).position(if database {
+        let at = texquill::text::Text::new(source.into()).position(if database {
             source.find("cite{entry}").unwrap() + 6
         } else {
             source.find("\\fromalias").unwrap() + 3
@@ -21707,7 +21704,7 @@ fn compiler_input_roles_survive_open_edits_close_and_versioned_cross_file_rename
             let path = uri.to_file_path().unwrap();
             let changes: Vec<lsp_types::TextEdit> =
                 serde_json::from_value(edit["edits"].clone()).unwrap();
-            let text = latex_lsp::text::Text::new(std::fs::read_to_string(&path).unwrap())
+            let text = texquill::text::Text::new(std::fs::read_to_string(&path).unwrap())
                 .changed(
                     changes
                         .into_iter()
@@ -21792,7 +21789,7 @@ fn bibliography_alias_data_suffixes_do_not_bypass_external_source_index_scope() 
         let opened = server.until(|m| m["method"] == "latex/buildFinished");
         assert_eq!(opened["params"]["status"], "success", "{opened}");
         assert_eq!(opened["params"]["dependenciesCount"], 2, "{opened}");
-        let at = latex_lsp::text::Text::new(source.clone())
+        let at = texquill::text::Text::new(source.clone())
             .position(source.find("cite{external-entry}").unwrap() + 7);
         let definitions = server.request(
             5,
@@ -21861,7 +21858,7 @@ fn static_bibliography_alias_roles_protect_old_pdfs_without_bibliography_logs() 
                 .is_some_and(|message| message.contains("Input contents changed")),
             "{rejected}"
         );
-        std::fs::write(directory.path().join("build/latex-lsp/noop"), "").unwrap();
+        std::fs::write(directory.path().join("build/texquill/noop"), "").unwrap();
         server.request(
             4,
             "workspace/executeCommand",
@@ -21878,7 +21875,7 @@ fn static_bibliography_alias_roles_protect_old_pdfs_without_bibliography_logs() 
 
 #[test]
 fn environment_linked_editing_tracks_incremental_changes_and_validates_positions_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let mut server = Server::start();
     let uri = Url::parse("file:///linked-editing-protocol/main.tex").unwrap();
     let alias = "file:///linked-editing-protocol/%6dain.tex";
@@ -21942,8 +21939,8 @@ fn environment_linked_editing_tracks_incremental_changes_and_validates_positions
 
 #[test]
 fn environment_linked_editing_survives_empty_names_during_incremental_replacement() {
-    use latex_lsp::text::Text;
     use lsp_types::TextDocumentContentChangeEvent;
+    use texquill::text::Text;
 
     let mut server = Server::start();
     let uri = "file:///linked-editing-empty/main.tex";
@@ -22009,7 +22006,7 @@ fn environment_linked_editing_survives_empty_names_during_incremental_replacemen
 
 #[test]
 fn environment_linked_editing_tracks_project_aliases_macro_data_and_input_changes() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main = Url::from_file_path(root.join("main.tex")).unwrap();
@@ -22073,8 +22070,8 @@ fn environment_linked_editing_tracks_project_aliases_macro_data_and_input_change
 #[test]
 #[ignore = "requires pdflatex and xelatex"]
 fn linked_environment_alias_edits_compile_over_stdio_with_native_engines() {
-    use latex_lsp::text::Text;
     use lsp_types::{LinkedEditingRanges, TextDocumentContentChangeEvent};
+    use texquill::text::Text;
     for engine in ["pdflatex", "xelatex"] {
         for (begin, end) in [
             (r"\start", r"\finish"),
@@ -22134,7 +22131,7 @@ fn linked_environment_alias_edits_compile_over_stdio_with_native_engines() {
             );
             assert_eq!(finished["params"]["errorsCount"], 0, "{finished}");
             assert_eq!(finished["params"]["stale"], false, "{finished}");
-            assert!(root.join("build/latex-lsp/main.pdf").is_file());
+            assert!(root.join("build/texquill/main.pdf").is_file());
             server.request(4, "shutdown", Value::Null);
             server.notify("exit", Value::Null);
             server.wait_exit(0);
@@ -22144,8 +22141,8 @@ fn linked_environment_alias_edits_compile_over_stdio_with_native_engines() {
 
 #[test]
 fn color_picker_edits_track_incremental_changes_and_validate_context_over_stdio() {
-    use latex_lsp::text::Text;
     use lsp_types::{ColorPresentation, TextDocumentContentChangeEvent};
+    use texquill::text::Text;
     let mut server = Server::start();
     let uri = Url::parse("file:///color-protocol/main.tex").unwrap();
     let alias = "file:///color-protocol/%6dain.tex";
@@ -22249,7 +22246,7 @@ fn color_picker_edits_track_incremental_changes_and_validate_context_over_stdio(
 #[test]
 #[cfg(unix)]
 fn missing_bibliography_databases_use_confirmed_project_sources_and_versioned_corrections() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for (name, uncertain, truncated) in [
         ("settings.tex", false, false),
         ("settings.sty", false, false),
@@ -22299,7 +22296,7 @@ exit 1
                 main = main_path.display(),
                 settings = settings_path.display(),
                 trailer = if truncated {
-                    "[latex-lsp: middle of compiler output omitted]"
+                    "[texquill: middle of compiler output omitted]"
                 } else {
                     ""
                 }
@@ -22582,7 +22579,7 @@ exit 1
                     "workspace/executeCommand",
                     json!({"command":"latex.build","arguments":[main]}),
                 );
-                let output = directory.path().join("build/latex-lsp");
+                let output = directory.path().join("build/texquill");
                 let deadline = std::time::Instant::now() + Duration::from_secs(5);
                 while !output.join("ready").exists() {
                     assert!(
@@ -22704,7 +22701,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                 "workspace/executeCommand",
                 json!({"command":"latex.build","arguments":[main]}),
             );
-            let output = root.join("build/latex-lsp");
+            let output = root.join("build/texquill");
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             while !output.join("ready").exists() {
                 assert!(std::time::Instant::now() < deadline);
@@ -22798,7 +22795,7 @@ exit 1
                         "workspace/executeCommand",
                         json!({"command":"latex.build","arguments":[main]}),
                     );
-                    let output = directory.path().join("build/latex-lsp");
+                    let output = directory.path().join("build/texquill");
                     let deadline = std::time::Instant::now() + Duration::from_secs(5);
                     while !output.join("ready").exists() {
                         assert!(
@@ -22907,7 +22904,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                 "workspace/executeCommand",
                 json!({"command":"latex.build","arguments":[main]}),
             );
-            let output = root.join("build/latex-lsp");
+            let output = root.join("build/texquill");
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             while !output.join("ready").exists() {
                 assert!(std::time::Instant::now() < deadline);
@@ -22992,7 +22989,7 @@ exit 1
                     "workspace/executeCommand",
                     json!({"command":"latex.build","arguments":[main]}),
                 );
-                let output = root.join("build/latex-lsp");
+                let output = root.join("build/texquill");
                 let deadline = std::time::Instant::now() + Duration::from_secs(5);
                 while !output.join("ready").exists() {
                     assert!(
@@ -23115,7 +23112,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                 "workspace/executeCommand",
                 json!({"command":"latex.build","arguments":[main]}),
             );
-            let output = root.join("build/latex-lsp");
+            let output = root.join("build/texquill");
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             while !output.join("ready").exists() {
                 assert!(std::time::Instant::now() < deadline);
@@ -23139,8 +23136,8 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
 
 #[test]
 fn cmyk_color_picker_preserves_separations_and_independent_frame_colors_over_stdio() {
-    use latex_lsp::text::Text;
     use lsp_types::{ColorPresentation, TextDocumentContentChangeEvent};
+    use texquill::text::Text;
     let mut server = Server::start();
     let uri = Url::parse("file:///cmyk-protocol/main.tex").unwrap();
     let initialized = server.request(1, "initialize", json!({"processId":null,"capabilities":{}}));
@@ -23283,7 +23280,7 @@ printf '%s:2: LaTeX Warning: build %s.\n' "$2" "$count" > "$1/main.log"
             configure_rebuild(&mut server, &directory, on_save, "force-old");
             let started = server.request(2,"workspace/executeCommand",json!({"command":if initial_force {"latex.rebuild"} else {"latex.build"},"arguments":[{"uri":uri}]}));
             assert_eq!(started["rebuild"], initial_force);
-            let output = directory.path().join("build/latex-lsp");
+            let output = directory.path().join("build/texquill");
             let deadline = std::time::Instant::now() + Duration::from_secs(3);
             while !output.join("ready1").exists() {
                 assert!(std::time::Instant::now() < deadline);
@@ -23458,7 +23455,7 @@ fn cancellation_file_events_and_shutdown_discard_queued_rebuilds() {
 #[cfg(unix)]
 fn unsupported_rebuild_commands_fail_before_touching_previous_artifacts() {
     let (mut server, directory, uri) = fake_build_server("touch invoked\n", false);
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     std::fs::create_dir_all(&output).unwrap();
     for extension in ["log", "pdf"] {
         std::fs::write(output.join(format!("main.{extension}")), "previous").unwrap();
@@ -23498,7 +23495,7 @@ fn rebuild_cancellation_before_progress_acknowledgement_preserves_existing_artif
             json!({"window":{"workDoneProgress":true}}),
         );
         configure_rebuild(&mut server, &directory, false, "force");
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         if existing {
             std::fs::create_dir_all(&output).unwrap();
             for extension in ["log", "pdf", "aux", "fls"] {
@@ -23646,7 +23643,7 @@ fn static_code_inputs_keep_pdf_and_synctex_history_without_a_recorder_entry() {
             "{extension}: {rejected}"
         );
         assert!(!directory.path().join("queried").exists());
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::write(output.join("noop"), "").unwrap();
         for id in [6, 7] {
             server.request(
@@ -23717,7 +23714,7 @@ fn static_code_content_changes_invalidate_the_first_build_without_recorder_evide
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         wait_for_file(&output.join("ready"));
         std::fs::write(&code, "Modified code.\n").unwrap();
         std::fs::File::open(&code)
@@ -23793,7 +23790,7 @@ fn check_in_flight_code_input_history(command: &str) {
         "workspace/executeCommand",
         json!({"command":"latex.build","arguments":[main]}),
     );
-    let output = root.join("build/latex-lsp");
+    let output = root.join("build/texquill");
     wait_for_file(&output.join("ready"));
     let changed = source.replace("first.unknown", "second.unknown");
     std::fs::write(&main_path, &changed).unwrap();
@@ -23884,7 +23881,7 @@ fn indirect_loader_candidates_created_during_failure_discard_obsolete_diagnostic
                 "workspace/executeCommand",
                 json!({"command":"latex.build","arguments":[main]}),
             );
-            let output = directory.path().join("build/latex-lsp");
+            let output = directory.path().join("build/texquill");
             wait_for_file(&output.join("ready"));
             std::fs::write(
                 directory.path().join(format!("fixture.{extension}")),
@@ -23936,7 +23933,7 @@ fn multicite_groups_support_navigation_hints_completion_and_versioned_rename_ove
         json!({"textDocument":{"uri":main,"languageId":"latex","version":12,"text":source}}),
     );
     let position =
-        latex_lsp::text::Text::new(source.into()).position(source.rfind("{alpha}").unwrap() + 3);
+        texquill::text::Text::new(source.into()).position(source.rfind("{alpha}").unwrap() + 3);
     let target = json!({"textDocument":{"uri":main},"position":position});
     let definition = server.request(2, "textDocument/definition", target.clone());
     assert_eq!(definition[0]["uri"], bib);
@@ -23989,7 +23986,7 @@ fn volume_citations_support_hints_completion_and_versioned_rename_over_stdio() {
         json!({"textDocument":{"uri":main,"languageId":"latex","version":6,"text":source}}),
     );
     let position =
-        latex_lsp::text::Text::new(source.into()).position(source.rfind("{alpha}").unwrap() + 3);
+        texquill::text::Text::new(source.into()).position(source.rfind("{alpha}").unwrap() + 3);
     let target = json!({"textDocument":{"uri":main},"position":position});
     let definition = server.request(2, "textDocument/definition", target.clone());
     assert_eq!(definition[0]["uri"], bib);
@@ -24081,7 +24078,7 @@ fn volume_citation_build_warnings_publish_exact_ranges_and_versioned_fixes_over_
         .filter(|item| item["source"] == "latex-build")
         .collect::<Vec<_>>();
     assert_eq!(diagnostics.len(), 2);
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     for (index, diagnostic) in diagnostics.into_iter().enumerate() {
         let range: lsp_types::Range = serde_json::from_value(diagnostic["range"].clone()).unwrap();
         let start = text.offset(range.start).unwrap();
@@ -24120,7 +24117,7 @@ fn biblatex_single_citations_support_hints_completion_and_versioned_rename_over_
         json!({"textDocument":{"uri":main,"languageId":"latex","version":6,"text":source}}),
     );
     let position =
-        latex_lsp::text::Text::new(source.into()).position(source.rfind("{alpha}").unwrap() + 3);
+        texquill::text::Text::new(source.into()).position(source.rfind("{alpha}").unwrap() + 3);
     let target = json!({"textDocument":{"uri":main},"position":position});
     let definition = server.request(2, "textDocument/definition", target.clone());
     assert_eq!(definition[0]["uri"], bib);
@@ -24205,7 +24202,7 @@ fn biblatex_single_build_warnings_publish_exact_ranges_analysis_and_versioned_fi
         .filter(|item| item["source"] == "latex-build")
         .collect::<Vec<_>>();
     assert_eq!(diagnostics.len(), 2);
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     for (index, diagnostic) in diagnostics.into_iter().enumerate() {
         let range: lsp_types::Range = serde_json::from_value(diagnostic["range"].clone()).unwrap();
         let start = text.offset(range.start).unwrap();
@@ -24432,8 +24429,8 @@ fn biblatex_resources_reject_unsaved_databases_and_publish_versioned_key_renames
             .unwrap()
             .contains("refs.bib"));
         assert!(!directory.path().join("invoked").exists());
-        let at = latex_lsp::text::Text::new(source.clone())
-            .position(source.find("{alpha}").unwrap() + 2);
+        let at =
+            texquill::text::Text::new(source.clone()).position(source.find("{alpha}").unwrap() + 2);
         let definition = server.request(
             3,
             "textDocument/definition",
@@ -24491,7 +24488,7 @@ fn restoring_a_missing_biblatex_resource_during_compilation_discards_obsolete_re
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[main]}),
         );
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         for _ in 0..500 {
             if output.join("ready").exists() {
                 break;
@@ -24557,7 +24554,7 @@ fn biblatex_data_citations_publish_versioned_fixes_analysis_and_key_renames_over
         .filter(|item| item["source"] == "latex-build")
         .collect::<Vec<_>>();
     assert_eq!(diagnostics.len(), 3);
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     for (index, diagnostic) in diagnostics.into_iter().enumerate() {
         let range: lsp_types::Range = serde_json::from_value(diagnostic["range"].clone()).unwrap();
         let start = text.offset(range.start).unwrap();
@@ -24576,7 +24573,7 @@ fn biblatex_data_citations_publish_versioned_fixes_analysis_and_key_renames_over
         "textDocument/didChange",
         json!({"textDocument":{"uri":main,"version":3},"contentChanges":[{"text":corrected}]}),
     );
-    let at = latex_lsp::text::Text::new(corrected.clone())
+    let at = texquill::text::Text::new(corrected.clone())
         .position(corrected.find("\n{alpha}").unwrap() + 3);
     let edit = server.request(
         6,
@@ -24593,7 +24590,7 @@ fn biblatex_data_citations_publish_versioned_fixes_analysis_and_key_renames_over
     assert_eq!(change["edits"].as_array().unwrap().len(), 3);
     for edit in change["edits"].as_array().unwrap() {
         let range: lsp_types::Range = serde_json::from_value(edit["range"].clone()).unwrap();
-        let text = latex_lsp::text::Text::new(corrected.clone());
+        let text = texquill::text::Text::new(corrected.clone());
         let start = text.offset(range.start).unwrap();
         assert_eq!(&corrected[start - 2..start], "\n{");
         assert_eq!(edit["newText"], "renamed");
@@ -24605,8 +24602,8 @@ fn biblatex_data_citations_publish_versioned_fixes_analysis_and_key_renames_over
 
 #[test]
 fn biblatex_entrydata_supports_single_key_edits_roles_and_incremental_updates_over_stdio() {
-    use latex_lsp::text::Text;
     use lsp_types::{CompletionItem, CompletionTextEdit, TextDocumentContentChangeEvent, TextEdit};
+    use texquill::text::Text;
 
     for versioned in [false, true] {
         let mut server = Server::start();
@@ -24775,8 +24772,8 @@ fn biblatex_entrydata_supports_single_key_edits_roles_and_incremental_updates_ov
 
 #[test]
 fn biblatex_entry_queries_keep_branch_roles_and_refresh_single_key_references_over_stdio() {
-    use latex_lsp::text::Text;
     use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use texquill::text::Text;
 
     for name in ["ifentryexists", "ifentryinbib", "ifentrycategory"] {
         let category = if name == "ifentrycategory" {
@@ -24955,10 +24952,10 @@ fn biblatex_entry_queries_keep_branch_roles_and_refresh_single_key_references_ov
 
 #[test]
 fn biblatex_data_selectors_complete_typed_names_hover_and_refresh_user_overrides_over_stdio() {
-    use latex_lsp::text::Text;
     use lsp_types::{
         CompletionItem, CompletionItemKind, CompletionTextEdit, TextDocumentContentChangeEvent,
     };
+    use texquill::text::Text;
 
     let cases = [
         ("printfield", "[fm[t]", "title", 1),
@@ -25283,7 +25280,7 @@ fn bibliography_categories_support_key_editing_and_versioned_renames_over_stdio(
         "textDocument/didOpen",
         json!({"textDocument":{"uri":main,"languageId":"latex","version":12,"text":source}}),
     );
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     let start = source.find(" alpha}").unwrap() + 1;
     let position = text.position(start + 2);
     let target = json!({"textDocument":{"uri":main},"position":position});
@@ -25423,7 +25420,7 @@ fn missing_biblatex_resources_publish_versioned_fixes_and_recheck_alias_provider
                 .unwrap();
             let range: lsp_types::Range =
                 serde_json::from_value(diagnostic["range"].clone()).unwrap();
-            let text = latex_lsp::text::Text::new(source.clone());
+            let text = texquill::text::Text::new(source.clone());
             let start = text.offset(range.start).unwrap();
             assert_eq!(&source[start..text.offset(range.end).unwrap()], "reffs.bib");
             assert_eq!(&source[start - 1..start], "{");
@@ -25589,11 +25586,11 @@ fn discovered_biber_databases_with_arbitrary_suffixes_reject_unsaved_and_changed
                 "workspace/executeCommand",
                 json!({"command":"latex.build","arguments":[main]}),
             );
-            wait_for_file(&root.join("build/latex-lsp/ready"));
+            wait_for_file(&root.join("build/texquill/ready"));
             if changed {
                 std::fs::write(&path, "@book{alpha,title={Changed}}\n").unwrap();
             }
-            std::fs::write(root.join("build/latex-lsp/release"), "").unwrap();
+            std::fs::write(root.join("build/texquill/release"), "").unwrap();
             let finished = server.until(|message| message["method"] == "latex/buildFinished");
             assert_eq!(
                 finished["params"]["stale"], true,
@@ -25853,7 +25850,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                     .unwrap();
             assert_eq!(edits.len(), if missing || operand { 1 } else { 2 });
             edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
-            let fixed = latex_lsp::text::Text::new(source.into())
+            let fixed = texquill::text::Text::new(source.into())
                 .changed(
                     edits
                         .into_iter()
@@ -26016,7 +26013,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                             == 12
                     })
         });
-        let text = latex_lsp::text::Text::new(source.into());
+        let text = texquill::text::Text::new(source.into());
         let mut changes = Vec::new();
         let mut stale = None;
         for (index, item) in published["params"]["diagnostics"]
@@ -26151,7 +26148,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
     );
     let child = Url::from_file_path(directory.path().join("child.tex")).unwrap();
     let source = "Before 中 and 😀 and 中.\n";
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     std::fs::write(child.to_file_path().unwrap(), source).unwrap();
     server.notify(
         "textDocument/didOpen",
@@ -26575,10 +26572,10 @@ printf '%s\n' "Package rerunfilecheck Warning: File \`main.idx' has changed." "(
 
 #[test]
 fn quoted_citation_keys_complete_and_rename_across_files_with_incremental_updates_over_stdio() {
-    use latex_lsp::text::Text;
     use lsp_types::{
         DocumentChanges, OneOf, TextDocumentContentChangeEvent, TextEdit, WorkspaceEdit,
     };
+    use texquill::text::Text;
     for (versioned, multiline) in [(false, false), (true, false), (false, true), (true, true)] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -26752,8 +26749,8 @@ fn quoted_citation_keys_complete_and_rename_across_files_with_incremental_update
 
 #[test]
 fn citation_and_bibliography_selection_ranges_refresh_incremental_utf16_edits_over_stdio() {
-    use latex_lsp::text::Text;
     use lsp_types::{Range, SelectionRange};
+    use texquill::text::Text;
     fn check(selection: &Value, source: &str, position: lsp_types::Position, expected: &[&str]) {
         let text = Text::new(source.into());
         let selection: SelectionRange = serde_json::from_value(selection.clone()).unwrap();
@@ -26940,8 +26937,8 @@ fn citation_and_bibliography_selection_ranges_refresh_incremental_utf16_edits_ov
 
 #[test]
 fn bibtex_expression_selection_ranges_refresh_literals_concatenations_and_preambles_over_stdio() {
-    use latex_lsp::text::Text;
     use lsp_types::SelectionRange;
+    use texquill::text::Text;
     fn selected(
         server: &mut Server,
         id: u64,
@@ -27115,7 +27112,7 @@ fn bibtex_expression_selection_ranges_refresh_literals_concatenations_and_preamb
 
 #[test]
 fn fancyvrb_inline_body_execution_follows_incremental_macro_wrapping_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     std::fs::write(root.join("chapter.tex"), "Chapter text").unwrap();
@@ -27312,7 +27309,7 @@ fn fancyvrb_inline_body_execution_follows_incremental_macro_wrapping_over_stdio(
 
 #[test]
 fn fancyvrb_inline_completions_and_saved_name_hints_follow_incremental_edits_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main = Url::from_file_path(root.join("main.tex")).unwrap();
@@ -27379,7 +27376,7 @@ fn fancyvrb_inline_completions_and_saved_name_hints_follow_incremental_edits_ove
 
 #[test]
 fn fvextra_environment_settings_refresh_symbols_dependencies_and_rename_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     std::fs::write(root.join("chapter.tex"), "Chapter text").unwrap();
@@ -27440,7 +27437,7 @@ fn fvextra_environment_settings_refresh_symbols_dependencies_and_rename_over_std
 
 #[test]
 fn escaped_inline_code_refreshes_aliases_redefinitions_and_unfinished_arguments_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     std::fs::write(root.join("chapter.tex"), "Chapter text").unwrap();
@@ -27601,7 +27598,7 @@ fn escaped_inline_code_refreshes_aliases_redefinitions_and_unfinished_arguments_
 
 #[test]
 fn glossary_expl3_and_structural_actions_work_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let mut server = Server::start();
     let uri = Url::parse("file:///new-symbol-protocol/main.tex").unwrap();
     let initialized=server.request(1,"initialize",json!({"processId":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","source.fixAll"]}}}}}}));
@@ -27664,8 +27661,8 @@ fn glossary_expl3_and_structural_actions_work_over_stdio() {
 #[test]
 #[cfg(unix)]
 fn range_formatting_uses_context_preserves_outside_and_validates_utf16_ranges() {
-    use latex_lsp::text::Text;
     use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use texquill::text::Text;
     let (mut server, directory, uri) = formatting_server("cat > input; sed 's/^/  /' input", 10);
     let source = "% outside\r\n😀 selected\r\nuntouched\r\n";
     open_formatting_document(&mut server, &uri, source);
@@ -27770,8 +27767,8 @@ fn range_formatting_rejects_stale_results_and_honors_cancellation() {
 #[test]
 #[ignore = "requires tex-fmt on PATH"]
 fn range_formatting_with_real_tex_fmt_preserves_context_verbatim_and_is_idempotent() {
-    use latex_lsp::text::Text;
     use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
     let source = "\\begin{itemize}\r\n\\item 😀 selected\r\n\\item outside\r\n\\end{itemize}\r\n\\begin{verbatim}\r\n   raw   data\r\n\\end{verbatim}\r\n";
@@ -27823,8 +27820,8 @@ fn range_formatting_with_real_tex_fmt_preserves_context_verbatim_and_is_idempote
 
 #[test]
 fn bibliography_formatting_uses_native_fields_preserves_values_and_is_idempotent() {
-    use latex_lsp::text::Text;
     use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(dir.path().join("refs.bib")).unwrap();
     std::fs::write(dir.path().join("refs.bib"), "disk content").unwrap();
@@ -27903,8 +27900,8 @@ fn bibliography_formatting_uses_native_fields_preserves_values_and_is_idempotent
 
 #[test]
 fn bibliography_formatting_ranges_work_for_adjacent_entries_and_untitled_buffers() {
-    use latex_lsp::text::Text;
     use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use texquill::text::Text;
     let first = "@book{one,title={😀}}";
     let second = "@book{two,title={Outside}}";
     let source = format!("{first}{second}");
@@ -27999,9 +27996,9 @@ fn static_bibliography_field_diagnostics_refresh_push_and_pull_without_building(
         let items = report(&mut server, 2, 1, 1);
         assert_eq!(items.as_array().unwrap().len(), 1);
         assert_eq!(items[0]["code"], "repeated-bibliography-field");
-        assert_eq!(items[0]["source"], "latex-lsp");
+        assert_eq!(items[0]["source"], "texquill");
         let at = source.find("TITLE").unwrap();
-        let text = latex_lsp::text::Text::new(source.into());
+        let text = texquill::text::Text::new(source.into());
         assert_eq!(
             items[0]["range"],
             serde_json::to_value(text.range(at, at + 5)).unwrap()
@@ -28032,8 +28029,8 @@ fn static_bibliography_field_diagnostics_refresh_push_and_pull_without_building(
 #[test]
 #[cfg(unix)]
 fn range_formatting_clamps_oversized_columns_for_latex_and_bibliography() {
-    use latex_lsp::text::Text;
     use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use texquill::text::Text;
     for language in ["latex", "bibtex"] {
         let (mut server, directory, uri) = formatting_server("sed 's/^/  /'", 10);
         let (source, expected) = if language == "latex" {
@@ -28277,7 +28274,7 @@ printf 'PWD %s\nINPUT %s\n' "$PWD" "$2" > "$1/main.fls"
                 assert_eq!(finished["params"]["analysis"]["rerunRequired"], false);
                 assert_eq!(finished["params"]["analysis"]["indexProcessingRounds"], 1);
                 assert_eq!(
-                    std::fs::read(directory.path().join("build/latex-lsp/passes"))
+                    std::fs::read(directory.path().join("build/texquill/passes"))
                         .unwrap()
                         .len(),
                     3
@@ -28296,7 +28293,7 @@ printf 'PWD %s\nINPUT %s\n' "$PWD" "$2" > "$1/main.fls"
                     .unwrap()
                     .contains("code actions again"));
                 assert_eq!(
-                    std::fs::read(directory.path().join("build/latex-lsp/passes"))
+                    std::fs::read(directory.path().join("build/texquill/passes"))
                         .unwrap()
                         .len(),
                     1
@@ -28322,7 +28319,7 @@ fn index_workflow_over_stdio_keeps_status_final_artifacts_and_saved_dependencies
         .as_str()
         .unwrap()
         .contains("Save"));
-    assert!(!directory.path().join("build/latex-lsp/passes").exists());
+    assert!(!directory.path().join("build/texquill/passes").exists());
     server.notify(
         "textDocument/didClose",
         json!({"textDocument":{"uri":style}}),
@@ -28346,13 +28343,13 @@ fn index_workflow_over_stdio_keeps_status_final_artifacts_and_saved_dependencies
         1
     );
     assert_eq!(
-        std::fs::read(directory.path().join("build/latex-lsp/passes"))
+        std::fs::read(directory.path().join("build/texquill/passes"))
             .unwrap()
             .len(),
         2
     );
     assert_eq!(
-        std::fs::read_to_string(directory.path().join("build/latex-lsp/main.ind")).unwrap(),
+        std::fs::read_to_string(directory.path().join("build/texquill/main.ind")).unwrap(),
         "\\indexentry{Apple}{1}\n"
     );
     let status = server.request(
@@ -28373,7 +28370,7 @@ fn index_workflow_cancellation_remains_responsive_and_blocks_shared_named_output
         "printf ready > ready\nwhile test ! -f release; do sleep 0.02; done\ncat \"$1\" > \"$2\"",
         true,
     );
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     std::fs::create_dir_all(&output).unwrap();
     std::fs::write(output.join("shared.idx"), "shared input").unwrap();
     std::fs::write(output.join("shared.ind"), "old index").unwrap();
@@ -28440,7 +28437,7 @@ fn index_workflow_cancellation_remains_responsive_and_blocks_shared_named_output
 fn index_workflow_source_edits_and_style_file_events_invalidate_inflight_results() {
     for style_event in [false, true] {
         let (mut server, directory, uri) = index_workflow_server("printf ready > ready\nwhile test ! -f release; do sleep 0.02; done\ncat \"$1\" > \"$2\"", false);
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::create_dir_all(&output).unwrap();
         std::fs::write(output.join("main.ind"), "old index").unwrap();
         server.request(
@@ -28531,7 +28528,7 @@ fn bibliography_workflow_over_stdio_checks_saved_dependencies_and_reports_final_
         server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[uri]}}));
         let rejected = server.until(|message| message["id"] == 2);
         assert_eq!(rejected["error"]["code"], -32602, "{rejected}");
-        assert!(!directory.path().join("build/latex-lsp/passes").exists());
+        assert!(!directory.path().join("build/texquill/passes").exists());
         server.notify(
             "textDocument/didClose",
             json!({"textDocument":{"uri":style}}),
@@ -28552,7 +28549,7 @@ fn bibliography_workflow_over_stdio_checks_saved_dependencies_and_reports_final_
         );
         assert_eq!(result["analysis"]["bibliographyProcessingRounds"], 1);
         assert_eq!(
-            std::fs::read(directory.path().join("build/latex-lsp/passes"))
+            std::fs::read(directory.path().join("build/texquill/passes"))
                 .unwrap()
                 .len(),
             3
@@ -28579,7 +28576,7 @@ if test ! -f "$root/repaired"; then
 fi
 "#;
     let (mut server, directory, uri) = bibliography_workflow_server(body, "bibtex");
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     std::fs::create_dir_all(&output).unwrap();
     std::fs::write(output.join("main.bbl"), "old bibliography").unwrap();
     let bib = Url::from_file_path(directory.path().join("refs.bib")).unwrap();
@@ -28646,7 +28643,7 @@ fn bibliography_workflow_cancellation_and_dependency_events_remain_responsive() 
     for change in ["cancel", "style-event", "source-edit"] {
         let body = "printf ready > \"$root/ready\"\nwhile test ! -f \"$root/release\"; do sleep 0.02; done\nprintf generated > \"$directory/$job.bbl\"";
         let (mut server, directory, uri) = bibliography_workflow_server(body, "bibtex");
-        let output = directory.path().join("build/latex-lsp");
+        let output = directory.path().join("build/texquill");
         std::fs::create_dir_all(&output).unwrap();
         std::fs::write(output.join("main.bbl"), "old bibliography").unwrap();
         server.request(
@@ -28772,7 +28769,7 @@ fn bibliography_workflow_guarded_rebuild_actions_recheck_backend_job_and_removed
             assert_eq!(finished["params"]["status"], "success", "{finished}");
             assert_eq!(finished["params"]["analysis"]["rerunRequired"], false);
             assert_eq!(
-                std::fs::read(directory.path().join("build/latex-lsp/passes"))
+                std::fs::read(directory.path().join("build/texquill/passes"))
                     .unwrap()
                     .len(),
                 4
@@ -28780,7 +28777,7 @@ fn bibliography_workflow_guarded_rebuild_actions_recheck_backend_job_and_removed
         } else {
             assert_eq!(response["error"]["code"], -32602, "{change}: {response}");
             assert_eq!(
-                std::fs::read(directory.path().join("build/latex-lsp/passes"))
+                std::fs::read(directory.path().join("build/texquill/passes"))
                     .unwrap()
                     .len(),
                 1
@@ -28814,7 +28811,7 @@ fi
     std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
     let arguments = json!([directory.path().join("compiler.sh"), "%o", "%f", "%j"]);
     server.notify("workspace/didChangeConfiguration", json!({"settings":{"distribution":{"enabled":false},"build":{"executable":"/bin/sh","arguments":arguments,"rebuildArguments":arguments,"indexTools":[{"executable":tool,"dependencies":["style.ist"]}]}}}));
-    let output = directory.path().join("build/latex-lsp");
+    let output = directory.path().join("build/texquill");
     std::fs::create_dir_all(&output).unwrap();
     std::fs::write(output.join("main.ind"), "old index").unwrap();
     let style = Url::from_file_path(directory.path().join("style.ist")).unwrap();
@@ -28924,7 +28921,7 @@ fn on_type_formatting_advertises_triggers_uses_live_buffers_and_can_be_disabled(
     let sub = directory.path().join("disabled");
     std::fs::create_dir(&sub).unwrap();
     std::fs::write(
-        sub.join(".latex-lsp.json"),
+        sub.join(".texquill.json"),
         r#"{"formatting":{"onType":false}}"#,
     )
     .unwrap();
@@ -29020,7 +29017,7 @@ printf 'PWD %s\nINPUT %s\n' "$PWD" "$2" > "$1/main.fls"
 #[test]
 #[cfg(unix)]
 fn generated_bibliography_first_builds_and_regeneration_keep_valid_diagnostics_and_history() {
-    for output in ["build/latex-lsp", "."] {
+    for output in ["build/texquill", "."] {
         let (mut server, directory, uri) = generated_bibliography_server(output, true);
         for (id, database) in [(2, "first database"), (3, "second database")] {
             std::fs::write(directory.path().join("payload"), database).unwrap();
@@ -29051,8 +29048,8 @@ fn generated_bibliography_first_builds_and_regeneration_keep_valid_diagnostics_a
 #[cfg(unix)]
 fn generated_bibliography_requires_write_evidence_and_stable_backend_inputs() {
     for tamper in [false, true] {
-        let (mut server, directory, uri) = generated_bibliography_server("build/latex-lsp", tamper);
-        let artifacts = directory.path().join("build/latex-lsp");
+        let (mut server, directory, uri) = generated_bibliography_server("build/texquill", tamper);
+        let artifacts = directory.path().join("build/texquill");
         std::fs::create_dir_all(&artifacts).unwrap();
         std::fs::write(artifacts.join("main.bbl"), "old bibliography").unwrap();
         if tamper {
@@ -29088,7 +29085,7 @@ fn generated_bibliography_requires_write_evidence_and_stable_backend_inputs() {
 #[test]
 #[cfg(unix)]
 fn generated_bibliography_does_not_adopt_a_compiler_overwrite_of_an_open_buffer() {
-    let (mut server, directory, uri) = generated_bibliography_server("build/latex-lsp", true);
+    let (mut server, directory, uri) = generated_bibliography_server("build/texquill", true);
     server.request(
         2,
         "workspace/executeCommand",
@@ -29097,7 +29094,7 @@ fn generated_bibliography_does_not_adopt_a_compiler_overwrite_of_an_open_buffer(
     let first = server.until(|message| message["method"] == "latex/buildFinished");
     assert_eq!(first["params"]["stale"], false, "{first}");
     let generated =
-        Url::from_file_path(directory.path().join("build/latex-lsp/generated.bib")).unwrap();
+        Url::from_file_path(directory.path().join("build/texquill/generated.bib")).unwrap();
     server.notify("textDocument/didOpen", json!({"textDocument":{"uri":generated,"languageId":"bibtex","version":1,"text":"first database"}}));
     std::fs::write(directory.path().join("payload"), "second database").unwrap();
     server.request(
@@ -29154,7 +29151,7 @@ fn generated_bibliography_with_real_tex_and_bibtex_is_fresh_over_stdio() {
 #[test]
 #[cfg(unix)]
 fn generated_bibliography_watcher_events_wait_for_pipeline_validation() {
-    for output in ["build/latex-lsp", "."] {
+    for output in ["build/texquill", "."] {
         let (mut server, directory, uri) = generated_bibliography_server(output, true);
         let root = directory.path();
         let tool = root.join("bibliography-tool.sh");
@@ -29196,7 +29193,7 @@ fn generated_bibliography_watcher_events_wait_for_pipeline_validation() {
 
 #[test]
 fn call_hierarchy_over_stdio_links_macro_and_file_callers_and_rejects_stale_items() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main_source = "\\documentclass{article}\n\\input{macros}\n\\input{child}\n\\leaf\n";
@@ -29438,7 +29435,7 @@ exit 1
         assert_eq!(preview["dryRun"], true);
         assert_eq!(preview["files"].as_array().unwrap().len(), 2);
         assert_eq!(preview["removed"], json!([]));
-        let out = dir.path().join("build/latex-lsp");
+        let out = dir.path().join("build/texquill");
         assert!(out.join("main.aux").exists());
         assert_eq!(
             server.request(
@@ -29585,7 +29582,7 @@ fn cleanup_rejects_artifacts_shared_with_another_completed_project() {
         .as_str()
         .unwrap()
         .contains("shared"));
-    assert!(dir.path().join("build/latex-lsp/shared.pdf").exists());
+    assert!(dir.path().join("build/texquill/shared.pdf").exists());
     server.request(4, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
@@ -29718,7 +29715,7 @@ fn user_command_completion_resolution_rejects_changed_definitions_and_invalid_da
 
 #[test]
 fn call_hierarchy_static_named_calls_link_cross_file_targets_and_follow_primitive_redefinitions() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
@@ -29805,7 +29802,7 @@ fn call_hierarchy_static_named_calls_link_cross_file_targets_and_follow_primitiv
 
 #[test]
 fn call_hierarchy_noexpand_uses_single_tokens_named_spaces_and_current_user_redefinitions() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let mut server = Server::start();
     server.request(1,"initialize",json!({"processId":null,"rootUri":null,"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
     server.notify("initialized", json!({}));
@@ -29950,7 +29947,7 @@ fn retargeted_output_directory_aliases_keep_active_build_and_cleanup_conflicts_p
 
 #[test]
 fn user_command_signature_documentation_updates_with_project_buffers_and_close() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
@@ -30010,7 +30007,7 @@ fn user_command_signature_documentation_updates_with_project_buffers_and_close()
 
 #[test]
 fn user_environment_signature_documentation_uses_the_environment_declaration() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let mut server = Server::start();
     server.request(1,"initialize",json!({"processId":null,"rootUri":null,"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
     server.notify("initialized", json!({}));
@@ -30049,7 +30046,7 @@ fn user_environment_signature_documentation_uses_the_environment_declaration() {
 
 #[test]
 fn user_environment_documentation_hover_and_completion_follow_project_buffers() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for deferred in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -30176,7 +30173,7 @@ fn user_environment_documentation_hover_and_completion_follow_project_buffers() 
 
 #[test]
 fn code_action_resolution_negotiates_edits_and_preserves_the_original_action() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for (data_support, property) in [(true, "edit"), (false, "edit"), (true, "command")] {
         let uri = Url::parse("untitled:resolved-actions.tex").unwrap();
         let source = "\\begin{document}\r\n😀 Hello world\r\n\\end{document}";
@@ -30298,7 +30295,7 @@ fn code_action_resolution_supports_syntax_quickfixes_and_source_fix_all() {
             })
             .collect::<Vec<_>>();
         edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
-        let text = latex_lsp::text::Text::new(source.into());
+        let text = texquill::text::Text::new(source.into());
         let mut corrected = source.to_owned();
         for edit in edits {
             corrected.replace_range(
@@ -30306,8 +30303,8 @@ fn code_action_resolution_supports_syntax_quickfixes_and_source_fix_all() {
                 &edit.new_text,
             );
         }
-        let doc = latex_lsp::project::workspace::Document::new(&uri, corrected, Some(2));
-        assert!(latex_lsp::language::features::diagnostics(&doc).is_empty());
+        let doc = texquill::project::workspace::Document::new(&uri, corrected, Some(2));
+        assert!(texquill::language::features::diagnostics(&doc).is_empty());
     }
     server.request(id, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
@@ -30413,7 +30410,7 @@ fn on_type_formatting_respects_noexpand_spaces_named_calls_and_user_redefinition
 
 #[test]
 fn refactor_parameter_context_rejects_data_and_tracks_project_definitions_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for deferred in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -30471,7 +30468,7 @@ fn refactor_parameter_context_rejects_data_and_tracks_project_definitions_over_s
 
 #[test]
 fn command_extraction_reserves_project_names_and_revalidates_deferred_collisions() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
@@ -30527,7 +30524,7 @@ fn command_extraction_reserves_project_names_and_revalidates_deferred_collisions
 
 #[test]
 fn structural_refactors_track_math_groups_and_unsaved_wrapper_meanings_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
@@ -30650,7 +30647,7 @@ fn reference_diagnostics_and_inlay_hints_follow_unsaved_parameter_and_command_se
 
 #[test]
 fn named_references_publish_exact_warnings_hints_and_follow_interface_redefinitions() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
@@ -30742,7 +30739,7 @@ fn named_references_publish_exact_warnings_hints_and_follow_interface_redefiniti
 
 #[test]
 fn duplicate_key_related_locations_refresh_over_push_and_pull_without_building() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let uri = Url::parse("untitled:duplicate-keys.bib").unwrap();
     let source = "@book{键,title={😀 First}}\r\n@article{键,title={Second}}";
     let mut server = Server::start();
@@ -30804,7 +30801,7 @@ fn duplicate_key_related_locations_refresh_over_push_and_pull_without_building()
 
 #[test]
 fn named_reference_keys_navigate_and_return_versioned_cross_file_renames_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let chapter = Url::from_file_path(dir.path().join("chapter.tex")).unwrap();
@@ -30869,7 +30866,7 @@ fn named_reference_keys_navigate_and_return_versioned_cross_file_renames_over_st
 
 #[test]
 fn named_key_completions_return_precise_edits_and_track_unsaved_redefinitions_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
@@ -30943,7 +30940,7 @@ fn named_key_completions_return_precise_edits_and_track_unsaved_redefinitions_ov
 
 #[test]
 fn refactor_math_alias_contexts_follow_unsaved_cross_file_definitions_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
@@ -31014,7 +31011,7 @@ fn refactor_math_alias_contexts_follow_unsaved_cross_file_definitions_over_stdio
 
 #[test]
 fn forwarding_reference_keys_refresh_diagnostics_hints_completion_and_versioned_edits_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
@@ -31151,7 +31148,7 @@ fn forwarding_reference_keys_refresh_diagnostics_hints_completion_and_versioned_
 
 #[test]
 fn math_semantics_diagnostics_refresh_from_unsaved_cross_file_alias_and_parameter_changes() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for pull in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -31234,7 +31231,7 @@ fn math_semantics_diagnostics_refresh_from_unsaved_cross_file_alias_and_paramete
 #[test]
 fn bibliography_category_names_support_versioned_cross_file_edits_and_unsaved_redefinitions_over_stdio(
 ) {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let categories = Url::from_file_path(dir.path().join("categories.tex")).unwrap();
@@ -31324,7 +31321,7 @@ fn bibliography_category_names_support_versioned_cross_file_edits_and_unsaved_re
 
 #[test]
 fn direct_reference_keys_refresh_project_semantics_and_reject_partial_renames_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let definitions = Url::from_file_path(dir.path().join("definitions.tex")).unwrap();
@@ -31417,7 +31414,7 @@ fn direct_reference_keys_refresh_project_semantics_and_reject_partial_renames_ov
 #[test]
 fn biblatex_callback_code_supports_category_edits_and_refreshes_unsaved_hook_definitions_over_stdio(
 ) {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let definitions = Url::from_file_path(dir.path().join("definitions.tex")).unwrap();
@@ -31622,7 +31619,7 @@ fn input_hook_type_completion_and_hover_follow_unsaved_project_meanings() {
         "textDocument/didOpen",
         json!({"textDocument":{"uri":chapter,"languageId":"latex","version":3,"text":source}}),
     );
-    let text = latex_lsp::text::Text::new(source.into());
+    let text = texquill::text::Text::new(source.into());
     let position = text.position(source.find("BOook").unwrap() + 2);
     let params = json!({"textDocument":{"uri":chapter},"position":position});
     let response = server.request(2, "textDocument/completion", params.clone());
@@ -31670,7 +31667,7 @@ fn input_hook_type_completion_and_hover_follow_unsaved_project_meanings() {
 #[test]
 fn bibliography_sections_preserve_raw_resource_headers_and_incremental_reference_edits_over_stdio()
 {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let mut server = Server::start();
     server.request(1, "initialize", json!({"processId":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
     server.notify("initialized", json!({}));
@@ -31756,7 +31753,7 @@ fn bibliography_sections_preserve_raw_resource_headers_and_incremental_reference
 #[test]
 fn section_resource_changes_rename_exact_default_identities_and_restore_empty_list_calls_over_stdio(
 ) {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for document_changes in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -31845,7 +31842,7 @@ fn section_resource_changes_rename_exact_default_identities_and_restore_empty_li
 
 #[test]
 fn registered_section_files_complete_link_and_move_without_exposing_unused_entries_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
     let bib = Url::from_file_path(directory.path().join("section.bib")).unwrap();
@@ -31936,8 +31933,8 @@ fn registered_section_files_complete_link_and_move_without_exposing_unused_entri
 
 #[test]
 fn selected_section_file_items_complete_link_and_move_over_stdio() {
-    use latex_lsp::text::Text;
     use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use texquill::text::Text;
     for document_changes in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -32052,7 +32049,7 @@ fn selected_section_file_items_complete_link_and_move_over_stdio() {
 
 #[test]
 fn bibliography_resource_option_boundaries_track_the_filename_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let mut server = Server::start();
     server.request(1,"initialize",json!({"processId":null,"rootUri":null,"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
     server.notify("initialized", json!({}));
@@ -32099,7 +32096,7 @@ fn bibliography_resource_option_boundaries_track_the_filename_over_stdio() {
 
 #[test]
 fn imported_resource_reader_meanings_refresh_without_changing_parent_versions_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
     let provider = Url::from_file_path(directory.path().join("provider.sty")).unwrap();
@@ -32164,7 +32161,7 @@ fn imported_resource_reader_meanings_refresh_without_changing_parent_versions_ov
 
 #[test]
 fn precollected_resource_path_edits_follow_unsaved_macro_boundaries_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
     let bib = Url::from_file_path(directory.path().join("refs.bib")).unwrap();
@@ -32273,7 +32270,7 @@ fn resource_links_do_not_reinterpret_precollected_comments_after_unsaved_changes
 
 #[test]
 fn deferred_named_resource_paths_follow_imported_unsaved_aliases_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let directory = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
     let provider = Url::from_file_path(directory.path().join("provider.sty")).unwrap();
@@ -32353,7 +32350,7 @@ fn deferred_named_resource_paths_follow_imported_unsaved_aliases_over_stdio() {
 #[test]
 fn imported_parameter_sections_refresh_key_protection_without_changing_parent_versions_over_stdio()
 {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for document_changes in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -33314,7 +33311,7 @@ fn section_key_references_and_highlights_refresh_all_shared_consumers_over_stdio
     }
     let key_range = |text: &str, prefix: &str, key: &str| {
         let at = text.find(prefix).unwrap() + prefix.len();
-        latex_lsp::text::Text::new(text.into()).range(at, at + key.len())
+        texquill::text::Text::new(text.into()).range(at, at + key.len())
     };
     let declaration = key_range(library, "@book{", "parent");
     let relation = key_range(library, "crossref={", "parent");
@@ -33403,7 +33400,7 @@ fn section_key_references_and_highlights_refresh_all_shared_consumers_over_stdio
 
 #[test]
 fn section_key_renames_preserve_versions_and_reject_capture_or_shared_conflicts_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -33554,7 +33551,7 @@ fn section_key_renames_preserve_versions_and_reject_capture_or_shared_conflicts_
 }
 #[test]
 fn source_set_navigation_tracks_numeric_sections_and_unsaved_input_order_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let sets = main.join("sets.tex").unwrap();
@@ -33672,7 +33669,7 @@ fn source_set_navigation_tracks_numeric_sections_and_unsaved_input_order_over_st
 
 #[test]
 fn source_set_navigation_requires_shared_unsaved_consumers_to_agree_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let chapter = main.join("chapter.tex").unwrap();
@@ -33726,7 +33723,7 @@ fn source_set_navigation_requires_shared_unsaved_consumers_to_agree_over_stdio()
 
 #[test]
 fn bibliography_preamble_updates_revoke_section_key_proofs_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let bib = main.join("section.bib").unwrap();
@@ -33806,7 +33803,7 @@ fn bibliography_preamble_updates_revoke_section_key_proofs_over_stdio() {
 }
 #[test]
 fn source_set_relation_targets_follow_unsaved_execution_and_consumers_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let bib = main.join("section.bib").unwrap();
@@ -33923,7 +33920,7 @@ fn source_set_relation_targets_follow_unsaved_execution_and_consumers_over_stdio
 }
 #[test]
 fn source_set_relation_completion_tracks_unsaved_identities_metadata_edits_and_limits_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let bib = main.join("section.bib").unwrap();
@@ -34074,7 +34071,7 @@ fn source_set_relation_completion_tracks_unsaved_identities_metadata_edits_and_l
 }
 #[test]
 fn xdata_relation_completions_follow_unsaved_provider_types_and_alias_owners_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let bib = main.join("refs.bib").unwrap();
@@ -34160,7 +34157,7 @@ fn xdata_relation_completions_follow_unsaved_provider_types_and_alias_owners_ove
 
 #[test]
 fn xdata_relation_completions_track_named_set_overrides_without_resource_selection_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let bib = main.join("refs.bib").unwrap();
@@ -34227,8 +34224,8 @@ fn xdata_relation_completions_track_named_set_overrides_without_resource_selecti
 #[test]
 fn source_set_complete_reference_graphs_preserve_numeric_identity_and_unsaved_consumers_over_stdio()
 {
-    use latex_lsp::text::Text;
     use lsp_types::Location;
+    use texquill::text::Text;
     fn location(uri: &Url, text: &str, marker: &str, name: &str) -> Location {
         let start = text.find(marker).unwrap() + marker.len();
         Location::new(
@@ -34417,8 +34414,8 @@ fn source_set_complete_reference_graphs_preserve_numeric_identity_and_unsaved_co
 
 #[test]
 fn source_set_renames_keep_numeric_identity_versions_and_certify_raw_dependencies_over_stdio() {
-    use latex_lsp::text::Text;
     use lsp_types::{Location, TextEdit};
+    use texquill::text::Text;
     fn item(uri: &Url, text: &str, marker: &str, name: &str) -> Location {
         let at = text.find(marker).unwrap() + marker.len();
         Location::new(
@@ -34605,7 +34602,7 @@ fn source_set_renames_keep_numeric_identity_versions_and_certify_raw_dependencie
 #[test]
 fn source_set_citation_completions_refresh_probe_identities_metadata_limits_and_unsaved_consumers_over_stdio(
 ) {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let sets = main.join("sets.tex").unwrap();
@@ -34748,7 +34745,7 @@ fn source_set_citation_completions_refresh_probe_identities_metadata_limits_and_
 
 #[test]
 fn source_set_missing_citations_and_repairs_refresh_unsaved_consumers_over_push_and_pull() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let sets = main.join("sets.tex").unwrap();
@@ -34930,7 +34927,7 @@ fn source_set_missing_citations_and_repairs_refresh_unsaved_consumers_over_push_
 
 #[test]
 fn source_set_coupled_parent_renames_track_raw_consumers_versions_and_relation_types_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let sets = main.join("sets.tex").unwrap();
@@ -35047,7 +35044,7 @@ fn source_set_coupled_parent_renames_track_raw_consumers_versions_and_relation_t
 
 #[test]
 fn source_set_disjoint_aliases_refresh_navigation_candidates_and_versioned_edits() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let bib = main.join("section.bib").unwrap();
@@ -35173,7 +35170,7 @@ fn source_set_disjoint_aliases_refresh_navigation_candidates_and_versioned_edits
 
 #[test]
 fn source_set_default_projects_preserve_alias_identity_without_refsections_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let bib = main.join("section.bib").unwrap();
@@ -35299,7 +35296,7 @@ fn source_set_default_projects_preserve_alias_identity_without_refsections_over_
 #[test]
 fn source_set_default_cross_file_requests_track_unsaved_early_book_or_missing_identities_over_stdio(
 ) {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for name in ["parent", "collected"] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -35408,7 +35405,7 @@ fn source_set_default_cross_file_requests_track_unsaved_early_book_or_missing_id
 
 #[test]
 fn large_source_projects_keep_navigation_and_unsaved_dependency_updates_responsive() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let mut source = String::from(r"\documentclass{article}\begin{document}");
@@ -35502,7 +35499,7 @@ fn large_source_projects_keep_navigation_and_unsaved_dependency_updates_responsi
 
 #[test]
 fn source_overridden_ids_owners_keep_readonly_navigation_and_refresh_unsaved_conflicts() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for selected in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -35585,7 +35582,7 @@ fn source_overridden_ids_owners_keep_readonly_navigation_and_refresh_unsaved_con
 
 #[test]
 fn intersecting_ids_alias_edits_keep_versions_complete_consumers_and_unsaved_owners() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let bib = main.join("refs.bib").unwrap();
@@ -35714,7 +35711,7 @@ fn intersecting_ids_alias_edits_keep_versions_complete_consumers_and_unsaved_own
 
 #[test]
 fn intersecting_ids_source_owner_renames_couple_uncited_primary_versions_and_consumers() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -35810,7 +35807,7 @@ fn intersecting_ids_source_owner_renames_couple_uncited_primary_versions_and_con
 
 #[test]
 fn intersecting_ids_owner_candidates_refresh_types_metadata_and_nested_member_guards() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let bib = main.join("refs.bib").unwrap();
@@ -35901,7 +35898,7 @@ fn intersecting_ids_owner_candidates_refresh_types_metadata_and_nested_member_gu
 
 #[test]
 fn global_biber_alias_loading_requires_complete_owner_edits_without_capture_or_false_diagnostics() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let default = main.join("default.bib").unwrap();
@@ -36048,7 +36045,7 @@ fn global_biber_alias_loading_requires_complete_owner_edits_without_capture_or_f
 }
 #[test]
 fn cached_alias_owner_proofs_follow_numeric_load_order_unsaved_files_and_close() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let default = main.join("default.bib").unwrap();
@@ -36161,7 +36158,7 @@ fn cached_alias_owner_proofs_follow_numeric_load_order_unsaved_files_and_close()
 
 #[test]
 fn numeric_ids_source_owners_keep_disjoint_read_identities_and_shared_occurrence_conflicts() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let default = main.join("default.bib").unwrap();
@@ -36264,7 +36261,7 @@ fn numeric_ids_source_owners_keep_disjoint_read_identities_and_shared_occurrence
 
 #[test]
 fn numeric_ids_alias_edits_keep_exact_versions_and_global_capture_protection() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -36418,7 +36415,7 @@ fn numeric_ids_alias_edits_keep_exact_versions_and_global_capture_protection() {
 
 #[test]
 fn primary_cache_capture_renames_follow_unsaved_libraries_and_coupled_versions() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let default = main.join("default.bib").unwrap();
@@ -36535,7 +36532,7 @@ fn primary_cache_capture_renames_follow_unsaved_libraries_and_coupled_versions()
 
 #[test]
 fn numeric_nonloading_keys_keep_complete_versions_without_preloading_resources() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let default = main.join("default.bib").unwrap();
@@ -36638,7 +36635,7 @@ fn numeric_nonloading_keys_keep_complete_versions_without_preloading_resources()
 
 #[test]
 fn source_named_ids_reads_refresh_unsaved_relations_and_preserve_edit_protection() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let default = main.join("default.bib").unwrap();
@@ -36728,8 +36725,8 @@ fn source_named_ids_reads_refresh_unsaved_relations_and_preserve_edit_protection
 
 #[test]
 fn coupled_raw_ids_owners_keep_exact_edits_versions_and_unsaved_closure() {
-    use latex_lsp::text::Text;
     use lsp_types::Range;
+    use texquill::text::Text;
     for document_changes in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -36831,7 +36828,7 @@ fn coupled_raw_ids_owners_keep_exact_edits_versions_and_unsaved_closure() {
 
 #[test]
 fn handwritten_items_keep_biblatex_namespaces_versions_and_unsaved_providers_separate() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for numeric in [false, true] {
         for document_changes in [false, true] {
             let dir = tempfile::tempdir().unwrap();
@@ -36945,7 +36942,7 @@ fn handwritten_items_keep_biblatex_namespaces_versions_and_unsaved_providers_sep
 
 #[test]
 fn numeric_compiled_citation_hints_keep_sections_outputs_and_unsaved_roots_consistent() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let shared = main.join("shared.tex").unwrap();
@@ -37063,7 +37060,7 @@ fn numeric_compiled_citation_hints_keep_sections_outputs_and_unsaved_roots_consi
 
 #[test]
 fn textual_bibliography_tests_follow_versions_and_unsaved_predicate_meanings() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for document_changes in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -37155,7 +37152,7 @@ fn textual_bibliography_tests_follow_versions_and_unsaved_predicate_meanings() {
 
 #[test]
 fn nondeferred_compiled_citation_hints_follow_bbl_artifacts_modes_and_updates() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let bib = main.join("data.bib").unwrap();
@@ -37272,7 +37269,7 @@ fn nondeferred_compiled_citation_hints_follow_bbl_artifacts_modes_and_updates() 
 
 #[test]
 fn source_textual_predicates_follow_final_identity_versions_and_shared_consumers() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for document_changes in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -37406,8 +37403,8 @@ fn source_textual_predicates_follow_final_identity_versions_and_shared_consumers
 
 #[test]
 fn source_shared_raw_owners_keep_exact_edits_versions_and_unsaved_closure() {
-    use latex_lsp::text::Text;
     use lsp_types::Range;
+    use texquill::text::Text;
     for document_changes in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -37515,7 +37512,7 @@ fn source_shared_raw_owners_keep_exact_edits_versions_and_unsaved_closure() {
 
 #[test]
 fn source_prerequisite_edits_keep_every_header_version_and_complete_consumers() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for (non_ids, cache_return, document_changes) in [
         (false, false, false),
         (false, false, true),
@@ -37696,7 +37693,7 @@ fn source_prerequisite_edits_keep_every_header_version_and_complete_consumers() 
 
 #[test]
 fn local_context_citation_hints_follow_default_artifacts_updates_and_unsaved_guards() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let child = main.join("child.tex").unwrap();
@@ -37836,7 +37833,7 @@ fn local_context_citation_hints_follow_default_artifacts_updates_and_unsaved_gua
 
 #[test]
 fn source_predicate_completions_follow_final_identity_exact_edits_and_unsaved_consumers() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let child = main.join("query.tex").unwrap();
@@ -37963,7 +37960,7 @@ fn source_predicate_completions_follow_final_identity_exact_edits_and_unsaved_co
 
 #[test]
 fn native_context_entry_keys_keep_complete_versioned_edits_and_unsaved_meanings() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for document_changes in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -38132,7 +38129,7 @@ fn native_context_entry_keys_keep_complete_versioned_edits_and_unsaved_meanings(
 
 #[test]
 fn context_category_assignment_lists_keep_exact_edits_shared_meanings_and_close_restore() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for document_changes in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -38313,7 +38310,7 @@ fn context_category_assignment_lists_keep_exact_edits_shared_meanings_and_close_
 
 #[test]
 fn new_root_symbol_edits_certify_shared_meanings_declarations_versions_and_close_restore() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for document_changes in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -38498,7 +38495,7 @@ fn new_root_symbol_edits_certify_shared_meanings_declarations_versions_and_close
 
 #[test]
 fn strong_context_assignment_hints_follow_order_unsaved_inputs_and_shared_new_roots() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let provider = main.join("assign.tex").unwrap();
@@ -38643,7 +38640,7 @@ fn strong_context_assignment_hints_follow_order_unsaved_inputs_and_shared_new_ro
 
 #[test]
 fn weak_context_assignment_hints_follow_explicit_environments_and_unsaved_inputs() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let child = main.join("child.tex").unwrap();
@@ -38808,7 +38805,7 @@ fn weak_context_assignment_hints_follow_explicit_environments_and_unsaved_inputs
 
 #[test]
 fn named_context_assignment_hints_follow_executed_aliases_unsaved_inputs_and_shared_roots() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let provider = main.join("aliases.tex").unwrap();
@@ -38948,7 +38945,7 @@ fn named_context_assignment_hints_follow_executed_aliases_unsaved_inputs_and_sha
 
 #[test]
 fn database_execution_revokes_key_proofs_and_restores_versioned_edits_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for mode in 0..3 {
         let sections = mode == 1;
         for document_changes in [false, true] {
@@ -39100,7 +39097,7 @@ fn database_execution_revokes_key_proofs_and_restores_versioned_edits_over_stdio
 
 #[test]
 fn generated_category_code_blocks_partial_edits_across_unsaved_consumers_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for document_changes in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -39215,7 +39212,7 @@ fn generated_category_code_blocks_partial_edits_across_unsaved_consumers_over_st
 
 #[test]
 fn initialized_entrydata_keeps_final_sets_exact_versions_and_unsaved_guards() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for (document_changes, forwarded) in
         [(false, false), (true, false), (false, true), (true, true)]
     {
@@ -39524,7 +39521,7 @@ fn initialized_entrydata_keeps_final_sets_exact_versions_and_unsaved_guards() {
 
 #[test]
 fn automatic_category_hints_certify_preloaded_members_unsaved_sources_and_shared_roots() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let provider = main.join("assign.tex").unwrap();
@@ -39757,7 +39754,7 @@ fn automatic_category_hints_certify_preloaded_members_unsaved_sources_and_shared
 
 #[test]
 fn automatic_keyword_hints_follow_bbl_members_unsaved_assignments_and_shared_roots() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let provider = main.join("assign.tex").unwrap();
@@ -39964,7 +39961,7 @@ fn automatic_keyword_hints_follow_bbl_members_unsaved_assignments_and_shared_roo
 
 #[test]
 fn unicode_keyword_hints_refresh_literal_identity_and_compiled_members_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     let dir = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let provider = main.join("assign.tex").unwrap();
@@ -40102,7 +40099,7 @@ fn unicode_keyword_hints_refresh_literal_identity_and_compiled_members_over_stdi
 
 #[test]
 fn note_initializers_keep_exact_edits_and_refresh_unsaved_modes_and_dependencies_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
         for versioned in [false, true] {
             let dir = tempfile::tempdir().unwrap();
@@ -40293,7 +40290,7 @@ fn note_initializers_keep_exact_edits_and_refresh_unsaved_modes_and_dependencies
 
 #[test]
 fn provider_note_string_mutations_never_return_partial_macro_edits_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -40546,7 +40543,7 @@ printf 'Output written on main.pdf (1 page).\n' > "$output/main.log"
 }
 #[test]
 fn adjacent_push_relative_hook_labels_refresh_exact_ranges_and_providers_over_stdio() {
-    use latex_lsp::text::Text;
+    use texquill::text::Text;
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();

@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::sync::atomic::AtomicBool;
+use texquill::{
     compilation::build, config::BuildConfig, language::features, project::workspace::Workspace,
     text::Text,
 };
-use lsp_types::*;
-use std::sync::atomic::AtomicBool;
 
 fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///saved-counter-completion/main.tex").unwrap();
@@ -251,7 +251,7 @@ fn real_bare_counter_completions_repair_failed_saved_name_compilations() {
             std::fs::write(root.join("main.tex"), result).unwrap();
             let after = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
             assert_eq!(after.status, "success", "{engine}/{call}: {}", after.output);
-            assert!(root.join("build/latex-lsp/main.pdf").is_file());
+            assert!(root.join("build/texquill/main.pdf").is_file());
         }
     }
 }
@@ -310,7 +310,7 @@ fn real_counter_name_completions_repair_failed_saved_name_compilations() {
             std::fs::write(root.join("main.tex"), result).unwrap();
             let after = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
             assert_eq!(after.status, "success", "{engine}/{call}: {}", after.output);
-            assert!(root.join("build/latex-lsp/main.pdf").is_file());
+            assert!(root.join("build/texquill/main.pdf").is_file());
         }
     }
 }

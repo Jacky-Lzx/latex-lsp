@@ -1,5 +1,5 @@
-use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+use texquill::{language::features, project::workspace::Workspace, text::Text};
 fn fixture() -> (Workspace, Url) {
     let mut ws = Workspace::default();
     let uri = Url::parse("file:///search/main.tex").unwrap();

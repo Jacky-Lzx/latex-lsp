@@ -1,9 +1,9 @@
-use latex_lsp::{
+use lsp_types::*;
+use std::path::Path;
+use texquill::{
     editing,
     project::workspace::{Document, Workspace},
 };
-use lsp_types::*;
-use std::path::Path;
 
 fn selector(form: &str) -> &str {
     match form {
@@ -23,7 +23,7 @@ fn fixture(root: &Path, source: &str, literal: bool) -> (Workspace, Url, Diagnos
     std::fs::write(root.join("chapter.tex"), "Chapter").unwrap();
     let main = Url::from_file_path(root.join("main.tex")).unwrap();
     let mut workspace = Workspace {
-        client: latex_lsp::project::state::ClientCapabilities {
+        client: texquill::project::state::ClientCapabilities {
             apply_edits: true,
             code_action_literals: literal,
             versioned_edits: true,

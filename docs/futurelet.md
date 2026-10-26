@@ -1,30 +1,30 @@
-# futurelet 前瞻目标
+# futurelet lookahead targets
 
-[返回文档目录](README.md) · [符号与重命名](symbols.md)
+[Back to documentation](README.md) · [Symbols and renaming](symbols.md)
 
-`\futurelet` 的直接控制词目标进入宏符号索引，支持补全、定义跳转、悬停、引用、符号列表和跨文件重命名。例如：
+`\futurelet`'s direct control word target enters the macro symbol index, supporting completion, definition jump, hover, quote, symbol list and cross-file renaming. For example:
 
 ```tex
 \def\inspect#1{\ifx\lookahead A Found A\fi #1}
 \futurelet\lookahead\inspect A
 ```
 
-TeX 先将 `A` 的含义赋给 `\lookahead`，再执行 `\inspect A`。从声明或引用处重命名 `lookahead` 时，会同步维护定义体中的引用、直接调用及静态 `csname` 引用，保留 `inspect`、前瞻字符、注释和逐字内容。
+TeX first assigns the meaning of `A` to `\lookahead`, and then executes `\inspect A`. When renaming `lookahead` from a declaration or reference, references in the definition body, direct calls, and static `csname` references are synchronously maintained, and `inspect`, lookahead characters, comments, and verbatim content are preserved.
 
-## 静态名称目标
+## Static name target
 
-显式、相邻的 `expandafter` 可展开完整的静态 `csname` 目标：
+Explicit, adjacent `expandafter` expands the complete static `csname` target:
 
 ```tex
 \expandafter\futurelet\csname lookahead\endcsname\inspect A
 ```
 
-只通过静态名称使用的目标可重命名为中文或含连字符的名称；存在直接控制词声明或引用时，新名称须能组成 TeX 控制词。沿用项目范围、共享来源歧义和名称冲突检查，LSP 编辑保留已打开文档的版本。
+Targets used only by static names can be renamed to Chinese or hyphenated names; the new name must be able to form a TeX control word when there is a direct control word declaration or reference. Inheriting project scope, shared origin ambiguity, and name conflict checking, LSP editing preserves versions of open documents.
 
-## 执行与分析边界
+## Execution and analysis boundaries
 
-`futurelet` 后的继续执行命令及前瞻 token 会放回输入流，不能作为普通复制语句中不执行的来源参数处理。例如 `\futurelet\lookahead\input{child}` 中，`input` 仍是实际文件加载。
+The continue execution command and look-ahead token after `futurelet` will be put back into the input stream and cannot be processed as source parameters that are not executed in ordinary copy statements. For example, in `\futurelet\lookahead\input{child}`, `input` is still the actual file loaded.
 
-目标采用裸控制词或上述静态 `csname` 形式；花括号目标、动态名称及任意展开序列不推断为静态声明。不根据前瞻 token 推断副本调用的参数签名，也不模拟后续赋值或 TeX 分组作用域。
+Targets take the form of bare control words or the static `csname` above; braced targets, dynamic names, and arbitrary expansion sequences are not inferred as static declarations. The argument signatures of copy calls are not inferred from lookahead tokens, nor are subsequent assignments or TeX grouped scoping simulated.
 
-命令补全提供 `\futurelet\lookahead\continuation A` 片段，继续执行命令和字母 token 之间保留空格，避免合并成一个控制词。
+Command completion provides the `\futurelet\lookahead\continuation A` fragment, leaving spaces between the continued execution of the command and the letter token to avoid merging into a control word.
