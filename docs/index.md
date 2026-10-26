@@ -42,6 +42,14 @@ features:
     linkText: Read the configuration guide
 ---
 
+## See it in your editor
+
+Find a paper by its title, preview its bibliography entry, and insert the citation key. Recorded in Neovim with Blink completion and the maintainer's configuration.
+
+<DemoVideo name="completion" title="Search citations by title in Neovim" />
+
+[Watch all eight demos](demos.md): navigation and rename, quick fixes, linked editing, macro documentation, formatting, builds, and forward/reverse PDF search.
+
 ## From source to your editor
 
 Install the current stable Rust toolchain, then run these commands from the repository root:

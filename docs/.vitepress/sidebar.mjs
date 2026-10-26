@@ -10,6 +10,7 @@ export default [
     text: 'Getting started',
     items: [
       page('README', 'Documentation overview'),
+      page('demos', 'Video demos'),
       page('install', 'Installation'),
       page('editors', 'Editor setup'),
     ],

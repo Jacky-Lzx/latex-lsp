@@ -55,6 +55,7 @@ export default defineConfig({
     logo: '/favicon.svg',
     nav: [
       { text: 'Guide', link: '/install' },
+      { text: 'Demos', link: '/demos' },
       { text: 'Features', link: '/editing' },
       { text: 'Builds', link: '/build' },
       { text: 'Reference', link: '/project-settings' },

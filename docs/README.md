@@ -6,6 +6,7 @@ TeXquill supports completion, navigation, cross-file rename, formatting, diagnos
 
 ## Getting started
 
+- [See TeXquill in Neovim](demos.md): Short videos and GIFs of completion, navigation, rename, quick fixes, linked editing, documentation, formatting, builds, and forward/reverse PDF search.
 - [Installation and startup](install.md): Requirements, building from source, installation, protocol lifecycle, and migration.
 - [Editor configuration](editors.md): Neovim and VS Code setup, other editors, and a sample project.
 

@@ -5,6 +5,7 @@
 Query the location mapping between source code and PDF for editor and preview plug-in integration. For compilation configuration and product validity rules, see [Compilation](build.md).
 
 - [Use](#purpose)
+- [Neovim and Skim demos](#neovim-and-skim-demos)
 - [VS Code preview](#vs-code-preview)
 - [Query protocol and return results](#query-protocol-and-return-results)
 
@@ -15,6 +16,10 @@ Query the location mapping between source code and PDF for editor and preview pl
 ## VS Code preview
 
 The built-in viewer supports both directions after saving and successfully compiling with SyncTeX enabled. Use **TeXquill: Forward Search (TeX to PDF)** or Ctrl+Alt+J (Cmd+Alt+J on macOS) to reveal and highlight the source cursor's PDF location while keeping source focus. Ctrl+click (Cmd+click on macOS) in the PDF opens the corresponding source file and line. The extension passes these queries to the server; it does not discover roots or run a separate SyncTeX process. See the [extension guide](../editors/vscode/README.md#synctex-navigation) for setup and limitations.
+
+## Neovim and Skim demos
+
+Watch [source-to-PDF forward search](demos.md#forward-search-source-to-pdf) and [PDF-to-source reverse search](demos.md#reverse-search-pdf-to-source) in the maintainer's Neovim setup. Forward search uses TeXquill's coordinates through tex-tools.nvim; reverse search uses Skim's native SyncTeX mapping and its configured tex-tools editor callback. Viewer setup is required in addition to the language server.
 
 ## Query protocol and return results
 

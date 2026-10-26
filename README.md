@@ -4,6 +4,12 @@ A LaTeX language server written in Rust, with completion, navigation, rename, fo
 
 [Getting started](docs/install.md) · [VS Code extension](editors/vscode/README.md) · [Documentation](docs/README.md) · [Benchmarks](docs/benchmarks.md) · [MIT license](LICENSE)
 
+Search a citation by title, preview the paper, and insert its key—all inside Neovim.
+
+[![TeXquill citation search in Neovim](docs/public/demos/completion.gif)](docs/demos.md)
+
+[Watch the demos](docs/demos.md): citation completion, cross-file navigation and rename, quick fixes, linked environment editing, macro documentation, formatting, builds, and source/PDF forward and reverse search. [Download this clip](docs/public/demos/completion.mp4).
+
 The documentation website can be previewed locally with `npm ci` and `npm run docs:dev`. See [website maintenance](docs/documentation.md) for production builds and GitHub Pages setup.
 
 ## LSP support and comparison with texlab
