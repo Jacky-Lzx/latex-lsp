@@ -8,6 +8,8 @@ use std::{collections::BTreeSet, ops::Range};
 
 #[derive(Clone, Debug)]
 pub(crate) struct Type {
+    /// Position immediately after `@`, before optional header whitespace.
+    pub prefix_start: usize,
     pub span: Range<usize>,
     pub has_body: bool,
     /// Parsed construct extent, including an unfinished body while editing.
@@ -534,9 +536,19 @@ pub(crate) fn completion(
         .bibliography_completion
         .types
         .iter()
-        .find(|kind| contains(&kind.span, offset))
+        .find(|kind| {
+            contains(&kind.span, offset)
+                || (kind.span.is_empty() && contains(&(kind.prefix_start..kind.span.start), offset))
+        })
     {
-        let prefix = source[kind.span.start..offset].to_ascii_lowercase();
+        // An empty header may have skipped the editor's final newline. Insert
+        // at the cursor rather than consuming or moving past that whitespace.
+        let span = if offset < kind.span.start {
+            offset..offset
+        } else {
+            kind.span.clone()
+        };
+        let prefix = source[span.start..offset].to_ascii_lowercase();
         let mut candidates: Vec<_> = TYPES
             .iter()
             .map(|&(name, docs, fields)| (name.to_owned(), docs.to_owned(), fields))
@@ -577,7 +589,7 @@ pub(crate) fn completion(
                         InsertTextFormat::PLAIN_TEXT
                     }),
                     text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                        range: doc.text.range(kind.span.start, kind.span.end),
+                        range: doc.text.range(span.start, span.end),
                         new_text: if snippets {
                             template(&name, fields, doc.text.newline())
                         } else {

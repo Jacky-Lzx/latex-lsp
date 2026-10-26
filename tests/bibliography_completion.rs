@@ -75,6 +75,36 @@ fn entry_types_complete_empty_and_partial_prefixes_without_replacing_the_at_sign
 }
 
 #[test]
+fn bare_at_completes_before_trailing_whitespace_without_consuming_it() {
+    for prefix in ["", "@book{existing, title={Keep me}}\n\n"] {
+        for suffix in ["\n", "\r\n", "  \n\n"] {
+            for snippets in [false, true] {
+                let source = format!("{prefix}@{suffix}");
+                let (workspace, uri) = workspace(&source, snippets);
+                let items = features::completion(
+                    &workspace,
+                    &uri,
+                    Text::new(source.clone()).position(prefix.len() + 1),
+                );
+                let article = items.iter().find(|item| item.label == "article").unwrap();
+                let edited = edited(&source, article);
+                assert!(edited.starts_with(&format!("{prefix}@article")));
+                assert!(edited.ends_with(suffix), "{edited:?}");
+                assert_eq!(article.kind, Some(CompletionItemKind::CLASS));
+                assert_eq!(
+                    article.insert_text_format,
+                    Some(if snippets {
+                        InsertTextFormat::SNIPPET
+                    } else {
+                        InsertTextFormat::PLAIN_TEXT
+                    })
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn entry_snippets_use_the_document_newline_and_existing_bodies_are_preserved() {
     let source = "% 中文😀\r\n@art";
     let result = item(source, "@art", "article", true);

@@ -15499,6 +15499,73 @@ fn quick_fixes_highlights_and_selection_ranges_work_over_stdio() {
 }
 
 #[test]
+fn bare_bibliography_at_before_final_newline_completes_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(directory.path().join("中文 refs.bib")).unwrap();
+    for snippets in [false, true] {
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"capabilities":{"textDocument":{"completion":{"completionItem":{"snippetSupport":snippets}}}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"bib","version":1,"text":"@book{existing,title={Keep me}}\n\n\n"}}),
+        );
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":{"start":{"line":2,"character":0},"end":{"line":2,"character":0}},"text":"@"}]}),
+        );
+        let items = server.request(
+            2,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":uri},"position":{"line":2,"character":1},"context":{"triggerKind":2,"triggerCharacter":"@"}}),
+        );
+        let article = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "article")
+            .unwrap();
+        assert_eq!(
+            article["textEdit"]["range"],
+            json!({"start":{"line":2,"character":1},"end":{"line":2,"character":1}})
+        );
+        assert_eq!(article["insertTextFormat"], if snippets { 2 } else { 1 });
+        assert!(items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "book"));
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":3},"contentChanges":[{"range":{"start":{"line":2,"character":1},"end":{"line":2,"character":1}},"text":"art"}]}),
+        );
+        let items = server.request(
+            3,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":uri},"position":{"line":2,"character":4}}),
+        );
+        let article = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "article")
+            .unwrap();
+        assert_eq!(
+            article["textEdit"]["range"],
+            json!({"start":{"line":2,"character":1},"end":{"line":2,"character":4}})
+        );
+        assert!(items
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["label"] != "book"));
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn bibliography_type_and_field_completion_negotiate_snippets_and_refresh_over_stdio() {
     let directory = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(directory.path().join("refs.bib")).unwrap();

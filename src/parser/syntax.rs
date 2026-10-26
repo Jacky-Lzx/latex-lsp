@@ -3244,6 +3244,7 @@ impl Syntax {
                 .bibliography_completion
                 .types
                 .push(crate::bibliography::bib_completion::Type {
+                    prefix_start: entry_start + 1,
                     span: kind_span,
                     has_body: matches!(bytes.get(i), Some(b'{' | b'(')),
                     entry_span: None,
