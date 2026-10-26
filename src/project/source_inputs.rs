@@ -1,40 +1,25 @@
 //! Root-specific discovery of static source loads and file references.
+use crate::analysis::AnalysisContext;
 use crate::{
     parser::syntax,
     project::workspace::{resolve_file_path, DocumentKind, Workspace},
     symbols::commands::{CommandSignatures, SourceCall},
 };
 use lsp_types::Url;
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_ROUNDS: usize = 32;
 const MAX_SOURCES: usize = 1024;
 
-thread_local! {
-    static QUERY: RefCell<Option<Query>> = const { RefCell::new(None) };
-}
-
 #[derive(Default)]
-struct Query {
+pub(crate) struct Query {
     indexes: BTreeMap<(usize, Url), Index>,
     projects: BTreeMap<(usize, Url, Url), BTreeSet<Url>>,
 }
 
-struct Restore(Option<Query>);
-impl Drop for Restore {
-    fn drop(&mut self) {
-        QUERY.with(|query| *query.borrow_mut() = self.0.take());
-    }
-}
-
-/// Reuse source graphs only within one immutable workspace query. In particular,
-/// no cached graph survives an editor update or a subsequent filesystem query.
-pub(crate) fn with_query_cache<T>(work: impl FnOnce() -> T) -> T {
-    let _restore = Restore(QUERY.with(|query| query.replace(Some(Query::default()))));
-    work()
+#[cfg(test)]
+fn with_query_cache<T>(work: impl FnOnce() -> T) -> T {
+    AnalysisContext::new().run(|_| work())
 }
 
 /// Dependency traversal also resolves files and input roles. Reuse its result
@@ -50,18 +35,17 @@ pub(crate) fn project_documents(
         source.clone(),
         root.clone(),
     );
-    if let Some(project) = QUERY.with(|query| query.borrow().as_ref()?.projects.get(&key).cloned())
-    {
+    let Some(context) = AnalysisContext::current_query() else {
+        return compute();
+    };
+    if let Some(project) = context.sources.borrow().projects.get(&key).cloned() {
         return project;
     }
     let project = compute();
-    QUERY.with(|query| {
-        if let Some(query) = query.borrow_mut().as_mut() {
-            if query.projects.len() < 16 {
-                query.projects.insert(key, project.clone());
-            }
-        }
-    });
+    let mut query = context.sources.borrow_mut();
+    if query.projects.len() < 16 {
+        query.projects.insert(key, project.clone());
+    }
     project
 }
 
@@ -83,26 +67,35 @@ pub(crate) struct Index {
 impl Index {
     pub fn new(workspace: &Workspace, root: &Url) -> Self {
         let key = (workspace as *const Workspace as usize, root.clone());
-        if let Some(index) = QUERY.with(|query| query.borrow().as_ref()?.indexes.get(&key).cloned())
-        {
+        let Some(context) = AnalysisContext::current_query() else {
+            return Self::build(workspace, root);
+        };
+        if let Some(index) = context.sources.borrow().indexes.get(&key).cloned() {
             return index;
         }
         let index = Self::build(workspace, root);
-        QUERY.with(|query| {
-            if let Some(query) = query.borrow_mut().as_mut() {
-                if query.indexes.len() < 4 {
-                    query.indexes.insert(key, index.clone());
-                }
-            }
-        });
+        let mut query = context.sources.borrow_mut();
+        if query.indexes.len() < 4 {
+            query.indexes.insert(key, index.clone());
+        }
         index
     }
 
     fn build(workspace: &Workspace, root: &Url) -> Self {
         let mut index = Self::default();
+        let context = AnalysisContext::current();
+        let cancelled = || context.as_ref().is_some_and(|context| context.cancelled());
+        if cancelled() {
+            index.incomplete = true;
+            return index;
+        }
         let mut scope = index.scope(workspace, root);
         let mut seen = BTreeSet::new();
         for _ in 0..MAX_ROUNDS {
+            if cancelled() {
+                index.incomplete = true;
+                break;
+            }
             if index.incomplete || !seen.insert(scope.clone()) {
                 break;
             }

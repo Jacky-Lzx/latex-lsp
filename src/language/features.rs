@@ -575,7 +575,7 @@ pub fn prepare_rename(
     uri: &Url,
     position: Position,
 ) -> crate::rpc::Result<Option<PrepareRenameResponse>> {
-    crate::symbols::query_cache::with_cache(|| prepare_rename_query(workspace, uri, position))
+    crate::analysis::AnalysisContext::new().run(|_| prepare_rename_query(workspace, uri, position))
 }
 
 fn prepare_rename_query(
@@ -629,7 +629,8 @@ pub fn rename(
     position: Position,
     new_name: &str,
 ) -> crate::rpc::Result<Option<WorkspaceEdit>> {
-    crate::symbols::query_cache::with_cache(|| rename_query(workspace, uri, position, new_name))
+    crate::analysis::AnalysisContext::new()
+        .run(|_| rename_query(workspace, uri, position, new_name))
 }
 
 fn rename_query(
@@ -1249,7 +1250,7 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
 }
 
 pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<CompletionItem> {
-    crate::symbols::query_cache::with_cache(|| completion_in_query(workspace, uri, position))
+    crate::analysis::AnalysisContext::new().run(|_| completion_in_query(workspace, uri, position))
 }
 
 fn completion_in_query(
@@ -1949,7 +1950,7 @@ pub(crate) fn bibliography_relation_edits<'a>(
 }
 
 pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<Location> {
-    crate::symbols::query_cache::with_cache(|| definitions_query(workspace, uri, position))
+    crate::analysis::AnalysisContext::new().run(|_| definitions_query(workspace, uri, position))
 }
 
 fn definitions_query(workspace: &Workspace, uri: &Url, position: Position) -> Vec<Location> {
@@ -2048,9 +2049,8 @@ pub fn references(
     position: Position,
     include_declaration: bool,
 ) -> Vec<Location> {
-    crate::symbols::query_cache::with_cache(|| {
-        references_query(workspace, uri, position, include_declaration)
-    })
+    crate::analysis::AnalysisContext::new()
+        .run(|_| references_query(workspace, uri, position, include_declaration))
 }
 
 fn references_query(
@@ -2479,7 +2479,7 @@ fn all_references(
 }
 
 pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hover> {
-    crate::symbols::query_cache::with_cache(|| hover_query(workspace, uri, position))
+    crate::analysis::AnalysisContext::new().run(|_| hover_query(workspace, uri, position))
 }
 
 fn hover_query(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hover> {

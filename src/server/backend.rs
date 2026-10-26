@@ -364,65 +364,72 @@ impl Backend {
         let refresh_supported = delivery.supports_refresh();
         dispatch::release();
         let mut cache = self.diagnostic_cache.clone().lock_owned().await;
-        let result = tokio::task::spawn_blocking(move || {
-            let superseded = || refresh_supported && revisions.revision() != revision;
-            let cancelled = || crate::rpc::Error {
-                code: crate::rpc::ErrorCode::ServerError(-32802),
-                message: "Diagnostic inputs changed".into(),
-                data: Some(serde_json::json!({"retriggerRequest":false})),
-            };
-            if superseded() {
-                return Err(cancelled());
-            }
-            let mut reports = std::collections::BTreeMap::new();
-            let missing: Vec<_> = uris
-                .into_iter()
-                .filter(|uri| {
-                    if let Some(report) =
-                        cache.lookup(uri, previous.get(uri).map(String::as_str), revision)
-                    {
-                        reports.insert(uri.clone(), report);
-                        false
-                    } else {
-                        true
+        let result = self
+            .queries
+            .run(move |cancel| {
+                let inputs = revisions.clone();
+                crate::analysis::AnalysisContext::cancellable(move || {
+                    refresh_supported && inputs.revision() != revision
+                })
+                .run(|context| {
+                    let superseded = || refresh_supported && revisions.revision() != revision;
+                    let cancelled = || crate::rpc::Error {
+                        code: crate::rpc::ErrorCode::ServerError(-32802),
+                        message: "Diagnostic inputs changed".into(),
+                        data: Some(serde_json::json!({"retriggerRequest":false})),
+                    };
+                    if superseded() {
+                        return Err(cancelled());
                     }
+                    let mut reports = std::collections::BTreeMap::new();
+                    let missing: Vec<_> = uris
+                        .into_iter()
+                        .filter(|uri| {
+                            if let Some(report) =
+                                cache.lookup(uri, previous.get(uri).map(String::as_str), revision)
+                            {
+                                reports.insert(uri.clone(), report);
+                                false
+                            } else {
+                                true
+                            }
+                        })
+                        .collect();
+                    if !missing.is_empty() {
+                        let (snapshots, files) = diagnostic_inputs::Files::capture(|| {
+                            workspace
+                                .diagnostic_snapshots_cancelled(missing, || context.cancelled())
+                        });
+                        if superseded() {
+                            return Err(cancelled());
+                        }
+                        cancel.check()?;
+                        for snapshot in snapshots {
+                            let uri = snapshot.0.clone();
+                            let report = cache.computed(
+                                snapshot,
+                                previous.get(&uri).map(String::as_str),
+                                Some(diagnostic::Inputs {
+                                    revision,
+                                    files: files.clone(),
+                                }),
+                            );
+                            reports.insert(uri, report);
+                        }
+                    }
+                    if superseded() {
+                        return Err(cancelled());
+                    }
+                    Ok(reports
+                        .into_iter()
+                        .map(|(uri, report)| {
+                            let version = workspace.documents.get(&uri).and_then(|doc| doc.version);
+                            (uri, version, report)
+                        })
+                        .collect())
                 })
-                .collect();
-            if !missing.is_empty() {
-                let (snapshots, files) = diagnostic_inputs::Files::capture(|| {
-                    workspace.diagnostic_snapshots_cancelled(missing, superseded)
-                });
-                if superseded() {
-                    return Err(cancelled());
-                }
-                for snapshot in snapshots {
-                    let uri = snapshot.0.clone();
-                    let report = cache.computed(
-                        snapshot,
-                        previous.get(&uri).map(String::as_str),
-                        Some(diagnostic::Inputs {
-                            revision,
-                            files: files.clone(),
-                        }),
-                    );
-                    reports.insert(uri, report);
-                }
-            }
-            if superseded() {
-                return Err(cancelled());
-            }
-            Ok(reports
-                .into_iter()
-                .map(|(uri, report)| {
-                    let version = workspace.documents.get(&uri).and_then(|doc| doc.version);
-                    (uri, version, report)
-                })
-                .collect())
-        })
-        .await
-        .map_err(|error| {
-            crate::rpc::Error::invalid_params(format!("Analysis task failed: {error}"))
-        })?;
+            })
+            .await;
         if result
             .as_ref()
             .is_err_and(|error| i64::from(error.code) == -32802)
@@ -1707,6 +1714,36 @@ mod read_query_tests {
     use super::*;
     use std::time::Duration;
     use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn request_cancellation_reaches_nested_analysis_contexts() {
+        let (client, _outgoing) = Client::new();
+        let backend = Arc::new(Backend::new(client));
+        let (started, start) = oneshot::channel();
+        let (finished, finish) = oneshot::channel();
+        let query_backend = backend.clone();
+        let query = tokio::spawn(async move {
+            query_backend
+                .read_query(move |_| {
+                    crate::analysis::AnalysisContext::new().run(|context| {
+                        let _ = started.send(());
+                        while !context.cancelled() {
+                            std::thread::yield_now();
+                        }
+                        let _ = finished.send(());
+                    });
+                })
+                .await
+        });
+        start.await.unwrap();
+        query.abort();
+        assert!(query.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(1), finish)
+            .await
+            .expect("The worker did not observe request cancellation")
+            .unwrap();
+        backend.cleanup().await;
+    }
 
     #[tokio::test]
     async fn edit_queries_retry_metadata_updates_but_reject_changed_source_positions() {

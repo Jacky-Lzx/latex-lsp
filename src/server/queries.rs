@@ -14,7 +14,8 @@ pub(crate) struct Queries {
     idle: Arc<Notify>,
 }
 
-pub(crate) struct Cancellation {
+#[derive(Clone)]
+struct Cancellation {
     request: Arc<AtomicBool>,
     closing: Arc<AtomicBool>,
 }
@@ -64,7 +65,7 @@ impl Queries {
 
     pub(crate) async fn run<T: Send + 'static>(
         &self,
-        work: impl FnOnce(&Cancellation) -> Result<T> + Send + 'static,
+        work: impl FnOnce(&crate::analysis::AnalysisContext) -> Result<T> + Send + 'static,
     ) -> Result<T> {
         let permit = self
             .slots
@@ -84,7 +85,10 @@ impl Queries {
         tokio::task::spawn_blocking(move || {
             let (_permit, _active) = (permit, active);
             cancellation.check()?;
-            let result = work(&cancellation)?;
+            let signal = cancellation.clone();
+            let result =
+                crate::analysis::AnalysisContext::cancellable(move || signal.check().is_err())
+                    .run(work)?;
             cancellation.check()?;
             Ok(result)
         })

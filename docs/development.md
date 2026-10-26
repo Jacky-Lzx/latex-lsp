@@ -63,6 +63,8 @@ macOS 上运行测试时，可使用 `TMPDIR=/private/tmp cargo test --locked`�
 
 ## 代码结构与分析缓存
 
+[`analysis.rs`](../src/analysis.rs) 的 `AnalysisContext` 显式持有每次同步分析的符号／源码图缓存、文件观察和取消信号。入口在工作线程内创建上下文；嵌套分析使用独立缓存，继承观察器与取消信号，并在正常或异常结束时恢复外层。旧同步读取器通过唯一作用域适配桥访问当前上下文，各子系统不再分别维护线程局部缓存。上下文不可跨异步挂起点，也不跨请求复用；源码依赖图在轮次边界检查取消。
+
 [`compilation/build/execution.rs`](../src/compilation/build/execution.rs) 只执行工具并返回 `Outcome`；[`server/builds/`](../src/server/builds/mod.rs) 管理连接内构建队列，由 `completion.rs` 校验、提交工作区结果并发送通知。原 `compilation::build::BuildManager` 等公开路径保留兼容导出，内部使用实际所属路径。TeX 与文献工具日志在 `compilation/build_log/` 内分开实现，既有公开解析入口不变。
 
 共享命令语义归入 [`symbols/commands/`](../src/symbols/commands/mod.rs)：内置参数目录、声明读取和含义解析分别维护；hook 参数分析与声明文档也归入 `symbols`。解析、项目发现和符号查询直接依赖这些语义模块。`language/signature.rs` 负责 LSP 参数提示、活动参数位置和补全片段生成，不再作为其他子系统的命令分析入口。

@@ -1,12 +1,12 @@
 //! Owned symbol analyses shared only during one immutable workspace query.
 use super::{label_declarations, named_references};
 use crate::{
+    analysis::AnalysisContext,
     project::workspace::{DocumentKind, Workspace},
     symbols::commands::CommandSignatures,
 };
 use lsp_types::Url;
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
@@ -18,55 +18,36 @@ type Labels = BTreeMap<(usize, BTreeSet<Url>), Arc<label_declarations::Index>>;
 type Signatures = BTreeMap<(usize, BTreeSet<Url>), Arc<CommandSignatures<'static>>>;
 
 #[derive(Default)]
-struct Cache {
+pub(crate) struct Cache {
     named: Named,
     labels: Labels,
     signatures: Signatures,
     bytes: usize,
 }
 
-thread_local! {
-    static QUERY: RefCell<Option<Cache>> = const { RefCell::new(None) };
-}
-
-struct Restore(Option<Cache>);
-impl Drop for Restore {
-    fn drop(&mut self) {
-        QUERY.with(|query| *query.borrow_mut() = self.0.take());
-    }
-}
-
-pub(crate) fn with_cache<T>(work: impl FnOnce() -> T) -> T {
-    let _restore = Restore(QUERY.with(|query| query.replace(Some(Cache::default()))));
-    crate::project::source_inputs::with_query_cache(work)
+#[cfg(test)]
+fn with_cache<T>(work: impl FnOnce() -> T) -> T {
+    AnalysisContext::new().run(|_| work())
 }
 
 fn shared<K: Ord, V>(
+    context: &AnalysisContext,
     key: K,
     select: impl Fn(&mut Cache) -> &mut BTreeMap<K, Arc<V>>,
     build: impl FnOnce() -> V,
     bytes: impl FnOnce(&V) -> usize,
 ) -> Arc<V> {
-    if let Some(index) = QUERY.with(|query| {
-        query
-            .borrow_mut()
-            .as_mut()
-            .and_then(|cache| select(cache).get(&key).cloned())
-    }) {
+    if let Some(index) = select(&mut context.symbols.borrow_mut()).get(&key).cloned() {
         return index;
     }
-    // Analysing a scope can recursively query other scopes. Never retain a
-    // RefCell borrow while computing, and only cache immutable, owned results.
+    // Recursive analyses must not retain a cache borrow while computing.
     let index = Arc::new(build());
-    QUERY.with(|query| {
-        if let Some(cache) = query.borrow_mut().as_mut() {
-            let bytes = bytes(&index);
-            if select(cache).len() < MAX_ENTRIES && bytes <= MAX_BYTES - cache.bytes {
-                select(cache).insert(key, index.clone());
-                cache.bytes += bytes;
-            }
-        }
-    });
+    let mut cache = context.symbols.borrow_mut();
+    let bytes = bytes(&index);
+    if select(&mut cache).len() < MAX_ENTRIES && bytes <= MAX_BYTES - cache.bytes {
+        select(&mut cache).insert(key, index.clone());
+        cache.bytes += bytes;
+    }
     index
 }
 
@@ -75,10 +56,11 @@ pub(crate) fn named(
     origin: &Url,
     build: impl FnOnce() -> named_references::Index,
 ) -> Arc<named_references::Index> {
-    if QUERY.with(|query| query.borrow().is_none()) {
+    let Some(context) = AnalysisContext::current_query() else {
         return Arc::new(build());
-    }
+    };
     shared(
+        &context,
         (workspace as *const Workspace as usize, origin.clone()),
         |cache| &mut cache.named,
         build,
@@ -95,14 +77,15 @@ pub(crate) fn labels(
     scope: &BTreeSet<Url>,
     build: impl FnOnce() -> label_declarations::Index,
 ) -> Arc<label_declarations::Index> {
-    if QUERY.with(|query| query.borrow().is_none()) {
+    let Some(context) = AnalysisContext::current_query() else {
         return Arc::new(build());
-    }
+    };
     let key_bytes = scope
         .iter()
         .map(|uri| uri.as_str().len() + 64)
         .sum::<usize>();
     shared(
+        &context,
         (workspace as *const Workspace as usize, scope.clone()),
         |cache| &mut cache.labels,
         build,
@@ -115,14 +98,15 @@ pub(crate) fn signatures(
     scope: &BTreeSet<Url>,
     build: impl FnOnce() -> CommandSignatures<'static>,
 ) -> Arc<CommandSignatures<'static>> {
-    if QUERY.with(|query| query.borrow().is_none()) {
+    let Some(context) = AnalysisContext::current_query() else {
         return Arc::new(build());
-    }
+    };
     let key_bytes = scope
         .iter()
         .map(|uri| uri.as_str().len() + 64)
         .sum::<usize>();
     shared(
+        &context,
         (workspace as *const Workspace as usize, scope.clone()),
         |cache| &mut cache.signatures,
         build,
@@ -131,8 +115,7 @@ pub(crate) fn signatures(
 }
 
 /// Use the same ordered LaTeX sources for every analysis of a project scope.
-/// Outside an immutable query keep borrowed keys; only retained analyses need
-/// ownership of the source strings.
+/// Outside an immutable query keep borrowed keys; retained analyses own theirs.
 pub(crate) fn project_signatures<'a>(
     workspace: &'a Workspace,
     scope: &BTreeSet<Url>,
@@ -146,7 +129,7 @@ pub(crate) fn project_signatures<'a>(
                 .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
         )
     };
-    if QUERY.with(|query| query.borrow().is_none()) {
+    if AnalysisContext::current_query().is_none() {
         Arc::new(build())
     } else {
         signatures(workspace, scope, || build().into_owned())
@@ -272,7 +255,15 @@ mod tests {
                 &signatures,
                 &super::project_signatures(&workspace, &scope)
             ));
-            QUERY.with(|query| assert_eq!(query.borrow().as_ref().unwrap().signatures.len(), 1));
+            assert_eq!(
+                AnalysisContext::current_query()
+                    .unwrap()
+                    .symbols
+                    .borrow()
+                    .signatures
+                    .len(),
+                1
+            );
         });
         let changed = format!(r"\renewcommand\typeout[1]{{#1}}\renewcommand\ref[1]{{#1}}{source}");
         document(&mut workspace, &uri, &changed);
@@ -348,6 +339,7 @@ mod tests {
         ));
         with_cache(|| {
             shared(
+                &AnalysisContext::current_query().unwrap(),
                 (0, Url::parse("untitled:full").unwrap()),
                 |cache| &mut cache.named,
                 named_references::Index::default,
@@ -377,6 +369,7 @@ mod tests {
         with_cache(|| {
             let get = |key, bytes| {
                 shared(
+                    &AnalysisContext::current_query().unwrap(),
                     (0, Url::parse(&format!("untitled:{key}")).unwrap()),
                     |cache| &mut cache.named,
                     named_references::Index::default,

@@ -394,9 +394,8 @@ impl Workspace {
         uris: impl IntoIterator<Item = Url>,
         cancelled: impl Fn() -> bool,
     ) -> Vec<(Url, Vec<lsp_types::Diagnostic>, Option<i32>)> {
-        crate::symbols::query_cache::with_cache(|| {
-            self.diagnostic_snapshots_in_query(uris, cancelled)
-        })
+        crate::analysis::AnalysisContext::new()
+            .run(|_| self.diagnostic_snapshots_in_query(uris, cancelled))
     }
 
     fn diagnostic_snapshots_in_query(

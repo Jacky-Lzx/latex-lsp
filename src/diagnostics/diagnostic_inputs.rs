@@ -1,6 +1,5 @@
 //! Observe filesystem inputs actually consulted by one diagnostic calculation.
 use std::{
-    cell::RefCell,
     collections::BTreeMap,
     fs::Metadata,
     path::{Path, PathBuf},
@@ -50,23 +49,11 @@ pub(crate) struct Files {
     overflow: bool,
 }
 
-thread_local! {
-    static OBSERVED: RefCell<Option<Files>> = const { RefCell::new(None) };
-}
-
-struct Restore(Option<Files>);
-impl Drop for Restore {
-    fn drop(&mut self) {
-        OBSERVED.with(|observed| *observed.borrow_mut() = self.0.take());
-    }
-}
-
 impl Files {
     pub(crate) fn capture<T>(work: impl FnOnce() -> T) -> (T, Arc<Self>) {
-        let _restore = Restore(OBSERVED.with(|observed| observed.replace(Some(Self::default()))));
-        let result = work();
-        let files = OBSERVED.with(|observed| observed.take().unwrap());
-        (result, Arc::new(files))
+        let context = crate::analysis::AnalysisContext::observing();
+        let result = context.run(|_| work());
+        (result, context.take_files())
     }
 
     pub(crate) fn current(&self) -> bool {
@@ -78,13 +65,9 @@ impl Files {
     }
 }
 
-pub(crate) fn observe(path: &Path) {
-    OBSERVED.with(|observed| {
-        let mut observed = observed.borrow_mut();
-        let Some(files) = observed.as_mut() else {
-            return;
-        };
-        if files.overflow || files.paths.contains_key(path) {
+impl Files {
+    pub(crate) fn observe(&mut self, path: &Path) {
+        if self.overflow || self.paths.contains_key(path) {
             return;
         }
         let stamp = Stamp::read(path);
@@ -94,13 +77,19 @@ pub(crate) fn observe(path: &Path) {
                 .as_ref()
                 .and_then(|stamp| stamp.target.as_ref())
                 .map_or(0, |path| path.as_os_str().len());
-        if files.paths.len() >= MAX_FILES || files.bytes + bytes > MAX_BYTES {
-            files.overflow = true;
+        if self.paths.len() >= MAX_FILES || self.bytes + bytes > MAX_BYTES {
+            self.overflow = true;
             return;
         }
-        files.bytes += bytes;
-        files.paths.insert(path.to_owned(), stamp);
-    });
+        self.bytes += bytes;
+        self.paths.insert(path.to_owned(), stamp);
+    }
+}
+
+pub(crate) fn observe(path: &Path) {
+    if let Some(context) = crate::analysis::AnalysisContext::current() {
+        context.observe(path);
+    }
 }
 
 pub(crate) fn metadata(path: &Path) -> std::io::Result<Metadata> {

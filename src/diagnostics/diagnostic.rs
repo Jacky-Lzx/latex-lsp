@@ -100,9 +100,12 @@ impl Delivery {
                 let cancellation = state.clone();
                 let revisions = workspace.clone();
                 let notifications = tokio::task::spawn_blocking(move || {
-                    snapshot.diagnostic_snapshots_cancelled(uris, || {
+                    crate::analysis::AnalysisContext::cancellable(move || {
                         let push = cancellation.lock().unwrap();
                         push.closed || revisions.revision() != revision
+                    })
+                    .run(|context| {
+                        snapshot.diagnostic_snapshots_cancelled(uris, || context.cancelled())
                     })
                 })
                 .await;

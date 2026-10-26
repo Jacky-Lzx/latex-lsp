@@ -356,8 +356,14 @@ impl Index {
         contexts: Option<BTreeMap<BTreeSet<Url>, BTreeSet<Url>>>,
     ) -> Self {
         let section_keys = contexts.is_some();
+        let analysis = crate::analysis::AnalysisContext::current();
+        let cancelled = || {
+            analysis
+                .as_ref()
+                .is_some_and(|analysis| analysis.cancelled())
+        };
 
-        if !workspace.index_truncated.is_empty() {
+        if cancelled() || !workspace.index_truncated.is_empty() {
             return Self {
                 incomplete: true,
                 ..Default::default()
@@ -375,6 +381,12 @@ impl Index {
             .unwrap_or_else(|| crate::symbols::environment_calls::project_contexts(workspace));
         let mut connected = workspace.symbol_scope(origin);
         loop {
+            if cancelled() {
+                return Self {
+                    incomplete: true,
+                    ..Default::default()
+                };
+            }
             let before = connected.len();
             let relevant: Vec<_> = contexts
                 .keys()
@@ -399,6 +411,12 @@ impl Index {
             .into_iter()
             .filter(|(scope, _)| !scope.is_disjoint(&connected))
         {
+            if cancelled() {
+                return Self {
+                    incomplete: true,
+                    ..Default::default()
+                };
+            }
             let docs: Vec<_> = scope
                 .iter()
                 .filter_map(|uri| workspace.documents.get(uri))

@@ -584,7 +584,7 @@ fn verbatim_environment_header(
 }
 
 pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<SignatureHelp> {
-    crate::project::source_inputs::with_query_cache(|| help_query(workspace, uri, position))
+    crate::analysis::AnalysisContext::new().run(|_| help_query(workspace, uri, position))
 }
 
 fn help_query(workspace: &Workspace, uri: &Url, position: Position) -> Option<SignatureHelp> {

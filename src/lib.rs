@@ -1,5 +1,6 @@
 //! LaTeX language server with modules organized by responsibility.
 
+mod analysis;
 mod bibliography;
 pub mod compilation;
 pub mod config;
