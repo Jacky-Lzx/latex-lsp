@@ -12310,6 +12310,44 @@ fn real_latexmk_refreshes_preexisting_pdf_then_reuses_it_after_identical_saves()
             pdf_modified
         );
     }
+    // A separate compiler can bring latexmk's cache up to date while this
+    // server still remembers the previous PDF and input contents.
+    let changed = source.replace("Hello, world.", "Compiled outside the language server.");
+    std::fs::write(&main_path, &changed).unwrap();
+    let external =
+        texquill::compilation::build::run(&main_path, &Default::default(), &Default::default());
+    assert_eq!(external.status, "success", "{}", external.output);
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":changed}]}),
+    );
+    // An identical save makes the source newer than the externally built PDF.
+    let modified = std::fs::metadata(&pdf).unwrap().modified().unwrap();
+    std::fs::File::open(&main_path)
+        .unwrap()
+        .set_modified(modified + Duration::from_secs(1))
+        .unwrap();
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+    let recovered = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(recovered["params"]["status"], "success", "{recovered}");
+    assert_eq!(recovered["params"]["stale"], false, "{recovered}");
+    assert!(
+        recovered["params"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("applying rule"),
+        "{recovered}"
+    );
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+    let noop = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(noop["params"]["status"], "success", "{noop}");
+    assert!(
+        noop["params"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("Nothing to do"),
+        "{noop}"
+    );
     server.request(2, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);

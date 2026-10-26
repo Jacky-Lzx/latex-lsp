@@ -127,17 +127,38 @@ pub(crate) fn run_with_mode(
         Err(message) => return Outcome::error(message),
     };
     let config = &config;
-    let refresh = !rebuild
-        && config.arguments.is_none()
+    let default_latexmk = config.arguments.is_none()
         && config.rebuild_arguments.is_none()
         && Path::new(&config.executable)
             .file_stem()
-            .is_some_and(|name| name == "latexmk")
+            .is_some_and(|name| name == "latexmk");
+    let refresh = !rebuild
+        && default_latexmk
         && config.artifact_path(root, "pdf").is_some_and(|pdf| {
             previous_pdf.is_none_or(|previous| !previous.matches_pdf(&pdf))
                 && outdated_pdf_input(&pdf, inputs, None).is_some()
         });
     let mut outcome = run_inner(root, config, cancel, rebuild || refresh);
+    // Another compiler invocation can update latexmk's cache and PDF without
+    // updating this server's input history. If latexmk then skips TeX, establish
+    // a fresh history rather than repeatedly rejecting its cached result.
+    // Only retry a no-op: ordinary source changes already rerun TeX themselves.
+    if default_latexmk
+        && !rebuild
+        && !refresh
+        && outcome.status == "success"
+        && !outcome.pdf_updated
+        && outcome.pdf.as_ref().is_some_and(|pdf| {
+            previous_pdf.is_some_and(|previous| {
+                previous.matches_pdf(pdf)
+                    && (previous.pdf_changed()
+                        || previous.changed_input().is_some()
+                        || previous.changed_path().is_some())
+            })
+        })
+    {
+        outcome = run_inner(root, config, cancel, true);
+    }
     reject_outdated_pdf(
         root,
         &mut outcome,
