@@ -1249,9 +1249,7 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
 }
 
 pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<CompletionItem> {
-    crate::project::source_inputs::with_query_cache(|| {
-        completion_in_query(workspace, uri, position)
-    })
+    crate::symbols::query_cache::with_cache(|| completion_in_query(workspace, uri, position))
 }
 
 fn completion_in_query(
@@ -1924,7 +1922,7 @@ pub(crate) fn bibliography_relation_edits<'a>(
 }
 
 pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<Location> {
-    crate::project::source_inputs::with_query_cache(|| definitions_query(workspace, uri, position))
+    crate::symbols::query_cache::with_cache(|| definitions_query(workspace, uri, position))
 }
 
 fn definitions_query(workspace: &Workspace, uri: &Url, position: Position) -> Vec<Location> {
@@ -2454,7 +2452,7 @@ fn all_references(
 }
 
 pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hover> {
-    crate::project::source_inputs::with_query_cache(|| hover_query(workspace, uri, position))
+    crate::symbols::query_cache::with_cache(|| hover_query(workspace, uri, position))
 }
 
 fn hover_query(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hover> {

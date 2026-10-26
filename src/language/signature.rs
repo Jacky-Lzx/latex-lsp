@@ -2964,6 +2964,117 @@ pub(crate) struct SourceCall {
 }
 
 impl<'a> CommandSignatures<'a> {
+    /// Retain an analysis within an immutable query without borrowing sources.
+    pub(crate) fn into_owned(self) -> CommandSignatures<'static> {
+        CommandSignatures {
+            local: self
+                .local
+                .into_iter()
+                .map(|(name, value)| (Cow::Owned(name.into_owned()), value))
+                .collect(),
+            tex_operands: self
+                .tex_operands
+                .into_iter()
+                .map(|(name, value)| (Cow::Owned(name.into_owned()), value))
+                .collect(),
+            literal_operands: self
+                .literal_operands
+                .into_iter()
+                .map(|(name, value)| (Cow::Owned(name.into_owned()), value))
+                .collect(),
+            unverified_names: self
+                .unverified_names
+                .into_iter()
+                .map(|name| Cow::Owned(name.into_owned()))
+                .collect(),
+            detokenize_boundary_known: self.detokenize_boundary_known,
+            identity_parameters: self.identity_parameters,
+            hook_arities: self.hook_arities,
+        }
+    }
+
+    /// Owned capacities plus conservative tree-entry accounting for query
+    /// retention. Include copied grammars, delimiters and hook declarations.
+    pub(crate) fn cache_bytes(&self) -> usize {
+        let key = |name: &Cow<'_, str>| match name {
+            Cow::Borrowed(_) => 0,
+            Cow::Owned(name) => name.capacity(),
+        };
+        fn strings(values: &Vec<String>) -> usize {
+            values.capacity() * std::mem::size_of::<String>()
+                + values.iter().map(String::capacity).sum::<usize>()
+        }
+        fn signature(value: &Signature) -> usize {
+            value.name.capacity()
+                + value.documentation.capacity()
+                + value.parameters.capacity() * std::mem::size_of::<Parameter>()
+                + value
+                    .parameters
+                    .iter()
+                    .map(|parameter| {
+                        parameter.label.capacity()
+                            + match &parameter.kind {
+                                Kind::Flag(value) => value.capacity(),
+                                Kind::Delimited { open, close, .. } => {
+                                    open.capacity() + close.capacity()
+                                }
+                                _ => 0,
+                            }
+                    })
+                    .sum::<usize>()
+        }
+        fn tex(value: &TexOperands) -> usize {
+            strings(&value.prefix)
+                + value.delimiters.capacity() * std::mem::size_of::<Vec<String>>()
+                + value.delimiters.iter().map(strings).sum::<usize>()
+        }
+        fn literal(value: &LiteralOperands) -> usize {
+            match value {
+                LiteralOperands::Signature(value) => signature(value),
+                LiteralOperands::Tex(value) => tex(value),
+                LiteralOperands::Alias(value) | LiteralOperands::Copy(value) => value.capacity(),
+                LiteralOperands::Unknown => 0,
+            }
+        }
+        fn tree<K, V>(entries: &BTreeMap<K, V>) -> usize {
+            entries.len() * (12 * std::mem::size_of::<(K, V)>() + 256)
+        }
+        std::mem::size_of::<Self>()
+            + tree(&self.local)
+            + self
+                .local
+                .iter()
+                .map(|(name, value)| key(name) + value.as_ref().map_or(0, signature))
+                .sum::<usize>()
+            + tree(&self.tex_operands)
+            + self
+                .tex_operands
+                .iter()
+                .map(|(name, value)| key(name) + value.as_ref().map_or(0, tex))
+                .sum::<usize>()
+            + tree(&self.literal_operands)
+            + self
+                .literal_operands
+                .iter()
+                .map(|(name, values)| {
+                    key(name)
+                        + values.capacity() * std::mem::size_of::<LiteralOperands>()
+                        + values.iter().map(literal).sum::<usize>()
+                })
+                .sum::<usize>()
+            + self
+                .unverified_names
+                .iter()
+                .map(|name| key(name) + 12 * std::mem::size_of::<Cow<'_, str>>() + 256)
+                .sum::<usize>()
+            + self
+                .identity_parameters
+                .iter()
+                .map(|name| name.capacity() + 12 * std::mem::size_of::<String>() + 256)
+                .sum::<usize>()
+            + self.hook_arities.cache_bytes()
+    }
+
     pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
         self.local.keys().map(|name| name.as_ref())
     }

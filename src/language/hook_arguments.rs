@@ -50,6 +50,22 @@ pub(crate) struct Arities {
 }
 
 impl Arities {
+    pub(super) fn cache_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self
+                .declared
+                .keys()
+                .map(|name| {
+                    name.capacity() + 12 * std::mem::size_of::<(String, Option<usize>)>() + 256
+                })
+                .sum::<usize>()
+            + self
+                .one_time
+                .iter()
+                .map(|name| name.capacity() + 12 * std::mem::size_of::<String>() + 256)
+                .sum::<usize>()
+    }
+
     pub(crate) fn collect(
         documents: &[(&str, &syntax::Syntax)],
         signatures: &CommandSignatures<'_>,

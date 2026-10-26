@@ -1,6 +1,6 @@
 //! Owned symbol analyses shared only during one immutable workspace query.
 use super::{label_declarations, named_references};
-use crate::project::workspace::Workspace;
+use crate::{language::signature::CommandSignatures, project::workspace::Workspace};
 use lsp_types::Url;
 use std::{
     cell::RefCell,
@@ -12,11 +12,13 @@ const MAX_ENTRIES: usize = 4;
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 type Named = BTreeMap<(usize, Url), Arc<named_references::Index>>;
 type Labels = BTreeMap<(usize, BTreeSet<Url>), Arc<label_declarations::Index>>;
+type Signatures = BTreeMap<(usize, BTreeSet<Url>), Arc<CommandSignatures<'static>>>;
 
 #[derive(Default)]
 struct Cache {
     named: Named,
     labels: Labels,
+    signatures: Signatures,
     bytes: usize,
 }
 
@@ -105,6 +107,26 @@ pub(crate) fn labels(
     )
 }
 
+pub(crate) fn signatures(
+    workspace: &Workspace,
+    scope: &BTreeSet<Url>,
+    build: impl FnOnce() -> CommandSignatures<'static>,
+) -> Arc<CommandSignatures<'static>> {
+    if QUERY.with(|query| query.borrow().is_none()) {
+        return Arc::new(build());
+    }
+    let key_bytes = scope
+        .iter()
+        .map(|uri| uri.as_str().len() + 64)
+        .sum::<usize>();
+    shared(
+        (workspace as *const Workspace as usize, scope.clone()),
+        |cache| &mut cache.signatures,
+        build,
+        |signatures| signatures.cache_bytes().saturating_add(key_bytes),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,6 +204,106 @@ mod tests {
             assert!(!label_declarations::Index::for_scope(&other, &both).contains(&consumer, entry));
             assert!(!label_declarations::Index::for_scope(&workspace, &single)
                 .contains(&consumer, entry));
+        });
+    }
+
+    fn project_signatures(
+        workspace: &Workspace,
+        scope: &BTreeSet<Url>,
+    ) -> Arc<CommandSignatures<'static>> {
+        signatures(workspace, scope, || {
+            CommandSignatures::new(scope.iter().map(|uri| {
+                let doc = &workspace.documents[uri];
+                (doc.text.source.as_str(), &doc.syntax)
+            }))
+            .into_owned()
+        })
+    }
+
+    #[test]
+    fn signature_queries_own_their_bindings_and_distinguish_scopes_workspaces_and_lifetimes() {
+        let consumer = Url::parse("untitled:consumer.tex").unwrap();
+        let provider = Url::parse("untitled:provider.tex").unwrap();
+        let mut workspace = Workspace::default();
+        document(&mut workspace, &consumer, r"\def\forward{\UseHook}");
+        document(&mut workspace, &provider, r"\renewcommand\UseHook[1]{Text}");
+        let single = BTreeSet::from([consumer.clone()]);
+        let both = BTreeSet::from([consumer.clone(), provider.clone()]);
+        let mut other = workspace.clone();
+        document(&mut other, &provider, "Unchanged builtin");
+        let retained = with_cache(|| {
+            let local = project_signatures(&workspace, &single);
+            assert_eq!(local.forwarded_builtin("forward"), Some("UseHook"));
+            assert!(Arc::ptr_eq(
+                &local,
+                &project_signatures(&workspace, &single)
+            ));
+            assert!(project_signatures(&workspace, &both)
+                .forwarded_builtin("forward")
+                .is_none());
+            assert_eq!(
+                project_signatures(&other, &both).forwarded_builtin("forward"),
+                Some("UseHook")
+            );
+            let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with_cache(|| {
+                    assert!(!Arc::ptr_eq(
+                        &local,
+                        &project_signatures(&workspace, &single)
+                    ));
+                    panic!("abandon nested signature query");
+                });
+            }));
+            assert!(nested.is_err());
+            assert!(Arc::ptr_eq(
+                &local,
+                &project_signatures(&workspace, &single)
+            ));
+            local
+        });
+        document(&mut workspace, &consumer, r"\def\forward{\RemoveFromHook}");
+        with_cache(|| {
+            let current = project_signatures(&workspace, &single);
+            assert!(!Arc::ptr_eq(&retained, &current));
+            assert_eq!(current.forwarded_builtin("forward"), Some("RemoveFromHook"));
+        });
+        drop(workspace);
+        assert_eq!(retained.forwarded_builtin("forward"), Some("UseHook"));
+    }
+
+    #[test]
+    fn signature_query_budget_falls_back_to_fresh_analyses() {
+        let mut workspace = Workspace::default();
+        let uri = Url::parse("untitled:signatures.tex").unwrap();
+        document(&mut workspace, &uri, r"\def\forward{\UseHook}");
+        let scope = BTreeSet::from([uri]);
+        assert!(!Arc::ptr_eq(
+            &project_signatures(&workspace, &scope),
+            &project_signatures(&workspace, &scope)
+        ));
+        with_cache(|| {
+            shared(
+                (0, Url::parse("untitled:full").unwrap()),
+                |cache| &mut cache.named,
+                named_references::Index::default,
+                |_| MAX_BYTES,
+            );
+            let first = project_signatures(&workspace, &scope);
+            let second = project_signatures(&workspace, &scope);
+            assert!(!Arc::ptr_eq(&first, &second));
+            assert_eq!(second.forwarded_builtin("forward"), Some("UseHook"));
+        });
+        with_cache(|| {
+            for index in 0..MAX_ENTRIES {
+                let uri = Url::parse(&format!("untitled:scope{index}.tex")).unwrap();
+                document(&mut workspace, &uri, "No definitions");
+                project_signatures(&workspace, &BTreeSet::from([uri]));
+            }
+            let first = project_signatures(&workspace, &scope);
+            assert!(!Arc::ptr_eq(
+                &first,
+                &project_signatures(&workspace, &scope)
+            ));
         });
     }
 
