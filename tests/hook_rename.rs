@@ -340,8 +340,54 @@ fn dynamic_ambiguous_or_unindexed_calls_never_produce_partial_hook_edits() {
 }
 
 #[test]
+#[ignore = "requires native pdflatex"]
+fn native_global_rule_storage_name_cannot_become_a_custom_hook() {
+    let source = r"\documentclass{article}\NewHook{custom}\AddToHook{custom}[alpha]{\typeout{EVENT:A}}\AddToHook{custom}[beta]{\typeout{EVENT:B}}\DeclareHookRule{custom}{alpha}{after}{beta}\begin{document}\UseHook{custom}Text\end{document}";
+    let (workspace, uri) = setup(source);
+    let at = workspace.documents[&uri]
+        .text
+        .position(source.find("custom").unwrap());
+    assert!(features::rename(&workspace, &uri, at, "??").is_err());
+    let directory = tempfile::tempdir().unwrap();
+    for (text, valid) in [
+        (source.to_owned(), true),
+        (source.replace("{custom}", "{??}"), false),
+    ] {
+        std::fs::write(directory.path().join("main.tex"), text).unwrap();
+        let output = std::process::Command::new("pdflatex")
+            .args([
+                "-no-shell-escape",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "main.tex",
+            ])
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            valid,
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let log = std::fs::read_to_string(directory.path().join("main.log")).unwrap();
+        if valid {
+            assert_eq!(
+                log.lines()
+                    .filter(|line| line.starts_with("EVENT:"))
+                    .collect::<Vec<_>>(),
+                ["EVENT:B", "EVENT:A"]
+            );
+        } else {
+            assert!(log.contains("g__hook_??_reversed_tl already defined"));
+        }
+    }
+}
+
+#[test]
 fn target_names_cannot_capture_existing_uses_or_implicit_kernel_triggers() {
     for name in [
+        "??",
         "begindocument",
         "begindocument/before",
         "enddocument/end",

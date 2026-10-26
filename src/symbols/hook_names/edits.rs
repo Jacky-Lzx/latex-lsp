@@ -131,30 +131,31 @@ fn error() -> Error {
 }
 
 fn reserved(name: &str) -> bool {
-    matches!(
-        name.split('/').next().unwrap_or_default(),
-        "cmd"
-            | "env"
-            | "file"
-            | "package"
-            | "class"
-            | "include"
-            | "para"
-            | "shipout"
-            | "build"
-            | "begindocument"
-            | "enddocument"
-            | "label"
-            | "selectfont"
-            | "rmfamily"
-            | "sffamily"
-            | "ttfamily"
-            | "normalfont"
-            | "expand@font@defaults"
-            | "bfseries"
-            | "mdseries"
-            | "insertmark"
-    )
+    name == "??"
+        || matches!(
+            name.split('/').next().unwrap_or_default(),
+            "cmd"
+                | "env"
+                | "file"
+                | "package"
+                | "class"
+                | "include"
+                | "para"
+                | "shipout"
+                | "build"
+                | "begindocument"
+                | "enddocument"
+                | "label"
+                | "selectfont"
+                | "rmfamily"
+                | "sffamily"
+                | "ttfamily"
+                | "normalfont"
+                | "expand@font@defaults"
+                | "bfseries"
+                | "mdseries"
+                | "insertmark"
+        )
 }
 
 fn literal(name: &str) -> bool {

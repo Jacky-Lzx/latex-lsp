@@ -21,6 +21,320 @@ fn locations(uri: &Url, source: &str, needle: &str) -> Vec<Location> {
 }
 
 #[test]
+fn global_rule_labels_link_all_hooks_without_merging_local_definition_identity() {
+    let source = "% global rules\r\n😀 \\AddToHook{one}[alpha]{A}\\AddToHook{one}[alpha]{B}\\AddToHook{two}[alpha]{C}\\AtBeginDocument[alpha]{D}\\AtEndDocument[alpha]{E}\\RemoveFromHook{one}[alpha]\\DeclareHookRule{one}{alpha}{after}{beta}\\DeclareDefaultHookRule{alpha}{before}{beta}\\DeclareDefaultHookRule{beta}{after}{alpha}\\ClearHookRule{two}{beta}{alpha}\\label{alpha}\\ref{alpha}\\def\\alpha{Text}\\NewHook{alpha}";
+    let (workspace, uri) = setup(source);
+    let sites = locations(&uri, source, "alpha");
+    assert_eq!(sites.len(), 14);
+    for (definitions, reads) in [
+        (vec![0, 1], vec![5, 6, 7, 8]),
+        (vec![2], vec![7, 8, 9]),
+        (vec![3], vec![7, 8]),
+        (vec![4], vec![7, 8]),
+    ] {
+        let expected_definitions: Vec<_> = definitions.iter().map(|&i| sites[i].clone()).collect();
+        let expected_reads: Vec<_> = reads.iter().map(|&i| sites[i].clone()).collect();
+        for i in definitions {
+            assert_eq!(
+                features::definitions(&workspace, &uri, sites[i].range.start),
+                expected_definitions
+            );
+            assert_eq!(
+                features::references(&workspace, &uri, sites[i].range.start, false),
+                expected_reads
+            );
+        }
+    }
+    for i in [7, 8] {
+        let at = sites[i].range.start;
+        assert!(features::prepare_rename(&workspace, &uri, at)
+            .unwrap()
+            .is_none());
+        assert!(features::rename(&workspace, &uri, at, "fresh")
+            .unwrap()
+            .is_none());
+        assert_eq!(features::definitions(&workspace, &uri, at), sites[..5]);
+        assert_eq!(
+            features::references(&workspace, &uri, at, true),
+            sites[..10]
+        );
+        assert_eq!(
+            features::references(&workspace, &uri, at, false),
+            sites[5..10]
+        );
+        let hover = features::hover(&workspace, &uri, at).unwrap();
+        assert_eq!(hover.range, Some(sites[i].range));
+        assert!(
+            matches!(hover.contents, HoverContents::Markup(MarkupContent { value, .. }) if value.contains("All hooks (default ordering rule)"))
+        );
+        let highlights = editing::highlights(&workspace, &uri, at);
+        assert_eq!(highlights.len(), 10);
+        assert!(highlights[..5]
+            .iter()
+            .all(|item| item.kind == Some(DocumentHighlightKind::WRITE)));
+        assert!(highlights[5..]
+            .iter()
+            .all(|item| item.kind == Some(DocumentHighlightKind::READ)));
+    }
+    assert_eq!(
+        features::definitions(&workspace, &uri, sites[11].range.start),
+        sites[10..11]
+    );
+}
+
+#[test]
+fn global_rule_completion_unions_hook_labels_and_preserves_full_field_ranges() {
+    for tail in [
+        r"\DeclareDefaultHookRule{alFAKE}{before}{beta}",
+        r"\DeclareDefaultHookRule{beta}{after}{alFAKE}",
+        r"\DeclareDefaultHookRule{alFAKE",
+        r"\DeclareDefaultHookRule{beta}{after}{alFAKE",
+    ] {
+        let source = format!("% global\r\n😀 \\AddToHook{{one}}[alpha]{{A}}\\AddToHook{{two}}[alphabet]{{B}}\\AtEndDocument[alpine]{{C}}\\label{{albatross}}{tail}");
+        let (workspace, uri) = setup(&source);
+        let text = &workspace.documents[&uri].text;
+        let at = source.rfind("alFAKE").unwrap();
+        let items = features::completion(&workspace, &uri, text.position(at + 2));
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "alphabet", "alpine"],
+            "{source}"
+        );
+        for item in items {
+            assert_eq!(item.detail.as_deref(), Some("Code label across hooks"));
+            assert_eq!(
+                item.text_edit,
+                Some(CompletionTextEdit::Edit(TextEdit {
+                    range: text.range(at, at + 6),
+                    new_text: item.label
+                }))
+            );
+        }
+    }
+    for tail in [
+        r"\DeclareDefaultHookRule{}{before}{beta}",
+        r"\DeclareDefaultHookRule{",
+    ] {
+        let source = format!(r"\AddToHook{{one}}[alpha]{{A}}{tail}");
+        let (workspace, uri) = setup(&source);
+        let text = &workspace.documents[&uri].text;
+        let at =
+            source.rfind(r"\DeclareDefaultHookRule{").unwrap() + r"\DeclareDefaultHookRule{".len();
+        let items = features::completion(&workspace, &uri, text.position(at));
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].text_edit,
+            Some(CompletionTextEdit::Edit(TextEdit {
+                range: text.range(at, at),
+                new_text: "alpha".into()
+            }))
+        );
+    }
+}
+
+#[test]
+fn global_rules_follow_confirmed_named_and_forwarded_interfaces_and_bare_fields() {
+    for (preamble, call) in [
+        ("", r"\DeclareDefaultHookRule"),
+        ("", r"\csuse{DeclareDefaultHookRule}"),
+        ("", r"\csname DeclareDefaultHookRule\endcsname"),
+        (r"\def\order{\DeclareDefaultHookRule}", r"\order"),
+        (
+            r"\NewDocumentCommand\order{}{\DeclareDefaultHookRule}",
+            r"\order",
+        ),
+        (
+            r"\newenvironment{order}{\DeclareDefaultHookRule}{}",
+            r"\order",
+        ),
+        (
+            r"\def\DeclareHookRule{\DeclareDefaultHookRule}",
+            r"\DeclareHookRule",
+        ),
+    ] {
+        let source = format!(
+            r"{preamble}\AddToHook{{one}}[alpha]{{A}}\AddToHook{{two}}[alpha]{{B}}{call}{{alpha}}{{after}}{{beta}}"
+        );
+        let (workspace, uri) = setup(&source);
+        let sites = locations(&uri, &source, "alpha");
+        assert_eq!(
+            features::definitions(&workspace, &uri, sites[2].range.start),
+            sites[..2],
+            "{source}"
+        );
+        assert_eq!(
+            features::references(&workspace, &uri, sites[2].range.start, true),
+            sites,
+            "{source}"
+        );
+    }
+    let source = "\\AddToHook{one}[alphabet]{A}\\AddToHook{two}[beta]{B}\\DeclareDefaultHookRule % boundary\n{ alphabet }{\\unknown}{ beta }\\DeclareDefaultHookRule a{before}b";
+    let (workspace, uri) = setup(source);
+    let sites = locations(&uri, source, "alphabet");
+    assert_eq!(
+        features::definitions(&workspace, &uri, sites[1].range.start),
+        sites[..1]
+    );
+    let at = source.rfind("a{before}").unwrap();
+    let text = &workspace.documents[&uri].text;
+    let items = features::completion(&workspace, &uri, text.position(at + 1));
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0].text_edit,
+        Some(CompletionTextEdit::Edit(TextEdit {
+            range: text.range(at, at + 1),
+            new_text: "{alphabet}".into()
+        }))
+    );
+}
+
+#[test]
+fn reserved_global_rule_table_and_current_local_forwarders_keep_their_scope() {
+    for tail in [
+        r"\DeclareHookRule{ ?? }{alpha}{after}{beta}",
+        r"\ClearHookRule{??}{alpha}{beta}",
+        r"\DeclareDefaultHookRule{\unknown}{after}{alpha}",
+        r"\DeclareDefaultHookRule{beta}{\unknown}{alpha}",
+    ] {
+        let source = format!(r"\AddToHook{{one}}[alpha]{{A}}\AddToHook{{two}}[alpha]{{B}}{tail}");
+        let (workspace, uri) = setup(&source);
+        let sites = locations(&uri, &source, "alpha");
+        assert_eq!(
+            features::definitions(&workspace, &uri, sites[2].range.start),
+            sites[..2],
+            "{source}"
+        );
+        assert_eq!(
+            features::references(&workspace, &uri, sites[2].range.start, true),
+            sites,
+            "{source}"
+        );
+    }
+    let source = r"\def\DeclareDefaultHookRule{\DeclareHookRule}\AddToHook{one}[alpha]{A}\AddToHook{two}[alpha]{B}\DeclareDefaultHookRule{one}{alpha}{after}{beta}";
+    let (workspace, uri) = setup(source);
+    let sites = locations(&uri, source, "alpha");
+    assert_eq!(
+        features::definitions(&workspace, &uri, sites[2].range.start),
+        sites[..1]
+    );
+    assert_eq!(
+        features::references(&workspace, &uri, sites[2].range.start, true),
+        [sites[0].clone(), sites[2].clone()]
+    );
+}
+
+#[test]
+fn global_rule_data_dynamic_labels_and_replaced_interfaces_do_not_create_navigation() {
+    for tail in [
+        r"\detokenize{\DeclareDefaultHookRule{alpha}{after}{beta}}",
+        r"\string\DeclareDefaultHookRule{alpha}{after}{beta}",
+        r"\NewHookWithArguments{capture}{1}\UseHook{capture}{\DeclareDefaultHookRule{alpha}{after}{beta}}",
+        r"\def\DeclareDefaultHookRule#1#2#3{}\DeclareDefaultHookRule{alpha}{after}{beta}",
+        r"\def\order#1{\DeclareDefaultHookRule}\order{Ignore}{alpha}{after}{beta}",
+        r"\DeclareDefaultHookRule{alpha\which}{after}{beta}",
+        r"\DeclareDefaultHookRule{./alpha}{after}{beta}",
+        "\\DeclareDefaultHookRule{al% split\nalpha}{after}{beta}",
+    ] {
+        let source = format!(r"\AddToHook{{one}}[alpha]{{A}}{tail}");
+        let (workspace, uri) = setup(&source);
+        let at = workspace.documents[&uri]
+            .text
+            .position(source.rfind("alpha").unwrap());
+        assert!(
+            features::definitions(&workspace, &uri, at).is_empty(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn global_rule_providers_refresh_unsaved_interfaces_and_isolate_unrelated_roots() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let provider = main.join("hooks.tex").unwrap();
+    let other = main.join("other.tex").unwrap();
+    let source = "% rules\r\n\\documentclass{article}\\input{hooks}😀 \\order{alpha}{after}{beta}";
+    let supplied =
+        r"\def\order{\DeclareDefaultHookRule}\AddToHook{one}[alpha]{A}\AddToHook{two}[alpha]{B}";
+    for (uri, text) in [(&main, source), (&provider, supplied)] {
+        std::fs::write(uri.to_file_path().unwrap(), text).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.config.distribution.enabled = false;
+    workspace.open(main.clone(), source.into(), 5);
+    let at = locations(&main, source, "alpha")[0].range.start;
+    let expected = locations(&provider, supplied, "alpha");
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    let replaced = supplied.replace(
+        r"\def\order{\DeclareDefaultHookRule}",
+        r"\def\order#1#2#3{}",
+    );
+    workspace.open(provider.clone(), replaced, 12);
+    assert!(features::definitions(&workspace, &main, at).is_empty());
+    workspace.open(provider.clone(), supplied.into(), 13);
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    let local = supplied.replace(r"\DeclareDefaultHookRule", r"\DeclareHookRule");
+    workspace.open(provider.clone(), local, 14);
+    assert!(features::definitions(&workspace, &main, at).is_empty());
+    workspace.documents.remove(&provider);
+    workspace.reload(&provider);
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    workspace.open(
+        other,
+        r"\documentclass{article}\AddToHook{other}[alpha]{Other}".into(),
+        8,
+    );
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    assert_eq!(workspace.documents[&main].version, Some(5));
+}
+
+#[test]
+fn shared_global_rule_fields_require_consensus_without_losing_local_definitions() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Url::from_file_path(directory.path().join("a.tex")).unwrap();
+    let b = a.join("b.tex").unwrap();
+    let shared = a.join("shared.tex").unwrap();
+    let supplied = r"\AddToHook{one}[alpha]{A}\AddToHook{two}[alpha]{B}\DeclareDefaultHookRule{alpha}{after}{beta}";
+    let source = r"\documentclass{article}\input{shared}\begin{document}\RemoveFromHook{one}[alpha]\end{document}";
+    for (uri, text) in [(&a, source), (&b, source), (&shared, supplied)] {
+        std::fs::write(uri.to_file_path().unwrap(), text).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.config.distribution.enabled = false;
+    workspace.open(a.clone(), source.into(), 5);
+    workspace.open(b.clone(), source.into(), 7);
+    let sites = locations(&shared, supplied, "alpha");
+    let global = sites[2].range.start;
+    let local = locations(&a, source, "alpha")[0].range.start;
+    assert_eq!(
+        features::definitions(&workspace, &shared, global),
+        sites[..2]
+    );
+    assert_eq!(
+        features::references(&workspace, &shared, global, true).len(),
+        5
+    );
+    assert_eq!(features::references(&workspace, &a, local, true).len(), 4);
+    workspace.open(
+        b.clone(),
+        format!(r"\def\DeclareDefaultHookRule#1#2#3{{}}{source}"),
+        9,
+    );
+    assert!(features::definitions(&workspace, &shared, global).is_empty());
+    assert_eq!(features::definitions(&workspace, &a, local), sites[..1]);
+    assert_eq!(features::references(&workspace, &a, local, true).len(), 3);
+    workspace.open(b, source.into(), 11);
+    assert_eq!(
+        features::definitions(&workspace, &shared, global),
+        sites[..2]
+    );
+    assert_eq!(features::references(&workspace, &a, local, true).len(), 4);
+}
+
+#[test]
 fn code_labels_navigate_all_chunks_without_merging_hooks_or_other_namespaces() {
     let source = "% code labels\r\n😀 \\NewHook{one}\\NewHook{two}\\AddToHook{one}[alpha]{First}\\AddToHook{one}[alpha]{Second}\\AddToHook{two}[alpha]{Other}\\RemoveFromHook{one}[alpha]\\DeclareHookRule{one}{alpha}{before}{beta}\\ClearHookRule{one}{beta}{alpha}\\label{alpha}\\ref{alpha}\\def\\alpha{Text}\\NewHook{alpha}";
     let (workspace, uri) = setup(source);
@@ -476,7 +790,7 @@ fn data_operands_dynamic_fields_and_unconfirmed_interfaces_never_create_label_na
         r"\RemoveFromHook{one}[./alpha]",
         r"\RemoveFromHook{one}[alpha\which]",
         "\\RemoveFromHook{one}[al% split\nalpha]",
-        r"\DeclareDefaultHookRule{alpha}{after}{beta}",
+        r"\def\DeclareDefaultHookRule#1#2#3{}\DeclareDefaultHookRule{alpha}{after}{beta}",
     ] {
         let source = format!(r"\AddToHook{{one}}[alpha]{{Code}}{tail}");
         let (workspace, uri) = setup(&source);
@@ -689,6 +1003,122 @@ fn native_code_label_chunks_rules_and_removal_match_navigation() {
         let (after_events, after_aux) = compile(&changed.source);
         assert_eq!(events, after_events);
         assert_eq!(aux, after_aux.replace("{fresh}", "{safe}"));
+    }
+}
+
+#[test]
+#[ignore = "requires native pdflatex"]
+fn native_reserved_global_rules_clears_and_local_overrides_match_source_scope() {
+    let base = r"\documentclass{article}\NewHook{one}\NewHook{two}\AddToHook{one}[alpha]{\typeout{EVENT:one-A}}\AddToHook{one}[beta]{\typeout{EVENT:one-B}}\AddToHook{two}[alpha]{\typeout{EVENT:two-A}}\AddToHook{two}[beta]{\typeout{EVENT:two-B}}";
+    for (rule, events, local_override) in [
+        (
+            r"\DeclareDefaultHookRule{alpha}{after}{beta}",
+            ["one-B", "one-A", "two-B", "two-A"],
+            false,
+        ),
+        (
+            r"\DeclareHookRule{ ?? }{alpha}{after}{beta}",
+            ["one-B", "one-A", "two-B", "two-A"],
+            false,
+        ),
+        (
+            r"\DeclareDefaultHookRule{alpha}{after}{beta}\ClearHookRule{??}{alpha}{beta}",
+            ["one-A", "one-B", "two-A", "two-B"],
+            false,
+        ),
+        (
+            r"\DeclareDefaultHookRule{alpha}{after}{beta}\DeclareHookRule{one}{alpha}{before}{beta}",
+            ["one-A", "one-B", "two-B", "two-A"],
+            true,
+        ),
+    ] {
+        let source = format!(
+            r"{base}{rule}\begin{{document}}\UseHook{{one}}\UseHook{{two}}Text\end{{document}}"
+        );
+        let (workspace, uri) = setup(&source);
+        let sites = locations(&uri, &source, "alpha");
+        for (i, site) in sites.iter().enumerate().skip(2) {
+            let expected = if local_override && i == 3 {
+                &sites[..1]
+            } else {
+                &sites[..2]
+            };
+            assert_eq!(
+                features::definitions(&workspace, &uri, site.range.start),
+                expected
+            );
+        }
+        assert_eq!(
+            features::references(&workspace, &uri, sites[2].range.start, true),
+            sites
+        );
+        assert_eq!(
+            compile(&source).0,
+            events.map(|event| format!("EVENT:{event}"))
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires native pdflatex"]
+fn native_global_rule_navigation_and_ordinary_key_edits_preserve_all_hook_events() {
+    for (preamble, call) in [
+        ("", r"\DeclareDefaultHookRule"),
+        ("", r"\csname DeclareDefaultHookRule\endcsname"),
+        (r"\def\order{\DeclareDefaultHookRule}", r"\order"),
+    ] {
+        let source = format!(
+            r"\documentclass{{article}}{preamble}\NewHook{{one}}\NewHook{{two}}\AddToHook{{one}}[alpha]{{\typeout{{EVENT:one-A}}}}\AddToHook{{one}}[beta]{{\typeout{{EVENT:one-B}}}}\AddToHook{{two}}[alpha]{{\typeout{{EVENT:two-A}}}}\AddToHook{{two}}[beta]{{\typeout{{EVENT:two-B}}}}{call}{{alpha}}{{after}}{{beta}}\begin{{document}}\UseHook{{one}}\UseHook{{two}}Text\label{{alpha}}\ref{{alpha}}\end{{document}}"
+        );
+        let (workspace, uri) = setup(&source);
+        let sites = locations(&uri, &source, "alpha");
+        assert_eq!(sites.len(), 5);
+        assert_eq!(
+            features::definitions(&workspace, &uri, sites[2].range.start),
+            sites[..2]
+        );
+        assert_eq!(
+            features::references(&workspace, &uri, sites[2].range.start, true),
+            sites[..3]
+        );
+        let before = compile(&source);
+        assert_eq!(
+            before.0,
+            ["EVENT:one-B", "EVENT:one-A", "EVENT:two-B", "EVENT:two-A"]
+        );
+        let mut edits = features::rename(&workspace, &uri, sites[4].range.start, "fresh")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap()
+            .remove(&uri)
+            .unwrap();
+        assert_eq!(
+            edits,
+            sites[3..]
+                .iter()
+                .map(|site| TextEdit {
+                    range: site.range,
+                    new_text: "fresh".into()
+                })
+                .collect::<Vec<_>>()
+        );
+        edits.reverse();
+        let changed = Text::new(source)
+            .changed(
+                edits
+                    .into_iter()
+                    .map(|edit| TextDocumentContentChangeEvent {
+                        range: Some(edit.range),
+                        range_length: None,
+                        text: edit.new_text,
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        let after = compile(&changed.source);
+        assert_eq!(before.0, after.0);
+        assert_eq!(before.1, after.1.replace("{fresh}", "{alpha}"));
     }
 }
 

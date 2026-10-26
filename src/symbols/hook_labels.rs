@@ -1,4 +1,4 @@
-//! Explicit code labels, keyed by hook name rather than reference-key identity.
+//! Explicit code labels, with local hooks and global default ordering rules.
 use super::hook_fields::Candidate;
 use crate::{
     language::signature::CommandSignatures,
@@ -18,6 +18,7 @@ const COMMANDS: &[&str] = &[
     "AtEndDocument",
     "RemoveFromHook",
     "DeclareHookRule",
+    "DeclareDefaultHookRule",
     "ClearHookRule",
 ];
 
@@ -78,7 +79,7 @@ fn optional(source: &str, after: usize) -> Option<(Span<usize>, usize, bool)> {
 
 #[derive(Clone, PartialEq, Eq)]
 struct Entry {
-    hook: String,
+    hook: Option<String>,
     name: String,
     span: Span<usize>,
     declaration: bool,
@@ -134,21 +135,29 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
             if !signatures.command_unchanged("AddToHook") {
                 continue;
             }
-            (hook, invocation.end)
+            (Some(hook), invocation.end)
+        } else if name == "DeclareDefaultHookRule" {
+            (None, invocation.end)
         } else {
             let Some((hook, after, true)) = super::hook_names::field(source, invocation.end) else {
                 continue;
             };
-            (&source[normalized(source, hook)], after)
+            (Some(&source[normalized(source, hook)]), after)
         };
-        if !literal(hook) {
+        if hook.is_some_and(|hook| !literal(hook)) {
             continue;
         }
+        // The kernel stores default rules in this reserved hook. Public
+        // rule/clear calls can address the same table explicitly.
+        let hook = match (name, hook) {
+            ("DeclareHookRule" | "ClearHookRule", Some("??")) => None,
+            _ => hook,
+        };
         let declaration = lifecycle.is_some() || name.starts_with("AddToHook");
         let optional_label = declaration || name == "RemoveFromHook";
         let count = if optional_label { 1 } else { 2 };
         for slot in 0..count {
-            if slot == 1 && name == "DeclareHookRule" {
+            if slot == 1 && matches!(name, "DeclareHookRule" | "DeclareDefaultHookRule") {
                 let Some((_, end, true)) = super::hook_names::field(source, after) else {
                     break;
                 };
@@ -172,7 +181,7 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
                     span.start,
                     Candidate {
                         entry: Entry {
-                            hook: hook.into(),
+                            hook: hook.map(str::to_owned),
                             name: name.into(),
                             span,
                             declaration,
@@ -225,7 +234,9 @@ impl Index {
             .filter(|(uri, _)| scope.contains(*uri))
             .flat_map(|(uri, entries)| entries.values().map(move |entry| (uri, entry)))
             .filter(move |(_, entry)| {
-                entry.complete && label_name(&entry.name) && entry.hook == target.hook
+                entry.complete
+                    && label_name(&entry.name)
+                    && (target.hook.is_none() || entry.hook.is_none() || entry.hook == target.hook)
             })
     }
     fn location(ws: &Workspace, uri: &Url, entry: &Entry) -> Location {
@@ -283,13 +294,14 @@ pub(crate) fn references(
 pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Hover> {
     let index = Index::new(ws, uri, offset, true);
     let target = index.target(uri, offset, true)?;
+    let scope = target.hook.as_ref().map_or_else(
+        || "All hooks (default ordering rule)".into(),
+        |hook| format!("Hook: {hook}"),
+    );
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::PlainText,
-            value: format!(
-                "{} (LaTeX hook code label)\n\nHook: {}",
-                target.name, target.hook
-            ),
+            value: format!("{} (LaTeX hook code label)\n\n{}", target.name, scope),
         }),
         range: Some(Index::location(ws, uri, target).range),
     })
@@ -318,7 +330,10 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
             .map(|name| CompletionItem {
                 label: name.clone(),
                 kind: Some(CompletionItemKind::REFERENCE),
-                detail: Some(format!("Code label in hook {}", target.hook)),
+                detail: Some(target.hook.as_ref().map_or_else(
+                    || "Code label across hooks".into(),
+                    |hook| format!("Code label in hook {hook}"),
+                )),
                 filter_text: Some(name.clone()),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range: doc.text.range(target.span.start, target.span.end),
