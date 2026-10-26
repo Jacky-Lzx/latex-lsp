@@ -14,6 +14,8 @@ use std::{
 const COMMANDS: &[&str] = &[
     "AddToHook",
     "AddToHookWithArguments",
+    "AtBeginDocument",
+    "AtEndDocument",
     "RemoveFromHook",
     "DeclareHookRule",
     "ClearHookRule",
@@ -121,14 +123,28 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
         } else {
             continue;
         };
-        let Some((hook, mut after, true)) = super::hook_names::field(source, invocation.end) else {
-            continue;
+        let lifecycle = match name {
+            "AtBeginDocument" => Some("begindocument"),
+            "AtEndDocument" => Some("enddocument"),
+            _ => None,
         };
-        let hook = &source[normalized(source, hook)];
+        let (hook, mut after) = if let Some(hook) = lifecycle {
+            // The public lifecycle wrappers invoke AddToHook at registration
+            // time; their own unchanged spelling does not certify its meaning.
+            if !signatures.command_unchanged("AddToHook") {
+                continue;
+            }
+            (hook, invocation.end)
+        } else {
+            let Some((hook, after, true)) = super::hook_names::field(source, invocation.end) else {
+                continue;
+            };
+            (&source[normalized(source, hook)], after)
+        };
         if !literal(hook) {
             continue;
         }
-        let declaration = name.starts_with("AddToHook");
+        let declaration = lifecycle.is_some() || name.starts_with("AddToHook");
         let optional_label = declaration || name == "RemoveFromHook";
         let count = if optional_label { 1 } else { 2 };
         for slot in 0..count {
