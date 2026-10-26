@@ -1,4 +1,4 @@
-//! Explicit code labels, with local hooks and global default ordering rules.
+//! Literal code labels in registrations, default settings and ordering rules.
 use super::hook_fields::Candidate;
 use crate::{
     language::signature::CommandSignatures,
@@ -20,6 +20,8 @@ const COMMANDS: &[&str] = &[
     "DeclareHookRule",
     "DeclareDefaultHookRule",
     "ClearHookRule",
+    "PushDefaultHookLabel",
+    "SetDefaultHookLabel",
 ];
 
 fn literal(value: &str) -> bool {
@@ -80,6 +82,7 @@ fn optional(source: &str, after: usize) -> Option<(Span<usize>, usize, bool)> {
 #[derive(Clone, PartialEq, Eq)]
 struct Entry {
     hook: Option<String>,
+    default_setting: bool,
     name: String,
     span: Span<usize>,
     declaration: bool,
@@ -129,6 +132,7 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
             "AtEndDocument" => Some("enddocument"),
             _ => None,
         };
+        let default_setting = matches!(name, "PushDefaultHookLabel" | "SetDefaultHookLabel");
         let (hook, mut after) = if let Some(hook) = lifecycle {
             // The public lifecycle wrappers invoke AddToHook at registration
             // time; their own unchanged spelling does not certify its meaning.
@@ -136,7 +140,7 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
                 continue;
             }
             (Some(hook), invocation.end)
-        } else if name == "DeclareDefaultHookRule" {
+        } else if name == "DeclareDefaultHookRule" || default_setting {
             (None, invocation.end)
         } else {
             let Some((hook, after, true)) = super::hook_names::field(source, invocation.end) else {
@@ -155,7 +159,11 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
         };
         let declaration = lifecycle.is_some() || name.starts_with("AddToHook");
         let optional_label = declaration || name == "RemoveFromHook";
-        let count = if optional_label { 1 } else { 2 };
+        let count = if optional_label || default_setting {
+            1
+        } else {
+            2
+        };
         for slot in 0..count {
             if slot == 1 && matches!(name, "DeclareHookRule" | "DeclareDefaultHookRule") {
                 let Some((_, end, true)) = super::hook_names::field(source, after) else {
@@ -182,6 +190,10 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
                     Candidate {
                         entry: Entry {
                             hook: hook.map(str::to_owned),
+                            // A setting names the default across hooks; it
+                            // does not itself register code or certify the
+                            // execution context of any omitted label.
+                            default_setting,
                             name: name.into(),
                             span,
                             declaration,
@@ -295,7 +307,14 @@ pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Hover> {
     let index = Index::new(ws, uri, offset, true);
     let target = index.target(uri, offset, true)?;
     let scope = target.hook.as_ref().map_or_else(
-        || "All hooks (default ordering rule)".into(),
+        || {
+            if target.default_setting {
+                "All hooks (default code label)"
+            } else {
+                "All hooks (default ordering rule)"
+            }
+            .into()
+        },
         |hook| format!("Hook: {hook}"),
     );
     Some(Hover {

@@ -21,6 +21,244 @@ fn locations(uri: &Url, source: &str, needle: &str) -> Vec<Location> {
 }
 
 #[test]
+fn default_label_settings_link_explicit_chunks_without_merging_local_definitions() {
+    let source = "% defaults\r\n😀 \\AddToHook{one}[alpha]{A}\\AddToHook{two}[alpha]{B}\\AtBeginDocument[alpha]{C}\\PushDefaultHookLabel{alpha}\\SetDefaultHookLabel{alpha}\\PopDefaultHookLabel\\RemoveFromHook{one}[alpha]\\DeclareDefaultHookRule{alpha}{after}{beta}\\label{alpha}\\ref{alpha}\\def\\alpha{}";
+    let (workspace, uri) = setup(source);
+    let sites = locations(&uri, source, "alpha");
+    assert_eq!(sites.len(), 10);
+    for i in [3, 4] {
+        let at = sites[i].range.start;
+        assert_eq!(features::definitions(&workspace, &uri, at), sites[..3]);
+        assert_eq!(features::references(&workspace, &uri, at, true), sites[..7]);
+        assert_eq!(
+            features::references(&workspace, &uri, at, false),
+            sites[3..7]
+        );
+        let hover = features::hover(&workspace, &uri, at).unwrap();
+        assert_eq!(hover.range, Some(sites[i].range));
+        assert!(
+            matches!(hover.contents, HoverContents::Markup(MarkupContent { value, .. })
+            if value.contains("All hooks (default code label)"))
+        );
+        let highlights = editing::highlights(&workspace, &uri, at);
+        assert_eq!(highlights.len(), 7);
+        assert!(highlights[..3]
+            .iter()
+            .all(|item| item.kind == Some(DocumentHighlightKind::WRITE)));
+        assert!(highlights[3..]
+            .iter()
+            .all(|item| item.kind == Some(DocumentHighlightKind::READ)));
+        assert!(features::prepare_rename(&workspace, &uri, at)
+            .unwrap()
+            .is_none());
+        assert!(features::rename(&workspace, &uri, at, "fresh")
+            .unwrap()
+            .is_none());
+    }
+    assert_eq!(
+        features::definitions(&workspace, &uri, sites[0].range.start),
+        sites[..1]
+    );
+    assert_eq!(
+        features::references(&workspace, &uri, sites[0].range.start, true),
+        [0, 3, 4, 5, 6].map(|i| sites[i].clone())
+    );
+    assert_eq!(
+        features::definitions(&workspace, &uri, sites[8].range.start),
+        sites[7..8]
+    );
+}
+
+#[test]
+fn default_setting_completion_unions_explicit_labels_and_replaces_the_entire_field() {
+    for command in ["PushDefaultHookLabel", "SetDefaultHookLabel"] {
+        for tail in [
+            "{alFAKE}",
+            "{alFAKE",
+            "{}",
+            "{",
+            " a",
+            "% boundary\n{ alFAKE }",
+        ] {
+            let source = format!("% defaults\r\n😀 \\AddToHook{{one}}[alpha]{{A}}\\AtEndDocument[alpine]{{B}}\\label{{albatross}}\\{command}{tail}");
+            let (workspace, uri) = setup(&source);
+            let text = &workspace.documents[&uri].text;
+            let (start, length, prefix) = if let Some(at) = source.find("alFAKE") {
+                (at, 6, 2)
+            } else if tail == " a" {
+                (source.len() - 1, 1, 1)
+            } else {
+                (source.rfind('{').unwrap() + 1, 0, 0)
+            };
+            let items = features::completion(&workspace, &uri, text.position(start + prefix));
+            assert_eq!(
+                items
+                    .iter()
+                    .map(|item| item.label.as_str())
+                    .collect::<Vec<_>>(),
+                ["alpha", "alpine"],
+                "{source}"
+            );
+            for item in items {
+                assert_eq!(item.detail.as_deref(), Some("Code label across hooks"));
+                let expected = if tail == " a" {
+                    format!("{{{}}}", item.label)
+                } else {
+                    item.label
+                };
+                assert_eq!(
+                    item.text_edit,
+                    Some(CompletionTextEdit::Edit(TextEdit {
+                        range: text.range(start, start + length),
+                        new_text: expected,
+                    })),
+                    "{source}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn default_setting_fields_follow_confirmed_leaf_interfaces_and_bare_labels() {
+    for (preamble, call) in [
+        ("", r"\PushDefaultHookLabel"),
+        ("", r"\SetDefaultHookLabel"),
+        ("", r"\csuse{PushDefaultHookLabel}"),
+        ("", r"\csname SetDefaultHookLabel\endcsname"),
+        (r"\def\select{\PushDefaultHookLabel}", r"\select"),
+        (
+            r"\NewDocumentCommand\select{}{\SetDefaultHookLabel}",
+            r"\select",
+        ),
+        (
+            r"\newenvironment{select}{\PushDefaultHookLabel}{}",
+            r"\select",
+        ),
+        (
+            r"\def\DeclareDefaultHookRule{\SetDefaultHookLabel}",
+            r"\DeclareDefaultHookRule",
+        ),
+    ] {
+        let source = format!("{preamble}\\AddToHook{{one}}[alpha]{{A}}\\AddToHook{{two}}[alpha]{{B}}{call} % boundary\n{{ alpha }}");
+        let (workspace, uri) = setup(&source);
+        let sites = locations(&uri, &source, "alpha");
+        assert_eq!(
+            features::definitions(&workspace, &uri, sites[2].range.start),
+            sites[..2],
+            "{source}"
+        );
+        assert_eq!(
+            features::references(&workspace, &uri, sites[2].range.start, true),
+            sites,
+            "{source}"
+        );
+    }
+    let source = r"\def\SetDefaultHookLabel{\DeclareHookRule}\AddToHook{one}[alpha]{A}\AddToHook{two}[alpha]{B}\SetDefaultHookLabel{one}{alpha}{before}{beta}";
+    let (workspace, uri) = setup(source);
+    let sites = locations(&uri, source, "alpha");
+    assert_eq!(
+        features::definitions(&workspace, &uri, sites[2].range.start),
+        sites[..1]
+    );
+    let source = r"\AddToHook{one}[a]{A}\PushDefaultHookLabel a\SetDefaultHookLabel a";
+    let (workspace, uri) = setup(source);
+    let text = &workspace.documents[&uri].text;
+    let definition = Location {
+        uri: uri.clone(),
+        range: text.range(16, 17),
+    };
+    for needle in ["PushDefaultHookLabel a", "SetDefaultHookLabel a"] {
+        let at = source.find(needle).unwrap() + needle.len() - 1;
+        assert_eq!(
+            features::definitions(&workspace, &uri, text.position(at)),
+            std::slice::from_ref(&definition)
+        );
+    }
+}
+
+#[test]
+fn default_settings_reject_data_dynamic_names_and_unconfirmed_interfaces() {
+    for tail in [
+        r"\detokenize{\PushDefaultHookLabel{alpha}}",
+        r"\string\SetDefaultHookLabel{alpha}",
+        r"\NewHookWithArguments{capture}{1}\UseHook{capture}{\SetDefaultHookLabel{alpha}}",
+        r"\def\SetDefaultHookLabel#1{}\SetDefaultHookLabel{alpha}",
+        r"\def\select#1{\PushDefaultHookLabel}\select{Ignored}{alpha}",
+        r"\PushDefaultHookLabel{alpha\which}",
+        r"\SetDefaultHookLabel{./alpha}",
+        "\\SetDefaultHookLabel{al% split\nalpha}",
+    ] {
+        let source = format!(r"\AddToHook{{one}}[alpha]{{A}}{tail}");
+        let (workspace, uri) = setup(&source);
+        let at = workspace.documents[&uri]
+            .text
+            .position(source.rfind("alpha").unwrap());
+        assert!(
+            features::definitions(&workspace, &uri, at).is_empty(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn default_setting_fields_refresh_unsaved_providers_and_shared_consumer_consensus() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let provider = main.join("hooks.tex").unwrap();
+    let other = main.join("other.tex").unwrap();
+    let source = r"\documentclass{article}\input{hooks}\PushDefaultHookLabel{outer}\select{alpha}\PopDefaultHookLabel";
+    let supplied = r"\def\select{\SetDefaultHookLabel}\AddToHook{one}[alpha]{A}\AddToHook{two}[alpha]{B}\select{alpha}";
+    for (uri, text) in [(&main, source), (&provider, supplied)] {
+        std::fs::write(uri.to_file_path().unwrap(), text).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.config.distribution.enabled = false;
+    workspace.open(main.clone(), source.into(), 5);
+    let at = locations(&main, source, "alpha")[0].range.start;
+    let provided = locations(&provider, supplied, "alpha");
+    let expected = &provided[..2];
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    let pushed = supplied.replace(r"\SetDefaultHookLabel", r"\PushDefaultHookLabel");
+    workspace.open(provider.clone(), pushed.clone(), 12);
+    assert_eq!(
+        features::definitions(&workspace, &main, at),
+        locations(&provider, &pushed, "alpha")[..2]
+    );
+    workspace.open(
+        provider.clone(),
+        supplied.replace(r"\def\select{\SetDefaultHookLabel}", r"\def\select#1{}"),
+        13,
+    );
+    assert!(features::definitions(&workspace, &main, at).is_empty());
+    workspace.open(provider.clone(), supplied.into(), 14);
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    workspace.open(
+        other.clone(),
+        r"\documentclass{article}\begin{document}Other\end{document}".into(),
+        7,
+    );
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    workspace.open(
+        other.clone(),
+        format!(r"\def\SetDefaultHookLabel#1{{}}{source}"),
+        8,
+    );
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    assert!(features::definitions(&workspace, &provider, provided[2].range.start).is_empty());
+    workspace.open(other, source.into(), 9);
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    assert_eq!(
+        features::definitions(&workspace, &provider, provided[2].range.start),
+        expected
+    );
+    workspace.documents.remove(&provider);
+    workspace.reload(&provider);
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    assert_eq!(workspace.documents[&main].version, Some(5));
+}
+
+#[test]
 fn global_rule_labels_link_all_hooks_without_merging_local_definition_identity() {
     let source = "% global rules\r\n😀 \\AddToHook{one}[alpha]{A}\\AddToHook{one}[alpha]{B}\\AddToHook{two}[alpha]{C}\\AtBeginDocument[alpha]{D}\\AtEndDocument[alpha]{E}\\RemoveFromHook{one}[alpha]\\DeclareHookRule{one}{alpha}{after}{beta}\\DeclareDefaultHookRule{alpha}{before}{beta}\\DeclareDefaultHookRule{beta}{after}{alpha}\\ClearHookRule{two}{beta}{alpha}\\label{alpha}\\ref{alpha}\\def\\alpha{Text}\\NewHook{alpha}";
     let (workspace, uri) = setup(source);
@@ -923,6 +1161,101 @@ fn compile(source: &str) -> (Vec<String>, String) {
             .collect(),
         std::fs::read_to_string(directory.path().join("main.aux")).unwrap(),
     )
+}
+
+#[test]
+#[ignore = "requires native pdflatex"]
+fn native_default_setting_fields_match_code_chunks_and_preserve_ordinary_edits() {
+    for (preamble, body) in [
+        (
+            "",
+            r"\PushDefaultHookLabel{alpha}\AddToHook{one}{\typeout{EVENT:implicit}}\PopDefaultHookLabel",
+        ),
+        (
+            "",
+            r"\csname PushDefaultHookLabel\endcsname{alpha}\AddToHook{one}[.]{\typeout{EVENT:implicit}}\PopDefaultHookLabel",
+        ),
+        (
+            r"\def\select{\PushDefaultHookLabel}",
+            r"\select{alpha}\AddToHook{one}{\typeout{EVENT:implicit}}\PopDefaultHookLabel",
+        ),
+        (
+            "",
+            r"\PushDefaultHookLabel{outer}\SetDefaultHookLabel{alpha}\AddToHook{one}{\typeout{EVENT:implicit}}\PopDefaultHookLabel",
+        ),
+        (
+            "",
+            r"\PushDefaultHookLabel{outer}{\SetDefaultHookLabel{alpha}}\AddToHook{one}{\typeout{EVENT:implicit}}\PopDefaultHookLabel",
+        ),
+        (
+            "",
+            r"\PushDefaultHookLabel{outer}\csname SetDefaultHookLabel\endcsname{alpha}\AddToHook{one}{\typeout{EVENT:implicit}}\PopDefaultHookLabel",
+        ),
+        (
+            r"\def\select{\SetDefaultHookLabel}",
+            r"\PushDefaultHookLabel{outer}\select{alpha}\AddToHook{one}{\typeout{EVENT:implicit}}\PopDefaultHookLabel",
+        ),
+    ] {
+        let source = format!(
+            r"\documentclass{{article}}{preamble}\NewHook{{one}}\NewHook{{two}}\AddToHook{{one}}[alpha]{{\typeout{{EVENT:explicit-one}}}}\AddToHook{{two}}[alpha]{{\typeout{{EVENT:explicit-two}}}}{body}\begin{{document}}\UseHook{{one}}\UseHook{{two}}Text\label{{alpha}}\ref{{alpha}}\end{{document}}"
+        );
+        let (workspace, uri) = setup(&source);
+        let sites = locations(&uri, &source, "alpha");
+        assert_eq!(sites.len(), 5);
+        assert_eq!(
+            features::definitions(&workspace, &uri, sites[2].range.start),
+            sites[..2]
+        );
+        assert_eq!(
+            features::references(&workspace, &uri, sites[2].range.start, true),
+            sites[..3]
+        );
+        let (events, aux) = compile(&source);
+        assert_eq!(
+            events,
+            ["EVENT:explicit-one", "EVENT:implicit", "EVENT:explicit-two"],
+            "{source}"
+        );
+        // Removing the selected chunk also removes the omitted/dot-labelled
+        // code, including a Set executed inside a TeX group.
+        let removed = source.replace(
+            r"\begin{document}",
+            r"\RemoveFromHook{one}[alpha]\begin{document}",
+        );
+        assert_eq!(compile(&removed).0, ["EVENT:explicit-two"]);
+        let mut edits = features::rename(&workspace, &uri, sites[4].range.start, "fresh")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap()
+            .remove(&uri)
+            .unwrap();
+        assert_eq!(edits.len(), 2);
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+        let changed = workspace.documents[&uri]
+            .text
+            .clone()
+            .changed(
+                edits
+                    .into_iter()
+                    .map(|edit| TextDocumentContentChangeEvent {
+                        range: Some(edit.range),
+                        range_length: None,
+                        text: edit.new_text,
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        assert_eq!(
+            changed.source,
+            source
+                .replace(r"\label{alpha}", r"\label{fresh}")
+                .replace(r"\ref{alpha}", r"\ref{fresh}")
+        );
+        let (after_events, after_aux) = compile(&changed.source);
+        assert_eq!(events, after_events);
+        assert_eq!(aux, after_aux.replace("{fresh}", "{alpha}"));
+    }
 }
 
 #[test]
