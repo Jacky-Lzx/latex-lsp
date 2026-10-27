@@ -24550,6 +24550,56 @@ printf 'called\n' >> compiler-calls
 
 #[test]
 #[cfg(unix)]
+fn saved_empty_bibliography_buffers_compile_without_becoming_stale() {
+    for newline in ["\n", "\r\n"] {
+        let (mut server, directory, main) = fake_build_server(
+            "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '(./main.tex\\n)\\n' > \"$1/main.log\"\nprintf 'INPUT %s\\nINPUT %s/refs.bib\\n' \"$2\" \"${2%/*}\" > \"$1/main.fls\"\n",
+            true,
+        );
+        let bib = main.join("refs.bib").unwrap();
+        std::fs::write(bib.to_file_path().unwrap(), "").unwrap();
+        let source = "\\documentclass{article}\\addbibresource{refs.bib}\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        // Extra blank lines are real unsaved edits, even in an empty database.
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":bib,"languageId":"bib","version":1,"text":newline.repeat(2)}}),
+        );
+        server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[main]}}));
+        let rejected = server.until(|message| message["id"] == 2);
+        assert_eq!(rejected["error"]["code"], -32602, "{rejected}");
+        assert!(rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("refs.bib"));
+        assert!(!directory.path().join("build/texquill/main.pdf").exists());
+
+        // Neovim serializes an empty saved buffer as one newline, while the
+        // actual file remains zero bytes. Saving it must allow the build.
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":bib,"version":2},"contentChanges":[{"text":newline}]}),
+        );
+        server.notify(
+            "textDocument/didSave",
+            json!({"textDocument":{"uri":bib},"text":newline}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert_eq!(finished["params"]["stale"], false, "{finished}");
+        assert_eq!(std::fs::read(bib.to_file_path().unwrap()).unwrap(), b"");
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn biblatex_resources_reject_unsaved_databases_and_publish_versioned_key_renames_over_stdio() {
     for loader in ["addbibresource", "addglobalbib"] {
         let (mut server,directory,main)=fake_build_server_capabilities("touch invoked\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '(./main.tex\\n)\\n' > \"$1/main.log\"\n",false,json!({"workspace":{"workspaceEdit":{"documentChanges":true}}}));

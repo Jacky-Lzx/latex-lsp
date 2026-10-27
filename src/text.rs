@@ -9,8 +9,13 @@ pub struct Text {
 
 impl Text {
     /// Editors can normalize CRLF or keep `noendofline` while a write appends
-    /// the final newline. Extra blank lines and all other content still matter.
+    /// the final newline. An empty buffer may also serialize as one newline
+    /// while its saved file has zero bytes. Extra blank lines still matter.
     pub(crate) fn matches_saved(&self, saved: &str) -> bool {
+        if matches!(self.source.as_str(), "" | "\n" | "\r\n") && matches!(saved, "" | "\n" | "\r\n")
+        {
+            return true;
+        }
         self.source.lines().eq(saved.lines())
     }
 
@@ -153,6 +158,20 @@ mod tests {
         assert!(!text.matches_saved("first\nsecond\n\n"));
         assert!(!text.matches_saved("first\nchanged\n"));
         assert!(!text.matches_saved("first \nsecond\n"));
+    }
+
+    #[test]
+    fn saved_empty_buffers_allow_one_serialization_newline() {
+        for source in ["", "\n", "\r\n"] {
+            let text = Text::new(source.into());
+            for saved in ["", "\n", "\r\n"] {
+                assert!(text.matches_saved(saved), "{source:?} != {saved:?}");
+            }
+            for changed in ["\n\n", "\r\n\r\n", " ", "\t", "content"] {
+                assert!(!text.matches_saved(changed));
+                assert!(!Text::new(changed.into()).matches_saved(source));
+            }
+        }
     }
 
     #[test]
