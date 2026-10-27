@@ -11085,6 +11085,113 @@ fn fake_build_server(script: &str, on_save: bool) -> (Server, tempfile::TempDir,
 
 #[test]
 #[cfg(unix)]
+fn watched_image_changes_automatically_compile_only_affected_saved_projects() {
+    for on_save in [true, false] {
+        let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'INPUT %s\\nINPUT %s/plot.PNG\\n' \"$2\" \"${2%/*}\" > \"$1/main.fls\"\necho run >> \"$1/runs\"\n";
+        let (mut server, directory, main) = fake_build_server(script, on_save);
+        let image = directory.path().join("plot.PNG");
+        std::fs::write(&image, b"before").unwrap();
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let first = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(first["params"]["status"], "success", "{first}");
+        // Same size and modification time: content, rather than metadata, decides.
+        let modified = std::fs::metadata(&image).unwrap().modified().unwrap();
+        std::fs::write(&image, b"after!").unwrap();
+        std::fs::File::open(&image)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        let event = json!({"changes":[{"uri":Url::from_file_path(&image).unwrap(),"type":2}]});
+        server.notify("workspace/didChangeWatchedFiles", event.clone());
+        if on_save {
+            let next = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(next["params"]["status"], "success", "{next}");
+            assert_eq!(next["params"]["stale"], false, "{next}");
+            assert_ne!(next["params"]["buildId"], first["params"]["buildId"]);
+        }
+        // Delayed duplicates, unrelated images, and our own PDF must not loop.
+        server.notify("workspace/didChangeWatchedFiles", event);
+        let unrelated = directory.path().join("unused.png");
+        std::fs::write(&unrelated, b"unused").unwrap();
+        server.notify("workspace/didChangeWatchedFiles", json!({"changes":[
+            {"uri":Url::from_file_path(&unrelated).unwrap(),"type":1},
+            {"uri":Url::from_file_path(directory.path().join("build/texquill/main.pdf")).unwrap(),"type":2}
+        ]}));
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+        let runs = std::fs::read_to_string(directory.path().join("build/texquill/runs")).unwrap();
+        assert_eq!(runs.lines().count(), if on_save { 2 } else { 1 }, "{runs}");
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn watched_static_images_restart_the_first_active_build_and_ignore_delayed_duplicates() {
+    for initially_present in [true, false] {
+        let script = "if [ ! -f \"$1/started\" ]; then touch \"$1/started\"; while :; do sleep 0.05; done; fi\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\necho run >> \"$1/runs\"\n";
+        let (mut server, directory, main) = fake_build_server(script, true);
+        let image = directory.path().join("assets/plot.png");
+        if initially_present {
+            std::fs::create_dir_all(image.parent().unwrap()).unwrap();
+            std::fs::write(&image, b"before").unwrap();
+        }
+        let source = "\\documentclass{article}\\graphicspath{{assets/}}\\includegraphics{plot.png}";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        let first = server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let started = directory.path().join("build/texquill/started");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !started.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "compiler did not start"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::fs::create_dir_all(image.parent().unwrap()).unwrap();
+        std::fs::write(&image, b"after!").unwrap();
+        // Directory creation notifications also cover newly available graphics.
+        let uri = if initially_present {
+            Url::from_file_path(&image).unwrap()
+        } else {
+            Url::from_directory_path(image.parent().unwrap()).unwrap()
+        };
+        let event = json!({"changes":[{"uri":uri,"type":if initially_present { 2 } else { 1 }}]});
+        server.notify("workspace/didChangeWatchedFiles", event.clone());
+        let cancelled = server.until(|message| {
+            message["method"] == "latex/buildFinished"
+                && message["params"]["buildId"] == first["buildId"]
+        });
+        assert_eq!(cancelled["params"]["status"], "cancelled", "{cancelled}");
+        let next = server.until(|message| {
+            message["method"] == "latex/buildFinished"
+                && message["params"]["buildId"] != first["buildId"]
+        });
+        assert_eq!(next["params"]["status"], "success", "{next}");
+        assert_eq!(next["params"]["stale"], false, "{next}");
+        server.notify("workspace/didChangeWatchedFiles", event);
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+        let runs = std::fs::read_to_string(directory.path().join("build/texquill/runs")).unwrap();
+        assert_eq!(runs.lines().count(), 1, "{runs}");
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn repeated_latexmk_failures_publish_the_original_diagnostic_and_clear_after_repair() {
     use std::os::unix::fs::PermissionsExt;
 

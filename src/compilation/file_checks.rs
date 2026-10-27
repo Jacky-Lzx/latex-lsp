@@ -35,6 +35,7 @@ pub struct Snapshot {
     recorded: BTreeMap<PathBuf, Option<PathBuf>>,
     ambiguous: BTreeSet<PathBuf>,
     watched: BTreeSet<Url>,
+    images: BTreeMap<PathBuf, (Option<PathBuf>, InputSnapshot)>,
     artifact: Option<PathBuf>,
     inputs: BTreeMap<Url, InputSnapshot>,
     pdf_contents: Option<InputSnapshot>,
@@ -251,6 +252,7 @@ impl Snapshot {
             }
         }
         let paths = RefCell::new(BTreeMap::new());
+        let image_snapshots = RefCell::new(BTreeMap::new());
         let observe_path = |path: &Path| {
             let before = file(path);
             let mut paths = paths.borrow_mut();
@@ -347,13 +349,16 @@ impl Snapshot {
                     ) {
                         let name = argument.value.trim();
                         if syntax::is_literal_file_path(name) {
-                            graphics::resolve_with(
-                                root,
-                                name,
-                                &extensions,
-                                &directories,
-                                observe_path,
-                            );
+                            graphics::resolve_with(root, name, &extensions, &directories, |path| {
+                                let before = observe_path(path);
+                                if paths.borrow().contains_key(path) {
+                                    image_snapshots.borrow_mut().insert(
+                                        path.to_path_buf(),
+                                        (before.clone(), InputSnapshot::file(path)),
+                                    );
+                                }
+                                before
+                            });
                         }
                     }
                     continue;
@@ -489,6 +494,7 @@ impl Snapshot {
         .collect();
         let mut snapshot = Self {
             paths,
+            images: image_snapshots.into_inner(),
             configuration,
             recorded,
             artifact: config
@@ -672,6 +678,38 @@ impl Snapshot {
 
     pub(crate) fn watched(&self) -> &BTreeSet<Url> {
         &self.watched
+    }
+
+    /// Check only image dependencies, including unselected lookup candidates
+    /// and the opened names of recorder paths whose targets have other suffixes.
+    pub(crate) fn image_changed(&self, affects: impl Fn(&Url) -> bool) -> bool {
+        let affected = |path: &Path, before: &Option<PathBuf>| {
+            [
+                Some(path.to_path_buf()),
+                before.clone(),
+                canonical_candidate(path),
+            ]
+            .into_iter()
+            .flatten()
+            .filter_map(|path| Url::from_file_path(normalize_path(&path)).ok())
+            .any(|uri| affects(&uri))
+        };
+        self.images.iter().any(|(path, (binding, contents))| {
+            affected(path, binding) && (file(path) != *binding || contents.changed_file(path))
+        }) || self.recorded.iter().any(|(path, binding)| {
+            graphics::is_image(path)
+                && affected(path, binding)
+                && (file(path) != *binding
+                    || binding.as_ref().is_some_and(|target| {
+                        Url::from_file_path(target).is_ok_and(|uri| self.input_changed(&uri))
+                    }))
+        }) || self.inputs.iter().any(|(uri, contents)| {
+            affects(uri)
+                && uri
+                    .to_file_path()
+                    .is_ok_and(|path| graphics::is_image(&path))
+                && contents.changed(uri)
+        })
     }
 
     pub(crate) fn changed_path(&self) -> Option<&Path> {

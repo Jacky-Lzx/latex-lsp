@@ -579,7 +579,7 @@ impl BuildManager {
                 crate::compilation::file_checks::Snapshot::remember(
                     &mut current.project.build_checks,
                     root_uri.clone(),
-                    Arc::new(checks.with_inputs(inputs)),
+                    Arc::new(checks.with_inputs(inputs.clone())),
                 );
                 current
                     .project
@@ -614,6 +614,9 @@ impl BuildManager {
             {
                 let mut state = state.lock().unwrap();
                 let record = state.entry(root_uri.clone()).or_default();
+                if matches!(outcome.status, "success" | "error") {
+                    record.checks = Arc::new(checks.with_inputs(inputs));
+                }
                 record.active = None;
                 record.result = Some(result.clone());
             }

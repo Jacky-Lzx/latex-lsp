@@ -547,7 +547,7 @@ impl BuildManager {
                     (uri.clone(), snapshot)
                 })
                 .collect();
-            record.checks = checks.clone();
+            record.checks = Arc::new(checks.with_inputs(file_snapshots.clone()));
             record.artifact = artifact;
             record.output_directory = config.final_output_path(&root_path);
             record.auxiliary_directory = config.auxiliary_path(&root_path);
@@ -690,9 +690,20 @@ impl BuildManager {
     pub async fn watched_files_changed(
         &self,
         changes: &crate::editing::file_operations::FileChanges,
-    ) {
+    ) -> BTreeSet<Url> {
+        // Capture affected roots before cancellation or diagnostic refresh drops
+        // their old input snapshots. A delayed duplicate must not enqueue work.
+        let roots = self
+            .state
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, record)| record.checks.image_changed(|uri| changes.affects(uri)))
+            .map(|(root, _)| root.clone())
+            .collect();
         self.cancel_changed_inputs(|uri| changes.affects(uri), true)
             .await;
+        roots
     }
 
     async fn cancel_changed_inputs(&self, affects: impl Fn(&Url) -> bool, verify_inputs: bool) {
@@ -719,6 +730,7 @@ impl BuildManager {
                         })
                 };
                 if (!verify_inputs && affects(root))
+                    || record.checks.image_changed(&affects)
                     || record.inputs.iter().any(|(uri, snapshot)| {
                         !defer_generated_database(uri)
                             && affects(uri)
