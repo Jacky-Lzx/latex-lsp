@@ -1,0 +1,59 @@
+class Texquill < Formula
+  desc "LaTeX language server written in Rust"
+  homepage "https://github.com/Jacky-Lzx/texquill"
+  url "https://github.com/Jacky-Lzx/texquill/releases/download/v@VERSION@/texquill-@VERSION@.tar.gz"
+  sha256 "@SHA256@"
+  license "MIT"
+
+  depends_on "rust" => :build
+
+  def fetch
+    system "cargo", "fetch", *std_cargo_fetch_args
+  end
+
+  def install
+    system "cargo", "install", *std_cargo_args
+  end
+
+  test do
+    require "open3"
+    require "timeout"
+
+    assert_match "texquill #{version}", shell_output("#{bin}/texquill --version")
+    Open3.popen3(bin/"texquill", "--stdio") do |stdin, stdout, _stderr, waiter|
+      send_message = lambda do |message|
+        body = JSON.generate(message)
+        stdin.write "Content-Length: #{body.bytesize}\r\n\r\n#{body}"
+        stdin.flush
+      end
+      receive_result = lambda do |id|
+        loop do
+          length = nil
+          while (header = stdout.readline) != "\r\n"
+            length = header.split(":", 2).last.to_i if header.start_with?("Content-Length:")
+          end
+          message = JSON.parse(stdout.read(length))
+          break message.fetch("result") if message["id"] == id
+        end
+      end
+      begin
+        Timeout.timeout(30) do
+          send_message.call({ jsonrpc: "2.0", id: 1, method: "initialize",
+                              params: { processId: nil, rootUri: nil, capabilities: {} } })
+          initialization = receive_result.call(1)
+          assert_equal "texquill", initialization.fetch("serverInfo").fetch("name")
+          assert_equal version.to_s, initialization.fetch("serverInfo").fetch("version")
+          assert initialization.fetch("capabilities").key?("completionProvider")
+          send_message.call({ jsonrpc: "2.0", method: "initialized", params: {} })
+          send_message.call({ jsonrpc: "2.0", id: 2, method: "shutdown", params: nil })
+          assert_nil receive_result.call(2)
+          send_message.call({ jsonrpc: "2.0", method: "exit" })
+          stdin.close
+          assert waiter.value.success?
+        end
+      ensure
+        Process.kill("KILL", waiter.pid) if waiter.alive?
+      end
+    end
+  end
+end

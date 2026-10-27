@@ -2,7 +2,7 @@
   "name": "texquill",
   "displayName": "TeXquill",
   "description": "LaTeX language support powered by the texquill Rust language server.",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "publisher": "Jacky-Lzx",
   "license": "MIT",
   "repository": {

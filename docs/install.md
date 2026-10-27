@@ -2,7 +2,56 @@
 
 [Back to README](../README.md) · [Editor configuration](editors.md)
 
-Install the current stable Rust toolchain. Editing features do not require a TeX distribution. Builds require the relevant tools on the server's `PATH`, defaulting to latexmk and pdfLaTeX; see the [build guide](build.md).
+Editing features do not require a TeX distribution. Builds require the relevant tools on the server's `PATH`, defaulting to latexmk and pdfLaTeX; see the [build guide](build.md). Formatting, ChkTeX, and SyncTeX also use separately installed tools. The packages below install the language server; they do not install a complete TeX distribution.
+
+## Release installation
+
+These commands require version 1.0.0 to have been published to the relevant channel. Until then, use the source installation below. Homebrew uses the project's own tap; the package is not assumed to be available in Homebrew/core or nixpkgs.
+
+### Cargo
+
+With the current stable Rust toolchain installed:
+
+```sh
+cargo install texquill --version 1.0.0 --locked
+texquill --version
+```
+
+### Homebrew
+
+Once the generated Formula has been added to `Jacky-Lzx/homebrew-tap`:
+
+```sh
+brew install Jacky-Lzx/tap/texquill
+texquill --version
+```
+
+The Formula builds from a verified release source archive. Without a bottle, this requires a local Rust build; Rust is a build dependency only.
+
+### Nix
+
+With `nix-command` and `flakes` enabled:
+
+```sh
+nix run github:Jacky-Lzx/texquill/v1.0.0 -- --version
+nix profile install github:Jacky-Lzx/texquill/v1.0.0
+```
+
+The flake exposes `packages.<system>.texquill`, a default package and app, and `overlays.default` for `aarch64-darwin`, `aarch64-linux`, and `x86_64-linux`. CI builds the native Linux x86-64 and macOS ARM packages. Linux ARM requires its own build validation. The pinned nixpkgs no longer supports Intel macOS (`x86_64-darwin`); use Cargo or a separately validated package set there. See the [nixpkgs release notes](https://nixos.org/manual/nixpkgs/unstable/release-notes#x86_64-darwin-26.11). Nix builds from source unless the exact package is already available from a configured binary cache.
+
+For Home Manager, add an input and use its package in `home.packages`:
+
+```nix
+# In your flake's inputs:
+texquill.url = "github:Jacky-Lzx/texquill/v1.0.0";
+
+# In a Home Manager module receiving inputs through extraSpecialArgs:
+home.packages = [ inputs.texquill.packages.${pkgs.stdenv.hostPlatform.system}.texquill ];
+```
+
+## Source installation
+
+Clone this repository and install the current stable Rust toolchain. From the checkout:
 
 Build and launch from source:
 
@@ -10,6 +59,16 @@ Build and launch from source:
 cargo build --release --locked
 ./target/release/texquill --stdio
 ```
+
+You can also build or run the local checkout with Nix:
+
+```sh
+nix build
+./result/bin/texquill --version
+nix run . -- --stdio
+```
+
+## Server lifecycle
 
 The server implements stdio JSON-RPC directly with Tokio and uses `lsp-types` for protocol data types. Timed-out or cancelled requests drop their response receivers; late or duplicate client replies are safely ignored.
 

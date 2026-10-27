@@ -1,9 +1,15 @@
 [package]
 name = "texquill"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "A LaTeX language server written in Rust"
 license = "MIT"
+repository = "https://github.com/Jacky-Lzx/texquill"
+homepage = "https://github.com/Jacky-Lzx/texquill"
+readme = "README.md"
+keywords = ["latex", "bibtex", "lsp", "language-server"]
+categories = ["development-tools"]
+include = ["/src/**", "/tests/**", "/assets/packages.json", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE"]
 
 [dependencies]
 icu_casemap = { version = "~2.3.0", default-features = false, features = ["compiled_data"] }

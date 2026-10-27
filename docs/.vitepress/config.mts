@@ -6,7 +6,7 @@ import sidebar from './sidebar.mjs'
 
 const docsRoot = fileURLToPath(new URL('../', import.meta.url))
 const repositoryRoot = resolve(docsRoot, '..')
-const repository = process.env.GITHUB_REPOSITORY || 'Jacky-Lzx/latex-lsp'
+const repository = process.env.GITHUB_REPOSITORY || 'Jacky-Lzx/texquill'
 const repositoryUrl = `https://github.com/${repository}`
 const base = `/${(process.env.DOCS_BASE || '').replace(/^\/+|\/+$/g, '')}/`.replace('//', '/')
 

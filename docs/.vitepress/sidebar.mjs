@@ -137,6 +137,7 @@ export default [
     collapsed: true,
     items: [
       page('development', 'Architecture and development'),
+      page('releasing', 'Publishing releases'),
       page('documentation', 'Maintaining this website'),
       page('testing', 'Tests with real tools'),
       page('benchmarks', 'Performance benchmarks'),

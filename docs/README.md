@@ -93,6 +93,7 @@ TeXquill supports completion, navigation, cross-file rename, formatting, diagnos
 
 ## Development and testing
 
+- [Release maintenance](releasing.md): Version checks, Cargo packages, Homebrew Formula generation, Nix validation, and publication setup.
 - [Maintaining this website](documentation.md): Local preview, navigation, link checks, and GitHub Pages deployment.
 - [Development and testing](development.md): Quality checks, module ownership, and analysis architecture.
 - [Continuous editing benchmarks](benchmarks.md): Real stdio sessions, feature latency, raw samples, and before/after comparisons.
