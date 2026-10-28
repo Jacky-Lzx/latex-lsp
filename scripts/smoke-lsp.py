@@ -3,9 +3,10 @@
 
 import argparse
 import json
-import os
-import select
+import queue
 import subprocess
+import tempfile
+import threading
 import time
 
 
@@ -19,10 +20,26 @@ def main():
     parser.add_argument("binary")
     parser.add_argument("--version", required=True)
     args = parser.parse_args()
+    stderr_file = tempfile.TemporaryFile()
     process = subprocess.Popen(
         [args.binary, "--stdio"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, bufsize=0,
+        stderr=stderr_file, bufsize=0,
     )
+    chunks = queue.Queue()
+
+    # Windows select() only accepts sockets, not subprocess pipes.
+    def read_stdout():
+        try:
+            while True:
+                data = process.stdout.read(65536)
+                chunks.put(data)
+                if not data:
+                    return
+        except OSError as error:
+            chunks.put(error)
+
+    reader = threading.Thread(target=read_stdout, daemon=True)
+    reader.start()
     pending = b""
 
     def send(message):
@@ -44,9 +61,14 @@ def main():
                         return message["result"]
                     continue
             timeout = deadline - time.monotonic()
-            if timeout <= 0 or not select.select([process.stdout], [], [], timeout)[0]:
+            if timeout <= 0:
                 raise TimeoutError(f"No LSP response for request {request_id}")
-            data = os.read(process.stdout.fileno(), 65536)
+            try:
+                data = chunks.get(timeout=timeout)
+            except queue.Empty:
+                raise TimeoutError(f"No LSP response for request {request_id}")
+            if isinstance(data, OSError):
+                raise data
             if not data:
                 raise RuntimeError("LSP server closed stdout before responding")
             pending += data
@@ -62,13 +84,20 @@ def main():
         send({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": None})
         assert receive(2) is None
         send({"jsonrpc": "2.0", "method": "exit"})
-        _, stderr = process.communicate(timeout=10)
+        process.stdin.close()
+        process.wait(timeout=10)
         if process.returncode:
-            raise RuntimeError(f"LSP server exited {process.returncode}: {stderr.decode()}")
+            stderr_file.seek(0)
+            raise RuntimeError(f"LSP server exited {process.returncode}: {stderr_file.read().decode()}")
     finally:
         if process.poll() is None:
             process.kill()
         process.wait()
+        reader.join(timeout=5)
+        process.stdout.close()
+        if not process.stdin.closed:
+            process.stdin.close()
+        stderr_file.close()
     print(f"LSP lifecycle passed: texquill {args.version}")
 
 

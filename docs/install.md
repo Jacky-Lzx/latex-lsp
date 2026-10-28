@@ -8,6 +8,19 @@ Editing features do not require a TeX distribution. Builds require the relevant 
 
 These commands require version 1.0.0 to have been published to the relevant channel. Until then, use the source installation below. Homebrew uses the project's own tap; the package is not assumed to be available in Homebrew/core or nixpkgs.
 
+### Precompiled binaries
+
+Download the archive matching your system from [GitHub Releases](https://github.com/Jacky-Lzx/texquill/releases). These packages do not require Rust or access to crates.io:
+
+- Linux x64: `texquill-1.0.0-x86_64-unknown-linux-gnu.tar.gz` (built on Ubuntu 22.04).
+- Linux ARM64: `texquill-1.0.0-aarch64-unknown-linux-gnu.tar.gz` (built on Ubuntu 24.04).
+- Apple Silicon macOS: `texquill-1.0.0-aarch64-apple-darwin.tar.gz`.
+- Windows x64: `texquill-1.0.0-x86_64-pc-windows-msvc.zip`.
+
+Extract the archive, add its directory to your `PATH`, and run `texquill --version` (`texquill.exe --version` on Windows). Each archive contains the executable, README, and MIT license. Release `SHA256SUMS` covers the archives; on Linux use `sha256sum --check --ignore-missing SHA256SUMS`, or on macOS use `shasum -a 256 --check --ignore-missing SHA256SUMS`, from the directory containing your downloaded archive and checksum file. On Windows, compare `Get-FileHash <archive> -Algorithm SHA256` with the corresponding entry.
+
+Linux packages use glibc and target systems compatible with the build distribution or newer; they are not Alpine/musl builds. Windows packages include the MSVC runtime statically. There is no Intel Mac precompiled package. The archives are not macOS notarized installers or Windows signed installers.
+
 ### Cargo
 
 With the current stable Rust toolchain installed:

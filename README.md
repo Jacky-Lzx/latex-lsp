@@ -4,7 +4,7 @@ A LaTeX language server written in Rust, with completion, navigation, rename, fo
 
 [Getting started](docs/install.md) · [VS Code extension](editors/vscode/README.md) · [Documentation](docs/README.md) · [Benchmarks](docs/benchmarks.md) · [MIT license](LICENSE)
 
-Version 1.0.0 supports installation through Cargo, a Homebrew tap, and the repository's Nix flake once the corresponding release is published. See [installation](docs/install.md) for commands and availability, and [release maintenance](docs/releasing.md) for publishing instructions.
+Version 1.0.0 supports precompiled downloads from GitHub Releases for Linux x64/ARM64, Apple Silicon macOS, and Windows x64, plus installation through Cargo, a Homebrew tap, and the repository's Nix flake once the corresponding release is published. See [installation](docs/install.md) for commands and availability, and [release maintenance](docs/releasing.md) for publishing instructions.
 
 Search a citation by title, preview the paper, and insert its key—all inside Neovim.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate versions and generate verified Cargo/Homebrew release artifacts locally."""
+"""Validate versions and generate verified source or native binary release artifacts."""
 
 import argparse
 import hashlib
@@ -8,10 +8,19 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
+import tempfile
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parent.parent
+BINARY_TARGETS = (
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+)
 
 
 def versions(tag):
@@ -31,17 +40,67 @@ def versions(tag):
     return version, Path(metadata["target_directory"])
 
 
+def package_binary(version, target, binary_target, output):
+    windows = binary_target.endswith("-windows-msvc")
+    executable = "texquill.exe" if windows else "texquill"
+    binary = target / binary_target / "release" / executable
+    name = f"texquill-{version}-{binary_target}"
+    archive = output / (name + (".zip" if windows else ".tar.gz"))
+    output.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="texquill-binary-") as directory:
+        staging = Path(directory) / name
+        staging.mkdir()
+        shutil.copy2(binary, staging / executable)
+        if not windows:
+            (staging / executable).chmod(0o755)
+        for filename in ("LICENSE", "README.md"):
+            shutil.copyfile(ROOT / filename, staging / filename)
+        if windows:
+            with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as package:
+                for path in sorted(staging.iterdir()):
+                    package.write(path, f"{name}/{path.name}")
+        else:
+            with tarfile.open(archive, "w:gz") as package:
+                package.add(staging, arcname=name)
+
+        # Verify the actual distributed bytes, including executable permissions.
+        extracted = Path(directory) / "unpacked"
+        if windows:
+            with zipfile.ZipFile(archive) as package:
+                package.extractall(extracted)
+        else:
+            with tarfile.open(archive) as package:
+                package.extractall(extracted)
+        installed = extracted / name / executable
+        actual_version = subprocess.check_output([str(installed), "--version"], text=True).strip()
+        if actual_version != f"texquill {version}":
+            raise SystemExit(f"Unexpected binary version: {actual_version!r}")
+        subprocess.run([
+            sys.executable, str(ROOT / "scripts/smoke-lsp.py"), str(installed),
+            "--version", version,
+        ], check=True)
+    archive.with_name(archive.name + ".sha256").write_bytes(
+        f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n".encode("ascii")
+    )
+    print(f"Verified binary archive: {archive}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", help="Expected release tag, e.g. v1.0.0")
     parser.add_argument("--check", action="store_true", help="Only check version consistency")
     parser.add_argument("--allow-dirty", action="store_true", help="Allow local preview of uncommitted changes")
     parser.add_argument("--offline", action="store_true", help="Use Cargo's cached dependencies")
+    parser.add_argument("--binary-target", choices=BINARY_TARGETS,
+                        help="Package and smoke-test an already built native target instead of source")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "target/release-assets")
     args = parser.parse_args()
     version, target = versions(args.tag)
     if args.check:
         print(f"Release versions match: v{version}")
+        return
+    if args.binary_target:
+        package_binary(version, target, args.binary_target, args.output_dir.resolve())
         return
     command = ["cargo", "package", "--locked"]
     if args.allow_dirty:
