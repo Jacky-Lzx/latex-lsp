@@ -2794,7 +2794,9 @@ pub(crate) fn uncached_symbols(doc: &Document) -> Vec<DocumentSymbol> {
         }));
     }
     result.extend(crate::symbols::extra_symbols::symbols(doc));
-    result.sort_by_key(|symbol| (symbol.range.start.line, symbol.range.start.character));
+    result.extend(super::structure::symbols(doc));
+    // Outer scopes precede children when they start at the same position.
+    result.sort_by_key(|symbol| (symbol.range.start, std::cmp::Reverse(symbol.range.end)));
     let mut nested = Vec::new();
     for symbol in result {
         insert_symbol(&mut nested, symbol);
@@ -2804,7 +2806,7 @@ pub(crate) fn uncached_symbols(doc: &Document) -> Vec<DocumentSymbol> {
 
 fn insert_symbol(symbols: &mut Vec<DocumentSymbol>, symbol: DocumentSymbol) {
     if let Some(parent) = symbols.last_mut() {
-        if parent.kind == SymbolKind::NAMESPACE
+        if super::structure::container(parent)
             && parent.range.start <= symbol.range.start
             && symbol.range.end <= parent.range.end
         {

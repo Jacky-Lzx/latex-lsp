@@ -3695,9 +3695,70 @@ fn argument_free(name: &str) -> bool {
     )
 }
 
+// Beamer headers and list markers have bounded operands. In particular, a
+// completed title or an empty item must not consume the following begin token.
+fn presentation_arguments(name: &str) -> Option<Vec<Parameter>> {
+    let overlay = || Kind::Delimited {
+        open: "<".into(),
+        close: ">".into(),
+        optional: true,
+    };
+    let group = || Kind::Delimited {
+        open: "{".into(),
+        close: "}".into(),
+        optional: true,
+    };
+    let parameters = match name {
+        "frametitle" | "framesubtitle" => vec![
+            (Kind::Star, "*"),
+            (overlay(), "<overlay>"),
+            (Kind::Optional, "[short title]"),
+            (Kind::RequiredGroup, "{title}"),
+        ],
+        "item" => vec![
+            (overlay(), "<overlay>"),
+            (Kind::Optional, "[label]"),
+            (overlay(), "<overlay>"),
+        ],
+        "frame" => vec![
+            (overlay(), "<overlay>"),
+            (Kind::Optional, "[default overlay]"),
+            (Kind::Optional, "[options]"),
+            (group(), "{title}"),
+            (group(), "{subtitle}"),
+        ],
+        "block" | "alertblock" | "exampleblock" => vec![
+            (overlay(), "<overlay>"),
+            (Kind::RequiredGroup, "{title}"),
+            (overlay(), "<overlay>"),
+        ],
+        "itemize" | "enumerate" | "description" => {
+            vec![(Kind::Optional, "[options]"), (Kind::Optional, "[label]")]
+        }
+        "columns" => vec![(Kind::Optional, "[options]")],
+        "column" => vec![
+            (Kind::Optional, "[position]"),
+            (Kind::RequiredGroup, "{width}"),
+        ],
+        _ => return None,
+    };
+    Some(
+        parameters
+            .into_iter()
+            .map(|(kind, label)| Parameter {
+                obey_spaces: false,
+                kind,
+                label: label.into(),
+            })
+            .collect(),
+    )
+}
+
 pub(crate) fn operand_builtin(name: &str) -> Option<Signature> {
     builtin(name).or_else(|| {
-        let parameters = if argument_free(name) || name == "noexpand" {
+        let parameters = if matches!(name, "frametitle" | "framesubtitle" | "item") {
+            presentation_arguments(name)?
+        } else if argument_free(name) || name == "noexpand" {
             // noexpand's single-token rule is handled explicitly above; the
             // empty shape here lets static aliases retain its primitive name.
             vec![]
@@ -4420,6 +4481,23 @@ pub(crate) fn lookup<'a>(
 }
 
 pub(crate) fn builtin_environment(name: &str) -> Option<Signature> {
+    if let Some(arguments) = presentation_arguments(name)
+        .filter(|_| !matches!(name, "frametitle" | "framesubtitle" | "item"))
+    {
+        let mut parameters = vec![Parameter {
+            obey_spaces: false,
+            kind: Kind::Required,
+            label: format!("{{{name}}}"),
+        }];
+        parameters.extend(arguments);
+        return Some(Signature {
+            name: "begin".into(),
+            parameters,
+            documentation: format!("Arguments of the {name} environment."),
+            starred: false,
+            nested_brackets: false,
+        });
+    }
     let arguments: &[(&str, bool)] = match name {
         "tabular" | "array" => &[("position", true), ("columns", false)],
         "tabular*" => &[("width", false), ("position", true), ("columns", false)],
