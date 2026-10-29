@@ -9,31 +9,47 @@ use std::{
     ops::Range,
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OccurrenceKind {
+    Diagnostics,
+    Printing,
+    SectionHints,
+    LabelDeclarations,
+}
+
 fn occurrences(
     ws: &Workspace,
     uri: &Url,
     resources: Option<&crate::bibliography::bib_section_keys::ResourceMap>,
     sources: Option<&crate::bibliography::bib_section_references::SourceStatuses>,
 ) -> Vec<(bool, Range<usize>)> {
-    occurrences_for(ws, uri, false, false, resources, sources)
+    occurrences_for(ws, uri, OccurrenceKind::Diagnostics, resources, sources)
 }
 
 pub(crate) fn hint_occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)> {
-    occurrences_for(ws, uri, true, false, None, None)
+    occurrences_for(ws, uri, OccurrenceKind::Printing, None, None)
+}
+
+pub(crate) fn label_hint_occurrences(ws: &Workspace, uri: &Url) -> Vec<Range<usize>> {
+    occurrences_for(ws, uri, OccurrenceKind::LabelDeclarations, None, None)
+        .into_iter()
+        .map(|(_, span)| span)
+        .collect()
 }
 
 pub(crate) fn section_hint_occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)> {
-    occurrences_for(ws, uri, true, true, None, None)
+    occurrences_for(ws, uri, OccurrenceKind::SectionHints, None, None)
 }
 
 fn occurrences_for(
     ws: &Workspace,
     uri: &Url,
-    printing: bool,
-    section_hints: bool,
+    kind: OccurrenceKind,
     resources: Option<&crate::bibliography::bib_section_keys::ResourceMap>,
     sources: Option<&crate::bibliography::bib_section_references::SourceStatuses>,
 ) -> Vec<(bool, Range<usize>)> {
+    let printing = kind != OccurrenceKind::Diagnostics;
+    let section_hints = kind == OccurrenceKind::SectionHints;
     let Some(doc) = ws.documents.get(uri) else {
         return vec![];
     };
@@ -112,6 +128,18 @@ fn occurrences_for(
         );
         let command = resolved.as_ref().unwrap_or(command);
         if !signatures.command_unchanged(&command.name) || printing && command.name == "nocite" {
+            continue;
+        }
+        if kind == OccurrenceKind::LabelDeclarations {
+            if command.name == "label" {
+                if let Some(argument) = command
+                    .argument
+                    .as_ref()
+                    .filter(|argument| syntax::is_static_reference_key(&argument.value))
+                {
+                    result.push((false, syntax::trimmed_span(source, argument.span.clone())));
+                }
+            }
             continue;
         }
         result.extend(

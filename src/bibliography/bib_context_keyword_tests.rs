@@ -751,5 +751,5 @@ fn keyword_assignment_parameters_do_not_create_executing_reference_hints() {
     let aux =
         std::fs::read_to_string(&path).unwrap() + r"\newlabel{fake}{{4}{1}}\newlabel{real}{{5}{2}}";
     std::fs::write(path, aux).unwrap();
-    assert_eq!(hints(&ws, &uri), ["→ 5, p. 2"]);
+    assert_eq!(hints(&ws, &uri), ["→ 5", "→ 5"]);
 }

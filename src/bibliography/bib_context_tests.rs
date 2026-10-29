@@ -199,7 +199,7 @@ fn unprefixed_auxiliary_labels_and_independent_reference_hints_keep_their_proofs
         &bbl,
         &(number("a", A, 1) + &default("a", A) + r"\newlabel{target}{{7}{9}}"),
     );
-    assert_eq!(hints(&ws, &uri), ["→ 7, p. 9"]);
+    assert_eq!(hints(&ws, &uri), ["→ 7", "→ 7"]);
 }
 #[test]
 fn prefix_and_list_budgets_reject_incomplete_results_at_the_existing_limits() {

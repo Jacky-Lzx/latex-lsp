@@ -650,6 +650,31 @@ pub(crate) fn hints(ws: &Workspace, uri: &Url, range: Range) -> Vec<InlayHint> {
     result.extend(numeric.unwrap_or_default().into_iter().map(|(position, key, number)| {
         hint(position, number.clone(), format!("Bibliography label for `{key}`: {number}\nValues come from an auxiliary file and may be stale."))
     }));
+    if config.numbers {
+        result.extend(
+            crate::diagnostics::reference_diagnostics::label_hint_occurrences(ws, uri)
+                .into_iter()
+                .filter_map(|span| {
+                    let position = doc.text.position(span.end);
+                    if position < range.start || position > range.end {
+                        return None;
+                    }
+                    let info = labels.get(&doc.text.source[span])?;
+                    if info.external || info.number.is_empty() {
+                        return None;
+                    }
+                    Some(hint(
+                        position,
+                        info.number.split_whitespace().collect::<Vec<_>>().join(" "),
+                        format!(
+                            "{}\nValues come from an auxiliary file and may be stale.",
+                            describe(info)
+                        ),
+                    ))
+                })
+                .take(1024),
+        );
+    }
     result.sort_by_key(|hint| hint.position);
     result.truncate(1024);
     result
@@ -727,6 +752,62 @@ mod citation_tests {
         })
         .collect()
     }
+    #[test]
+    fn label_hints_show_compiled_numbers_and_preserve_reference_styles() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = "\\documentclass{article}\r\n😀 \\label{target}\r\n\\ref{target}\r\n\\label{missing}\\label{empty}";
+        let (mut ws, uri) = workspace(
+            dir.path(),
+            source,
+            "\\newlabel{target}{{1.2}{5}{Title}{}}\n\\newlabel{empty}{{}{7}}\n",
+        );
+        assert_eq!(values(&ws, &uri), ["→ 1.2", "→ 1.2"]);
+        ws.config.inlay_hints.pages = true;
+        assert_eq!(values(&ws, &uri), ["→ 1.2", "→ 1.2, p. 5"]);
+        let position = ws.documents[&uri]
+            .text
+            .position(source.find("target").unwrap() + 6);
+        let hints = hints(&ws, &uri, Range::new(position, position));
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].position, Position::new(1, 16));
+        assert_eq!(hints[0].padding_left, Some(true));
+        assert_eq!(hints[0].padding_right, Some(false));
+        assert!(
+            matches!(&hints[0].tooltip, Some(InlayHintTooltip::String(text)) if text.contains("Title") && text.contains("may be stale"))
+        );
+        ws.config.inlay_hints.numbers = false;
+        assert_eq!(values(&ws, &uri), ["→ p. 5"]);
+        ws.config.inlay_hints.numbers = true;
+        ws.config.inlay_hints.pages = false;
+        assert_eq!(values(&ws, &uri), ["→ 1.2", "→ 1.2"]);
+        ws.config.inlay_hints.enabled = false;
+        assert!(values(&ws, &uri).is_empty());
+    }
+
+    #[test]
+    fn label_hints_skip_nonexecuting_declarations_and_redefined_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        for call in [
+            r"% \label{target}",
+            r"\newcommand\later{\label{target}}",
+            r"\def\later{\label{target}}",
+            r"\verb|\label{target}|",
+            r"\begin{verbatim}\label{target}\end{verbatim}",
+            r"\typeout{\label{target}}",
+            r"\newcommand\discard[1]{}\discard{\label{target}}",
+            r"\noexpand\label{target}",
+            r"\detokenize{\label{target}}",
+            r"\renewcommand\label[1]{}\label{target}",
+        ] {
+            let source = format!(r"\documentclass{{article}}{call}");
+            let (ws, uri) = workspace(dir.path(), &source, r"\newlabel{target}{{2}{5}}");
+            assert!(values(&ws, &uri).is_empty(), "{source}");
+        }
+        let source = r"\documentclass{article}\emph{\label{target}}";
+        let (ws, uri) = workspace(dir.path(), source, r"\newlabel{target}{{2}{5}}");
+        assert_eq!(values(&ws, &uri), ["→ 2"]);
+    }
+
     #[test]
     fn flat_citation_records_reject_expansion_structures_and_conflicting_labels() {
         let parsed = parse(concat!(
@@ -838,7 +919,7 @@ mod citation_tests {
             &uri,
             Range::new(Position::new(0, 0), Position::new(2, 0)),
         );
-        assert_eq!(all.len(), 2);
+        assert_eq!(all.len(), 3);
         assert_eq!(all[0].position, position);
         assert!(hints(
             &ws,
@@ -847,7 +928,7 @@ mod citation_tests {
         )
         .is_empty());
         ws.config.inlay_hints.citations = false;
-        assert_eq!(values(&ws, &uri), ["→ 2, p. 5"]);
+        assert_eq!(values(&ws, &uri), ["→ 2", "→ 2"]);
         ws.config.inlay_hints.citations = true;
         ws.config.inlay_hints.numbers = false;
         ws.config.inlay_hints.pages = false;

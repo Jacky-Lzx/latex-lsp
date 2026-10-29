@@ -11,7 +11,7 @@
   "inlayHints": {
     "enabled": true,
     "numbers": true,
-    "pages": true,
+    "pages": false,
     "citations": true
   }
 }

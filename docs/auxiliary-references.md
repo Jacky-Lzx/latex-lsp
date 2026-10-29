@@ -4,13 +4,17 @@
 
 The local `.aux` is first read from the actual compilation output directory and the product path corresponding to `jobName`. If not found, the auxiliary file next to the main document is searched. Supports numbering, page numbers, and optional titles for `\newlabel`, and auxiliary file recursion for `\@input`; no TeX commands are executed. Hover to display existing source code information and these compilation values.
 
-`textDocument/inlayHint` can display numbers and page numbers next to label citations and compiled flat literature labels next to literature citations:
+`textDocument/inlayHint` can display compiled numbers next to `\label{key}` declarations, numbers and page numbers next to label references and compiled flat literature labels next to literature citations:
 
 ```json
-{ "latex": { "inlayHints": { "enabled": true, "numbers": true, "pages": true, "citations": true } } }
+{ "latex": { "inlayHints": { "enabled": true, "numbers": true, "pages": false, "citations": true } } }
 ```
 
-Tip: Only references within the requested range are returned, up to a maximum of 1024 items at a time. Clients that support the corresponding refresh capabilities will receive the `workspace/inlayHint/refresh` request after compilation is completed. After the auxiliary file is modified, the cache is updated according to the file metadata.
+Page-number hints are disabled by default. Set `inlayHints.pages` to `true` to include page numbers next to references.
+
+`\label{sec:math}` displays `→ 2` when its compiled number is 2. Declaration hints follow `numbers` and `enabled`, omit page numbers, and use the same hint style as references. Labels without a compiled number receive no hint.
+
+Tip: Only declarations and references within the requested range are returned, up to a maximum of 1024 items at a time. Clients that support the corresponding refresh capabilities will receive the `workspace/inlayHint/refresh` request after compilation is completed. After the auxiliary file is modified, the cache is updated according to the file metadata.
 
 For example, `\bibcite{paper}{7}` of the root auxiliary file will display `→ 7` next to the key of `\cite{paper}`, and `→ Doe26` will be displayed next to the key of `\bibcite{paper}{Doe26}`. `citations` is enabled by default and can be disabled independently of the tag `numbers`/`pages`. Only the current root and its `@input` document records are read, and external `externaldocument` documents are not imported. `nocite`, document data query and classification assignment do not display document tags; static naming and purely forwarded output citations follow the same rules.
 

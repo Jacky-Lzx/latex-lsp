@@ -140,9 +140,9 @@ fn ranges_settings_and_the_combined_response_budget_remain_independent() {
         r"\cite{z,a}\newrefsection\cite{a}\label{target}\ref{target}",
         &(records() + r"\newlabel{target}{{4}{9}}"),
     );
-    assert_eq!(labels(all(&ws, &uri)), ["→ 1", "→ 2", "→ 1", "→ 4, p. 9"]);
+    assert_eq!(labels(all(&ws, &uri)), ["→ 1", "→ 2", "→ 1", "→ 4", "→ 4"]);
     ws.config.inlay_hints.citations = false;
-    assert_eq!(labels(all(&ws, &uri)), ["→ 4, p. 9"]);
+    assert_eq!(labels(all(&ws, &uri)), ["→ 4", "→ 4"]);
     ws.config.inlay_hints.citations = true;
     ws.config.inlay_hints.numbers = false;
     ws.config.inlay_hints.pages = false;
@@ -181,9 +181,9 @@ fn output_jobs_recursive_auxiliaries_and_incomplete_reads_keep_label_namespaces_
     )
     .unwrap();
     std::fs::write(&child, records() + r"\@input{custom.aux}").unwrap();
-    assert_eq!(labels(all(&ws, &uri)), ["→ 1", "→ 2", "→ 1", "→ 4, p. 9"]);
+    assert_eq!(labels(all(&ws, &uri)), ["→ 1", "→ 2", "→ 1", "→ 4", "→ 4"]);
     std::fs::remove_file(&child).unwrap();
-    assert_eq!(labels(all(&ws, &uri)), ["→ 4, p. 9"]);
+    assert_eq!(labels(all(&ws, &uri)), ["→ 4", "→ 4"]);
     let mut source = record(0, "z", 1) + r"\newlabel{target}{{4}{9}}";
     for index in 0..16 {
         source.push_str(&format!(r"\@input{{child{index}.aux}}"));
@@ -194,7 +194,7 @@ fn output_jobs_recursive_auxiliaries_and_incomplete_reads_keep_label_namespaces_
         .unwrap();
     }
     std::fs::write(root, source).unwrap();
-    assert_eq!(labels(all(&ws, &uri)), ["→ 4, p. 9"]);
+    assert_eq!(labels(all(&ws, &uri)), ["→ 4", "→ 4"]);
 }
 #[test]
 fn retained_key_conflicts_are_still_observed_after_numeric_metadata_budgets_fill() {

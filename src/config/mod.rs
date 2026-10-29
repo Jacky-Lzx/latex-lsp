@@ -63,7 +63,7 @@ impl Default for InlayHintsConfig {
         Self {
             enabled: true,
             numbers: true,
-            pages: true,
+            pages: false,
             citations: true,
         }
     }
@@ -1097,6 +1097,19 @@ mod tests {
 
     #[test]
     fn validates_configuration_and_engine_defaults() {
+        assert!(!Config::default().inlay_hints.pages);
+        assert!(
+            !Config::parse(json!({"inlayHints":{"numbers":true}}))
+                .unwrap()
+                .inlay_hints
+                .pages
+        );
+        assert!(
+            Config::parse(json!({"inlayHints":{"pages":true}}))
+                .unwrap()
+                .inlay_hints
+                .pages
+        );
         let config =
             Config::parse(json!({"latex":{"build":{"executable":"pdflatex","onSave":true}}}))
                 .unwrap();

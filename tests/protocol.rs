@@ -2740,10 +2740,18 @@ fn compiled_reference_inlay_hints_follow_ranges_configuration_and_aux_changes() 
     );
     let params = json!({"textDocument":{"uri":uri},"range":{"start":{"line":0,"character":0},"end":{"line":1,"character":0}}});
     let hints = server.request(2, "textDocument/inlayHint", params.clone());
-    assert_eq!(hints.as_array().unwrap().len(), 1);
-    assert_eq!(hints[0]["label"], "→ 1.2, p. 5");
+    assert_eq!(hints.as_array().unwrap().len(), 2);
+    assert_eq!(hints[0]["label"], "→ 1.2");
+    assert_eq!(hints[1]["label"], "→ 1.2");
     assert!(hints[0]["tooltip"].as_str().unwrap().contains("A title"));
-    let empty=server.request(3,"textDocument/inlayHint",json!({"textDocument":{"uri":uri},"range":{"start":{"line":1,"character":0},"end":{"line":2,"character":0}}}));
+    server.notify(
+        "workspace/didChangeConfiguration",
+        json!({"settings":{"inlayHints":{"pages":true}}}),
+    );
+    let with_pages = server.request(3, "textDocument/inlayHint", params.clone());
+    assert_eq!(with_pages[0]["label"], "→ 1.2");
+    assert_eq!(with_pages[1]["label"], "→ 1.2, p. 5");
+    let empty=server.request(4,"textDocument/inlayHint",json!({"textDocument":{"uri":uri},"range":{"start":{"line":1,"character":0},"end":{"line":2,"character":0}}}));
     assert_eq!(empty, json!([]));
     std::fs::write(
         dir.path().join("main.aux"),
@@ -2751,18 +2759,18 @@ fn compiled_reference_inlay_hints_follow_ranges_configuration_and_aux_changes() 
     )
     .unwrap();
     assert_eq!(
-        server.request(4, "textDocument/inlayHint", params.clone())[0]["label"],
-        "→ 3, p. 8"
+        server.request(5, "textDocument/inlayHint", params.clone())[0]["label"],
+        "→ 3"
     );
     server.notify(
         "workspace/didChangeConfiguration",
         json!({"settings":{"inlayHints":{"enabled":false}}}),
     );
     assert_eq!(
-        server.request(5, "textDocument/inlayHint", params),
+        server.request(6, "textDocument/inlayHint", params),
         json!([])
     );
-    server.request(6, "shutdown", Value::Null);
+    server.request(7, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
@@ -30803,7 +30811,7 @@ fn reference_diagnostics_and_inlay_hints_follow_unsaved_parameter_and_command_se
     let diagnostic_params = json!({"textDocument":{"uri":uri}});
     let hint_params = json!({"textDocument":{"uri":uri},"range":{"start":{"line":0,"character":0},"end":{"line":5,"character":0}}});
     let mut id = 2;
-    for (step, expected_errors, expected_hints) in [(0, 0, 1), (1, 2, 2), (2, 0, 0), (3, 0, 1)] {
+    for (step, expected_errors, expected_hints) in [(0, 0, 2), (1, 2, 3), (2, 0, 1), (3, 0, 2)] {
         match step {
             1 => server.notify("textDocument/didOpen", json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":"\\newcommand{\\take}{}"}})),
             2 => server.notify("textDocument/didChange", json!({"textDocument":{"uri":macros,"version":2},"contentChanges":[{"text":"\\newcommand{\\take}{}\\renewcommand{\\ref}[1]{#1}\\renewcommand{\\cite}[1]{#1}"}]})),
@@ -30831,11 +30839,13 @@ fn reference_diagnostics_and_inlay_hints_follow_unsaved_parameter_and_command_se
             expected_hints,
             "step {step}: {hints}"
         );
+        assert_eq!(hints[0]["label"], "→ 2");
         assert!(hints
             .as_array()
             .unwrap()
             .iter()
-            .all(|hint| hint["label"] == "→ 2, p. 7"));
+            .skip(1)
+            .all(|hint| hint["label"] == "→ 2"));
     }
     server.request(id, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
@@ -30868,16 +30878,16 @@ fn named_references_publish_exact_warnings_hints_and_follow_interface_redefiniti
     let text = Text::new(source.into());
     let mut id = 2;
     for (step, definition, expected_errors, expected_hints) in [
-        (0, "", 3, 2),
-        (1, r"\def\csuse#1#2{}", 1, 1),
+        (0, "", 3, 3),
+        (1, r"\def\csuse#1#2{}", 1, 2),
         // The unresolved csname can change the source bibliography namespace;
         // retain the independent label warning but avoid guessing citations.
-        (2, r"\def\endcsname{}", 1, 1),
+        (2, r"\def\endcsname{}", 1, 2),
         (
             3,
             r"\renewcommand{\ref}[1]{#1}\renewcommand{\cite}[1]{#1}",
             0,
-            0,
+            1,
         ),
     ] {
         if step == 1 {
@@ -30923,11 +30933,13 @@ fn named_references_publish_exact_warnings_hints_and_follow_interface_redefiniti
             expected_hints,
             "step {step}: {hints}"
         );
+        assert_eq!(hints[0]["label"], "→ 4");
         assert!(hints
             .as_array()
             .unwrap()
             .iter()
-            .all(|hint| hint["label"] == "→ 4, p. 9"));
+            .skip(1)
+            .all(|hint| hint["label"] == "→ 4"));
     }
     server.request(id, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
@@ -31273,7 +31285,7 @@ fn forwarding_reference_keys_refresh_diagnostics_hints_completion_and_versioned_
         .as_array()
         .unwrap()
         .iter()
-        .all(|h| h["label"] == "→ 4, p. 9"));
+        .all(|h| h["label"] == "→ 4"));
     let definitions = server.request(4, "textDocument/definition", params.clone());
     assert_eq!(definitions[0]["uri"], macros.as_str());
     assert_eq!(
@@ -37185,7 +37197,13 @@ fn numeric_compiled_citation_hints_keep_sections_outputs_and_unsaved_roots_consi
     };
     assert_eq!(
         hint_labels(&hints),
-        vec![json!("→ 1"), json!("→ 2"), json!("→ 1"), json!("→ 4, p. 9")]
+        vec![
+            json!("→ 1"),
+            json!("→ 2"),
+            json!("→ 1"),
+            json!("→ 4"),
+            json!("→ 4")
+        ]
     );
     let at = source.find(r"\cite{z,a}").unwrap() + 7;
     assert_eq!(
@@ -37205,7 +37223,7 @@ fn numeric_compiled_citation_hints_keep_sections_outputs_and_unsaved_roots_consi
     );
     assert_eq!(
         hint_labels(&server.request(5, "textDocument/inlayHint", params.clone())),
-        vec![json!("→ 4, p. 9")]
+        vec![json!("→ 4"), json!("→ 4")]
     );
     server.notify(
         "textDocument/didClose",
@@ -37243,12 +37261,12 @@ fn numeric_compiled_citation_hints_keep_sections_outputs_and_unsaved_roots_consi
     .unwrap();
     assert_eq!(
         hint_labels(&server.request(9, "textDocument/inlayHint", params.clone())),
-        vec![json!("→ 1"), json!("→ 2"), json!("→ 4, p. 9")]
+        vec![json!("→ 1"), json!("→ 2"), json!("→ 4"), json!("→ 4")]
     );
     server.notify("workspace/didChangeConfiguration",json!({"settings":{"distribution":{"enabled":false},"build":{"outputDirectory":"build output","jobName":"custom"},"inlayHints":{"citations":false}}}));
     assert_eq!(
         hint_labels(&server.request(10, "textDocument/inlayHint", params)),
-        vec![json!("→ 4, p. 9")]
+        vec![json!("→ 4"), json!("→ 4")]
     );
     server.request(11, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
@@ -37413,7 +37431,13 @@ fn nondeferred_compiled_citation_hints_follow_bbl_artifacts_modes_and_updates() 
     let initial = server.request(2, "textDocument/inlayHint", params.clone());
     assert_eq!(
         labels(&initial),
-        vec![json!("→ 1"), json!("→ 2"), json!("→ 1"), json!("→ 4, p. 9")]
+        vec![
+            json!("→ 1"),
+            json!("→ 2"),
+            json!("→ 1"),
+            json!("→ 4"),
+            json!("→ 4")
+        ]
     );
     let at = source.find(r"\cite{z,a}").unwrap() + 7;
     assert_eq!(
@@ -37423,12 +37447,24 @@ fn nondeferred_compiled_citation_hints_follow_bbl_artifacts_modes_and_updates() 
     server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":4},"contentChanges":[{"text":source.replace("sorting=none","sorting=none,defernumbers=true")}]}));
     assert_eq!(
         labels(&server.request(3, "textDocument/inlayHint", params.clone())),
-        vec![json!("→ 7"), json!("→ 8"), json!("→ 9"), json!("→ 4, p. 9")]
+        vec![
+            json!("→ 7"),
+            json!("→ 8"),
+            json!("→ 9"),
+            json!("→ 4"),
+            json!("→ 4")
+        ]
     );
     std::fs::write(&artifact, normal.clone() + r"\unknown").unwrap();
     assert_eq!(
         labels(&server.request(4, "textDocument/inlayHint", params.clone())),
-        vec![json!("→ 7"), json!("→ 8"), json!("→ 9"), json!("→ 4, p. 9")]
+        vec![
+            json!("→ 7"),
+            json!("→ 8"),
+            json!("→ 9"),
+            json!("→ 4"),
+            json!("→ 4")
+        ]
     );
     server.notify(
         "textDocument/didClose",
@@ -37436,28 +37472,40 @@ fn nondeferred_compiled_citation_hints_follow_bbl_artifacts_modes_and_updates() 
     );
     assert_eq!(
         labels(&server.request(5, "textDocument/inlayHint", params.clone())),
-        vec![json!("→ 4, p. 9")]
+        vec![json!("→ 4"), json!("→ 4")]
     );
     std::fs::write(&artifact, &changed).unwrap();
     assert_eq!(
         labels(&server.request(6, "textDocument/inlayHint", params.clone())),
-        vec![json!("→ 2"), json!("→ 1"), json!("→ 1"), json!("→ 4, p. 9")]
+        vec![
+            json!("→ 2"),
+            json!("→ 1"),
+            json!("→ 1"),
+            json!("→ 4"),
+            json!("→ 4")
+        ]
     );
     server.notify("textDocument/didOpen",json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":8,"text":"@preamble{\\unknown} @book{a} @book{z}"}}));
     assert_eq!(
         labels(&server.request(7, "textDocument/inlayHint", params.clone())),
-        vec![json!("→ 4, p. 9")]
+        vec![json!("→ 4"), json!("→ 4")]
     );
     server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
     assert_eq!(
         labels(&server.request(8, "textDocument/inlayHint", params.clone())),
-        vec![json!("→ 2"), json!("→ 1"), json!("→ 1"), json!("→ 4, p. 9")]
+        vec![
+            json!("→ 2"),
+            json!("→ 1"),
+            json!("→ 1"),
+            json!("→ 4"),
+            json!("→ 4")
+        ]
     );
     assert_eq!(server.request(9,"textDocument/inlayHint",json!({"textDocument":{"uri":main},"range":{"start":{"line":2,"character":0},"end":{"line":3,"character":0}}})),json!([]));
     server.notify("workspace/didChangeConfiguration",json!({"settings":{"distribution":{"enabled":false},"build":{"outputDirectory":"build output","jobName":"custom"},"inlayHints":{"citations":false}}}));
     assert_eq!(
         labels(&server.request(10, "textDocument/inlayHint", params)),
-        vec![json!("→ 4, p. 9")]
+        vec![json!("→ 4"), json!("→ 4")]
     );
     server.request(11, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
@@ -37949,7 +37997,7 @@ fn local_context_citation_hints_follow_default_artifacts_updates_and_unsaved_gua
     let initial = server.request(2, "textDocument/inlayHint", params(&main));
     assert_eq!(
         labels(&initial),
-        vec![json!("→ B1"), json!("→ B1"), json!("→ 4, p. 9")]
+        vec![json!("→ B1"), json!("→ B1"), json!("→ 4"), json!("→ 4")]
     );
     let at = source.find(r"\cite{a}").unwrap() + 7;
     assert_eq!(
@@ -37976,7 +38024,7 @@ fn local_context_citation_hints_follow_default_artifacts_updates_and_unsaved_gua
     std::fs::write(&bbl_path, bbl.clone() + r"\unknown").unwrap();
     assert_eq!(
         labels(&server.request(6, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ 4, p. 9")]
+        vec![json!("→ 4"), json!("→ 4")]
     );
     std::fs::write(&bbl_path, &bbl).unwrap();
     let guarded = source.replace(
@@ -38021,7 +38069,7 @@ fn local_context_citation_hints_follow_default_artifacts_updates_and_unsaved_gua
     server.notify("workspace/didChangeConfiguration",json!({"settings":{"distribution":{"enabled":false},"build":{"outputDirectory":"build output","jobName":"custom"},"inlayHints":{"citations":false}}}));
     assert_eq!(
         labels(&server.request(12, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ 4, p. 9")]
+        vec![json!("→ 4"), json!("→ 4")]
     );
     server.request(13, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
@@ -38239,8 +38287,9 @@ fn native_context_entry_keys_keep_complete_versioned_edits_and_unsaved_meanings(
             json!([])
         );
         let label_hints = server.request(6, "textDocument/inlayHint", hints(&main));
-        assert_eq!(label_hints.as_array().unwrap().len(), 1);
-        assert_eq!(label_hints[0]["label"], "→ 4, p. 9");
+        assert_eq!(label_hints.as_array().unwrap().len(), 2);
+        assert_eq!(label_hints[0]["label"], "→ 4");
+        assert_eq!(label_hints[1]["label"], "→ 4");
         let diagnostics = server.until(|message| {
             message["method"] == "textDocument/publishDiagnostics"
                 && message["params"]["uri"] == child.as_str()
@@ -38757,7 +38806,7 @@ fn strong_context_assignment_hints_follow_order_unsaved_inputs_and_shared_new_ro
     let initial = server.request(2, "textDocument/inlayHint", params(&main));
     assert_eq!(
         labels(initial.clone()),
-        vec![json!("→ B8"), json!("→ A3"), json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ A3"), json!("→ 4"), json!("→ 4")]
     );
     for (hint, (at, _)) in initial
         .as_array()
@@ -38776,7 +38825,7 @@ fn strong_context_assignment_hints_follow_order_unsaved_inputs_and_shared_new_ro
     server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":8},"contentChanges":[{"text":assignment.replace("labelprefix=A","labelprefix=B")}] }));
     assert_eq!(
         labels(server.request(4, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ B8"), json!("→ B8"), json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ B8"), json!("→ 4"), json!("→ 4")]
     );
     assert_eq!(
         labels(server.request(5, "textDocument/inlayHint", params(&child))),
@@ -38785,7 +38834,7 @@ fn strong_context_assignment_hints_follow_order_unsaved_inputs_and_shared_new_ro
     server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":9},"contentChanges":[{"text":assignment.replace("entries[","entries*[")}] }));
     assert_eq!(
         labels(server.request(6, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ B8"), json!("→ A3"), json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ A3"), json!("→ 4"), json!("→ 4")]
     );
     server.notify(
         "textDocument/didClose",
@@ -38819,7 +38868,7 @@ fn strong_context_assignment_hints_follow_order_unsaved_inputs_and_shared_new_ro
     std::fs::write(&aux, missing).unwrap();
     assert_eq!(
         labels(server.request(10, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ B8"), json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ 4"), json!("→ 4")]
     );
     assert_eq!(
         server.request(11, "textDocument/inlayHint", params(&child)),
@@ -39788,7 +39837,7 @@ fn automatic_category_hints_certify_preloaded_members_unsaved_sources_and_shared
     let initial = server.request(2, "textDocument/inlayHint", params(&main));
     assert_eq!(
         labels(initial.clone()),
-        vec![json!("→ B8"), json!("→ A3"), json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ A3"), json!("→ 4"), json!("→ 4")]
     );
     for (hint, (at, _)) in initial
         .as_array()
@@ -39807,7 +39856,7 @@ fn automatic_category_hints_certify_preloaded_members_unsaved_sources_and_shared
     server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":8},"contentChanges":[{"text":assignment.replace("labelprefix=A","labelprefix=B")}] }));
     assert_eq!(
         labels(server.request(4, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ B8"), json!("→ B8"), json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ B8"), json!("→ 4"), json!("→ 4")]
     );
     assert_eq!(
         labels(server.request(5, "textDocument/inlayHint", params(&child))),
@@ -39816,7 +39865,7 @@ fn automatic_category_hints_certify_preloaded_members_unsaved_sources_and_shared
     server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":9},"contentChanges":[{"text":assignment.replace("cats[","cats*[")}] }));
     assert_eq!(
         labels(server.request(6, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ B8"), json!("→ A3"), json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ A3"), json!("→ 4"), json!("→ 4")]
     );
     server.notify(
         "textDocument/didClose",
@@ -39850,7 +39899,7 @@ fn automatic_category_hints_certify_preloaded_members_unsaved_sources_and_shared
     std::fs::write(&aux, missing).unwrap();
     assert_eq!(
         labels(server.request(10, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ B8"), json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ 4"), json!("→ 4")]
     );
     assert_eq!(
         server.request(11, "textDocument/inlayHint", params(&child)),
@@ -40021,7 +40070,7 @@ fn automatic_keyword_hints_follow_bbl_members_unsaved_assignments_and_shared_roo
     let initial = server.request(2, "textDocument/inlayHint", params(&main));
     assert_eq!(
         labels(initial.clone()),
-        vec![json!("→ B8"), json!("→ A3"), json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ A3"), json!("→ 4"), json!("→ 4")]
     );
     for (hint, (at, _)) in initial
         .as_array()
@@ -40040,7 +40089,7 @@ fn automatic_keyword_hints_follow_bbl_members_unsaved_assignments_and_shared_roo
     server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":8},"contentChanges":[{"text":assignment.replace("labelprefix=A","labelprefix=B")}] }));
     assert_eq!(
         labels(server.request(4, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ B8"), json!("→ B8"), json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ B8"), json!("→ 4"), json!("→ 4")]
     );
     assert_eq!(
         labels(server.request(5, "textDocument/inlayHint", params(&child))),
@@ -40049,7 +40098,7 @@ fn automatic_keyword_hints_follow_bbl_members_unsaved_assignments_and_shared_roo
     server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":9},"contentChanges":[{"text":assignment.replace("cats[","cats*[")}] }));
     assert_eq!(
         labels(server.request(6, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ B8"), json!("→ A3"), json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ A3"), json!("→ 4"), json!("→ 4")]
     );
     server.notify(
         "textDocument/didClose",
@@ -40083,7 +40132,7 @@ fn automatic_keyword_hints_follow_bbl_members_unsaved_assignments_and_shared_roo
     std::fs::write(&aux, missing).unwrap();
     assert_eq!(
         labels(server.request(10, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ B8"), json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ 4"), json!("→ 4")]
     );
     assert_eq!(
         server.request(11, "textDocument/inlayHint", params(&child)),
@@ -40239,7 +40288,7 @@ fn unicode_keyword_hints_refresh_literal_identity_and_compiled_members_over_stdi
     check(&mut server, &["→ A3", "→ B9"]);
     assert_eq!(
         labels(&server.request(11, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ B8"), json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ 4"), json!("→ 4")]
     );
     for (version, keyword, expected) in [
         (13, "cafe\u{301}", "→ B8"),
@@ -40268,7 +40317,7 @@ fn unicode_keyword_hints_refresh_literal_identity_and_compiled_members_over_stdi
     check(&mut server, &[]);
     assert_eq!(
         labels(&server.request(12, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ 4, p. 9")]
+        vec![json!("→ 4"), json!("→ 4")]
     );
     server.notify(
         "textDocument/didClose",
