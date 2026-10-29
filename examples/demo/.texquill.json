@@ -1,0 +1,17 @@
+{
+  "build": {
+    "rootFile": "main.tex",
+    "engine": "pdflatex",
+    "onSave": false
+  },
+  "diagnostics": {
+    "undefinedReferences": true,
+    "undefinedCitations": true
+  },
+  "inlayHints": {
+    "enabled": true,
+    "numbers": true,
+    "pages": true,
+    "citations": true
+  }
+}

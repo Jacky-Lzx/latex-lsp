@@ -1,3 +1,20 @@
+% !TeX root = ../main.tex
 \section{Introduction}
 \label{sec:intro}
-This section lives in another file. Try navigating to its label from main.tex.
+
+% Navigate here from main.tex, or rename this label and preview all edits.
+This section lives in another file. Its label is referenced from the root
+document, and its own references point back to Equation~\eqref{eq:identity}
+and the editing exercises in Section~\ref{sec:editing}.
+
+% The definition is in a third file: hover, signature help, references, rename.
+\demoterm{Language server}{One project connects several source files.}
+
+\begin{demopanel}{Cross-file symbols}
+  The declarations are in a separate file.
+  Their names and arguments support the same editing features here as in
+  the root document. For an introduction to LaTeX, see~\cite{lamport1994}.
+\end{demopanel}
+
+% Use this printed sentence as the inverse-search target in a PDF viewer.
+This sentence is the source/PDF search target in the introduction subfile.

@@ -86,10 +86,12 @@ Other editors can configure `texquill --stdio` as the language server for `tex` 
 
 ## Sample project
 
-Open [examples/demo/main.tex](../examples/demo/main.tex) and try:
+Open `examples/demo` as a workspace and start with
+[main.tex](../examples/demo/main.tex). Its numbered exercises cover completion,
+hover and signatures, cross-file navigation and rename, macro call hierarchy,
+linked editing, symbols, colors, refactoring, formatting, diagnostics, builds,
+compiled inlay hints, and source/PDF search. The project compiles as shipped;
+uncomment individual diagnostic exercises to try quick fixes.
 
-1. Follow `\ref{sec:intro}` to a label in another file.
-2. Follow `\cite{knuth1984}` to its BibTeX entry.
-3. Type `\sec`, `\ref{`, or `\cite{` to trigger completion.
-4. Delete `\end{equation}` or a `}` to inspect diagnostics.
-5. Rename a label or citation key and preview the cross-file edits.
+The [playground walkthrough](../examples/demo/README.md) lists the feature
+locations, editor/tool prerequisites, and build instructions.

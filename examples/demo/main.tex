@@ -1,24 +1,167 @@
-\documentclass{article}
-\usepackage{amsmath,amssymb}
+% TeXquill feature playground. Start here; see README.md for the walkthrough.
+% Open examples/demo as the editor workspace and attach texquill --stdio.
+% The unmodified project compiles without intentional errors.
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage{mathtools,amssymb}
+\usepackage{xcolor}
+\usepackage{etoolbox}
 \usepackage{hyperref}
 
-\newcommand{\R}{\mathbb{R}}
-\title{TeXquill Demo}
+% PATHS: go to definition / open document link on this input or bibliography.
+% Rename sections/introduction.tex through an LSP-aware file explorer to try
+% workspace/willRenameFiles; the input path should be updated automatically.
+\input{definitions}
+
+\title{TeXquill LSP Playground}
 \author{Example Author}
+\date{}
 
 \begin{document}
 \maketitle
+\tableofcontents
+
+% 1. CROSS-FILE NAVIGATION, COMPLETION, REFERENCES AND RENAME
+% On sec:intro or knuth1984 below: hover, definition/declaration, references,
+% document highlights, and rename. Preview the edits in the other files.
+% For completion, temporarily empty a key or type a prefix inside its braces.
+See Section~\ref{sec:intro}, Equation~\eqref{eq:identity}, and
+Theorem~\ref{thm:identity}. For background, see~\cite{knuth1984,lamport1994}.
+
 \input{sections/introduction}
 
-\section{An example}
-See Section~\ref{sec:intro} and Equation~\eqref{eq:identity}.
-For more details, see~\cite{knuth1984}.
+\section{Mathematics and user declarations}
+\label{sec:math}
+
+% 2. HOVER, SIGNATURE HELP AND CALL HIERARCHY
+% Hover demoterm to read its documentation from definitions.tex.
+% Request signature help inside [result] or either required argument.
+% Prepare call hierarchy on demowelcome: outgoing calls lead to demoterm;
+% incoming calls on demoterm include demowelcome and direct document calls.
+% Rename demoterm to update its declaration and calls in all source files.
+\demowelcome{reader}
+\demoterm[result]{Identity}{Adding zero preserves a real number.}
 
 \begin{equation}
-  x + 0 = x, \quad x \in \R
+  x + 0 = x, \qquad x \in \R
   \label{eq:identity}
 \end{equation}
 
+% User math commands also support navigation, references and rename.
+% Try command completion with \alp, \fra, \demo or \norm in math mode.
+\[
+  \norm{x} = \sqrt{x^2}, \qquad
+  \norm*{\frac{x}{2}} = \frac{\norm{x}}{2}.
+\]
+
+% 3. ENVIRONMENT SIGNATURES, LINKED EDITING AND SYMBOL RENAME
+% Request signature help after \begin{demopanel}[ or inside its title.
+% Edit the name in a begin/end pair with linked editing enabled in the client.
+% Rename demopanel to update the declaration and every use across files.
+\begin{demopanel}[Example]{A custom environment}
+  The panel has an optional heading and a required title.
+  Navigate back to Section~\ref{sec:intro} or forward to Section~\ref{sec:editing}.
+\end{demopanel}
+
+\begin{demotheorem}[Additive identity]
+  \label{thm:identity}
+  For every real $x$, we have $x + 0 = x$.
+\end{demotheorem}
+
+% 4. COUNTERS, LENGTHS, BOOLEANS AND NAMED COLORS
+% Navigate, find references, or rename demostep, demogap, showdetails, accent.
+\setcounter{demostep}{0}
+\refstepcounter{demostep}
+Step \arabic{demostep}: \textcolor{accent}{inspect a named color}.
+\par\vspace{\demogap}
+\ifbool{showdetails}{This sentence is controlled by a named boolean.}{}
+
+\newpage
+\section{Editing and presentation}
+\label{sec:editing}
+
+% 5. COLOR PREVIEWS AND PRESENTATIONS
+% Open the client color picker on the literal below or on definecolor in
+% definitions.tex. A named color reference supports rename and completion.
+\textcolor[HTML]{2563EB}{A literal blue color.}
+\colorbox{accent!15!white}{A named color mixed with white.}
+
+% 6. DOCUMENT LINKS AND PDF DESTINATIONS
+% Open the URL link. Navigate/rename demo-target independently of labels.
+\href{https://www.latex-project.org/}{The LaTeX Project}
+maintains the document preparation system.
+\hypertarget{demo-target}{This paragraph is a named PDF destination.}
+Use \hyperlink{demo-target}{this internal link} to return here.
+\pdfbookmark[1]{Editing playground}{demo-bookmark}
+
+\subsection{Selection and structural refactoring}
+\label{sec:refactor}
+
+% 7. Select the words "reusable phrase" below and request code actions:
+% wrap in emph / textbf / quote, or extract a new command in this root file.
+% Use expand selection repeatedly inside a ref or a nested command argument.
+This reusable phrase is a convenient selection for structural refactoring.
+
+% 8. FORMATTING, FOLDING AND SEMANTIC HIGHLIGHTING
+% Remove indentation in this nested list, then format the selection/document.
+% Press Enter or type } to try on-type indentation (if enabled by the client).
+% Fold a section, environment, comment block, display formula or BibTeX entry.
+\begin{itemize}
+  \item Commands, environments, labels and citations have semantic tokens.
+  \item Nested structures provide selection and folding ranges.
+    \begin{enumerate}
+      \item Follow \ref{sec:math} to another section.
+      \item Look up \cite{shannon1948} by key, author or title in completion.
+    \end{enumerate}
+\end{itemize}
+
+% Literal examples should remain untouched by symbol rename and diagnostics.
+\begin{verbatim}
+\demoterm{literal}{not a macro call}
+\ref{not-a-real-label} and \cite{not-a-real-key}
+\begin{not-a-real-environment}
+\end{verbatim}
+
+\subsection{Diagnostics and quick fixes}
+
+% 9. Uncomment ONE exercise at a time, request code actions, then undo.
+% Undefined references/citations have static spelling fixes without a build:
+% See Section~\ref{sec:intr} and the book~\cite{knuth198}.
+%
+% A duplicate label reports both the conflict and its related definition:
+% \label{sec:intro}
+%
+% An unclosed group offers a syntax repair:
+% \textbf{This group is deliberately unfinished.
+%
+% A mismatched environment offers a repair; try source.fixAll as well:
+% \begin{quote}
+%   This environment deliberately has the wrong closing name.
+% \end{itemize}
+%
+% Build-log exercise: uncomment, save and build; inspect the compiler error
+% and command spelling fix, then undo and rebuild to clear the diagnostic.
+% \textbff{A misspelled command for a compiler diagnostic.}
+
+\newpage
+\section{Build, bibliography and source/PDF search}
+\label{sec:build}
+
+% 10. Build using the code lens or latex.build. Rebuild after source edits.
+% Once compilation succeeds, enable the client's inlay hints to see label
+% numbers/pages and numeric citations next to ref/eqref/cite arguments.
+The introduction is on page~\pageref{sec:intro}; the identity is
+Equation~\eqref{eq:identity}. The bibliography includes~\cite{knuth1984,shannon1948}.
+
+% Forward search from this paragraph should land on page 3 or later.
+% In the PDF, inverse search on the introduction should open the subfile.
+This paragraph is a stable target for forward source-to-PDF search.
+Compare the source location with the PDF position, then return to the
+introduction using inverse search in your editor's viewer integration.
+
+% 11. Open references.bib: try entry/field/string completion, hover,
+% definition and rename on the string abbreviation, citation key rename,
+% document/range formatting, outline, folding, semantic tokens and links.
 \bibliographystyle{plain}
 \bibliography{references}
 \end{document}

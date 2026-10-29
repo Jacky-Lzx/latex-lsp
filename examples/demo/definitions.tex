@@ -1,0 +1,38 @@
+% !TeX root = main.tex
+% Shared declarations make navigation, signatures and rename cross-file.
+
+% The set of real numbers, for use in math mode.
+\newcommand{\R}{\mathbb{R}}
+
+% Format a term with an optional category and a short explanation.
+%
+% #1: category (defaults to concept).
+% #2: term to emphasize.
+% #3: explanation printed after the term.
+\newcommand{\demoterm}[3][concept]{%
+  \textbf{#2} (\emph{#1}): #3\par
+}
+
+% Welcome a reader using demoterm; inspect this macro's outgoing calls.
+% #1: the reader's name.
+\newcommand{\demowelcome}[1]{%
+  \demoterm[greeting]{Welcome}{Hello, #1.}%
+}
+
+% A panel with an optional heading and a required title.
+% #1: heading (defaults to Note); #2: title.
+\newenvironment{demopanel}[2][Note]
+  {\begin{quote}\textbf{#1: #2}\par}
+  {\end{quote}}
+
+\newtheorem{demotheorem}{Theorem}[section]
+\DeclarePairedDelimiter{\norm}{\lVert}{\rVert}
+
+% Inspect a literal color here; rename accent to update uses in main.tex.
+\definecolor{accent}{HTML}{2563EB}
+
+\newcounter{demostep}
+\newlength{\demogap}
+\setlength{\demogap}{0.5em}
+\newbool{showdetails}
+\booltrue{showdetails}
