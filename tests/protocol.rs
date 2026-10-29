@@ -13370,6 +13370,272 @@ fn unsaved_local_packages_are_rejected_and_package_changes_make_build_results_st
 
 #[test]
 #[cfg(unix)]
+fn watched_saves_preserve_one_followup_and_queued_force_regardless_of_event_order() {
+    for (force, on_save, save_first) in [
+        (false, true, true),
+        (false, true, false),
+        (true, true, true),
+        (true, false, true),
+    ] {
+        let script = r#"count=0
+[ ! -f "$1/count" ] || count=$(cat "$1/count")
+count=$((count + 1))
+printf '%s' "$count" > "$1/count"
+printf '%s' "$3" > "$1/mode$count"
+cat "$2" > "$1/input$count"
+if [ "$count" = 1 ]; then
+  touch "$1/ready"
+  while [ ! -f "$1/release" ]; do sleep 0.02; done
+fi
+printf '%%PDF-1.4\n%s\n' "$count" > "$1/main.pdf"
+"#;
+        let (mut server, directory, uri) = fake_build_server(script, on_save);
+        configure_rebuild(&mut server, &directory, on_save, "force");
+        let first = server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let output = directory.path().join("build/texquill");
+        wait_for_file(&output.join("ready"));
+        if force {
+            let queued = server.request(
+                3,
+                "workspace/executeCommand",
+                json!({"command":"latex.rebuild","arguments":[uri]}),
+            );
+            assert_eq!(queued["queuedRebuild"], true);
+        }
+        let latest = "\\documentclass{article}\n\\section{Saved 3}\n";
+        for version in [2, 3] {
+            let source = format!("\\documentclass{{article}}\n\\section{{Saved {version}}}\n");
+            std::fs::write(uri.to_file_path().unwrap(), &source).unwrap();
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]}));
+            if save_first {
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+            }
+        }
+        if save_first {
+            let queued = server.request(
+                4,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[uri]}),
+            );
+            assert_eq!(queued["queued"], true);
+            assert_eq!(queued["queuedRebuild"], force);
+        }
+        let event = json!({"changes":[{"uri":uri,"type":2}]});
+        server.notify("workspace/didChangeWatchedFiles", event.clone());
+        // A wire-order barrier makes both save/watcher orderings deterministic.
+        server.request(
+            5,
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        if !save_first {
+            server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+        }
+        let cancelled = server.until(|m| {
+            m["method"] == "latex/buildFinished" && m["params"]["buildId"] == first["buildId"]
+        });
+        assert_eq!(cancelled["params"]["status"], "cancelled", "{cancelled}");
+        let next = server.until(|m| {
+            m["method"] == "latex/buildFinished" && m["params"]["buildId"] != first["buildId"]
+        });
+        assert_eq!(next["params"]["status"], "success", "{next}");
+        assert_eq!(next["params"]["stale"], false, "{next}");
+        assert_eq!(next["params"]["rebuild"], force);
+        assert_eq!(
+            std::fs::read_to_string(output.join("input2")).unwrap(),
+            latest
+        );
+        assert_eq!(
+            std::fs::read_to_string(output.join("mode2")).unwrap(),
+            if force { "force" } else { "normal" }
+        );
+        server.notify("workspace/didChangeWatchedFiles", event);
+        let status = server.request(
+            6,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[uri]}),
+        );
+        assert_eq!(status, next["params"]);
+        server.request(7, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+        assert_eq!(std::fs::read_to_string(output.join("count")).unwrap(), "2");
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn unacknowledged_inlay_refresh_does_not_block_queued_builds_or_shutdown() {
+    let script = "count=0\n[ ! -f \"$1/count\" ] || count=$(cat \"$1/count\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$1/count\"\nif [ \"$count\" = 1 ]; then touch \"$1/ready\"; while [ ! -f \"$1/release\" ]; do sleep 0.02; done; fi\nprintf '%%PDF-1.4\\n%s\\n' \"$count\" > \"$1/main.pdf\"\n";
+    let (mut server, directory, uri) = fake_build_server_capabilities(
+        script,
+        true,
+        json!({"workspace":{"inlayHint":{"refreshSupport":true}}}),
+    );
+    let first = server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let output = directory.path().join("build/texquill");
+    wait_for_file(&output.join("ready"));
+    let source = "\\documentclass{article}\n\\section{Saved}\n";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+    assert_eq!(
+        server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[uri]})
+        )["queued"],
+        true
+    );
+    std::fs::write(output.join("release"), "").unwrap();
+    let refresh = server.until(|m| m["method"] == "workspace/inlayHint/refresh");
+    // Keep the refresh unanswered; the next build must beat its five-second timeout.
+    let next = server.until_with_timeout(Duration::from_secs(2), |m| {
+        m["method"] == "latex/buildFinished" && m["params"]["buildId"] != first["buildId"]
+    });
+    assert_eq!(next["params"]["status"], "success", "{next}");
+    assert_eq!(next["params"]["stale"], false);
+    assert_eq!(std::fs::read_to_string(output.join("count")).unwrap(), "2");
+    server.send(json!({"jsonrpc":"2.0","id":4,"method":"shutdown"}));
+    let shutdown = server.until_with_timeout(Duration::from_secs(2), |m| m["id"] == 4);
+    assert!(shutdown.get("error").is_none(), "{shutdown}");
+    // A late UI response must remain harmless even after shutdown.
+    server.send(json!({"jsonrpc":"2.0","id":refresh["id"],"result":null}));
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn editor_directory_aliases_protect_unsaved_inputs_changes_and_versioned_diagnostics() {
+    for change in ["edit", "watch", "retarget"] {
+        let script = "count=0\n[ ! -f \"$1/count\" ] || count=$(cat \"$1/count\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$1/count\"\nif [ \"$count\" = 1 ]; then touch \"$1/ready\"; while [ ! -f \"$1/release\" ]; do sleep 0.02; done; fi\nprintf '%%PDF-1.4\\n%s\\n' \"$count\" > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: build %s.\\n' \"$2\" \"$count\" > \"$1/main.log\"\n";
+        let (mut server, directory, original) = fake_build_server(script, false);
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":original}}),
+        );
+        let source = "\\documentclass{article}\n\\input{child}\n";
+        std::fs::write(original.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(directory.path().join("child.tex"), "Before.\n").unwrap();
+        let alias = directory.path().join("editor-alias");
+        std::os::unix::fs::symlink(directory.path(), &alias).unwrap();
+        let uri = Url::from_file_path(alias.join("main.tex")).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+        );
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":format!("{source}Unsaved.\n")}]}));
+        server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[uri]}}));
+        let rejected = server.until(|m| m["id"] == 2);
+        assert!(
+            rejected["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("Save")),
+            "{rejected}"
+        );
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":3},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let output = directory.path().join("build/texquill");
+        wait_for_file(&output.join("ready"));
+        let replacement = tempfile::tempdir().unwrap();
+        match change {
+            "edit" => server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":4},"contentChanges":[{"text":format!("{source}Changed.\n")}]})),
+            "watch" => {
+                let child = alias.join("child.tex");
+                std::fs::write(&child, "Changed.\n").unwrap();
+                server.notify("workspace/didChangeWatchedFiles", json!({"changes":[{"uri":Url::from_file_path(child).unwrap(),"type":2}]}));
+            }
+            "retarget" => {
+                std::fs::write(replacement.path().join("main.tex"), source).unwrap();
+                std::fs::write(replacement.path().join("child.tex"), "Before.\n").unwrap();
+                std::fs::remove_file(&alias).unwrap();
+                std::os::unix::fs::symlink(replacement.path(), &alias).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        // Process edits/watchers before the compiler finishes.
+        server.request(
+            4,
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        std::fs::write(output.join("release"), "").unwrap();
+        let first = server.until(|m| m["method"] == "latex/buildFinished");
+        assert_eq!(first["params"]["stale"], true, "{change}: {first}");
+        assert_eq!(
+            first["params"]["status"],
+            if change == "watch" {
+                "cancelled"
+            } else {
+                "success"
+            }
+        );
+        if change == "retarget" {
+            std::fs::remove_file(&alias).unwrap();
+            std::os::unix::fs::symlink(directory.path(), &alias).unwrap();
+        }
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":5},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            5,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let next = server.until(|m| m["method"] == "latex/buildFinished");
+        assert_eq!(next["params"]["status"], "success", "{next}");
+        assert_eq!(next["params"]["stale"], false, "{next}");
+        let diagnostics = server.until(|m| {
+            m["method"] == "textDocument/publishDiagnostics"
+                && m["params"]["uri"] == uri.as_str()
+                && m["params"]["diagnostics"].as_array().is_some_and(|ds| {
+                    ds.iter()
+                        .any(|d| d["message"].as_str().is_some_and(|s| s.contains("build 2")))
+                })
+        });
+        assert_eq!(diagnostics["params"]["version"], 5, "{diagnostics}");
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":6},"contentChanges":[{"text":format!("{source}Unsaved again.\n")}]}));
+        let cleared = server.request(
+            6,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        assert!(
+            cleared["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|d| d["source"] != "latex-build"),
+            "{cleared}"
+        );
+        server.request(7, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn repeated_saves_during_a_build_compile_the_latest_saved_content_once_more() {
     let script = "count=0\n[ ! -f \"$1/count\" ] || count=$(cat \"$1/count\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$1/count\"\nif [ \"$count\" = 1 ]; then\n  touch \"$1/ready\"\n  while [ ! -f \"$1/release\" ]; do sleep 0.02; done\nfi\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: build %s.\\n' \"$2\" \"$count\" > \"$1/main.log\"\n";
     let (mut server, directory, uri) = fake_build_server(script, true);
@@ -16901,7 +17167,7 @@ fn required_input_filename_selection_changes_invalidate_results_and_unchanged_pd
 
 #[test]
 #[cfg(unix)]
-fn required_input_creation_notifications_cancel_builds_and_queues_despite_includeonly() {
+fn required_input_creation_watchers_resume_saves_and_explicit_operations_clear_queues() {
     for command in ["input", "subfile"] {
         let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
         let (mut server, directory, main) = fake_build_server(script, true);
@@ -16951,8 +17217,19 @@ fn required_input_creation_notifications_cancel_builds_and_queues_despite_includ
             "workspace/executeCommand",
             json!({"command":"latex.buildStatus","arguments":[main]}),
         );
-        assert_eq!(status["buildId"], finished["params"]["buildId"]);
         assert_ne!(status["queued"], true, "{status}");
+        if command == "input" {
+            assert_ne!(status["buildId"], finished["params"]["buildId"]);
+            assert_eq!(status["status"], "running", "{status}");
+            std::fs::write(directory.path().join("build/texquill/release"), "").unwrap();
+            let next = server.until(|m| {
+                m["method"] == "latex/buildFinished" && m["params"]["buildId"] == status["buildId"]
+            });
+            assert_eq!(next["params"]["status"], "success", "{next}");
+            assert_eq!(next["params"]["stale"], false);
+        } else {
+            assert_eq!(status["buildId"], finished["params"]["buildId"]);
+        }
         server.request(5, "shutdown", Value::Null);
         server.notify("exit", Value::Null);
         server.wait_exit(0);
@@ -17030,7 +17307,7 @@ fn real_required_input_restoration_discards_missing_file_errors_and_rebuilds_eac
 
 #[test]
 #[cfg(unix)]
-fn missing_include_directory_creation_cancels_selected_builds_and_their_queue_only() {
+fn missing_include_directory_watchers_restart_selected_builds_and_preserve_saved_work() {
     for selected in [false, true] {
         let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
         let (mut server, directory, main) = fake_build_server(script, true);
@@ -17078,7 +17355,7 @@ fn missing_include_directory_creation_cancels_selected_builds_and_their_queue_on
             json!({"command":"latex.buildStatus","arguments":[main]}),
         );
         if selected {
-            assert_eq!(status["status"], "cancelled", "{status}");
+            assert_eq!(status["status"], "running", "{status}");
             assert_ne!(status["queued"], true, "{status}");
         } else {
             assert_eq!(status["status"], "running", "{status}");
@@ -17091,6 +17368,15 @@ fn missing_include_directory_creation_cancels_selected_builds_and_their_queue_on
         }
         let finished = server.until(|message| message["method"] == "latex/buildFinished");
         assert_eq!(finished["params"]["status"], "cancelled", "{finished}");
+        if selected {
+            assert_ne!(status["buildId"], finished["params"]["buildId"]);
+            std::fs::write(directory.path().join("build/texquill/release"), "").unwrap();
+            let next = server.until(|m| {
+                m["method"] == "latex/buildFinished" && m["params"]["buildId"] == status["buildId"]
+            });
+            assert_eq!(next["params"]["status"], "success", "{next}");
+            assert_eq!(next["params"]["stale"], false);
+        }
         server.request(6, "shutdown", Value::Null);
         server.notify("exit", Value::Null);
         server.wait_exit(0);
@@ -23658,8 +23944,8 @@ printf '%s:2: LaTeX Warning: build %s.\n' "$2" "$count" > "$1/main.log"
 
 #[test]
 #[cfg(unix)]
-fn cancellation_file_events_and_shutdown_discard_queued_rebuilds() {
-    for action in ["command", "progress", "watched", "created", "shutdown"] {
+fn explicit_cancellation_file_operations_and_shutdown_discard_queued_rebuilds() {
+    for action in ["command", "progress", "created", "shutdown"] {
         let (mut server, directory, uri) = fake_build_server_capabilities(
             "printf 'run\\n' >> runs\nsleep 30\n",
             false,
@@ -23699,13 +23985,6 @@ fn cancellation_file_events_and_shutdown_discard_queued_rebuilds() {
                 "window/workDoneProgress/cancel",
                 json!({"token":create["params"]["token"]}),
             ),
-            "watched" => {
-                std::fs::write(uri.to_file_path().unwrap(), format!("{source}Changed.\n")).unwrap();
-                server.notify(
-                    "workspace/didChangeWatchedFiles",
-                    json!({"changes":[{"uri":uri,"type":2}]}),
-                );
-            }
             "created" => {
                 let choice = directory.path().join("choice.dat");
                 std::fs::write(&choice, "data").unwrap();

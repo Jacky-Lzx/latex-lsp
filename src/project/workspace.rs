@@ -462,8 +462,16 @@ impl Workspace {
                 .flatten()
                 .cloned(),
         );
+        let physical = uri
+            .to_file_path()
+            .ok()
+            .and_then(|path| crate::diagnostics::diagnostic_inputs::canonicalize(&path).ok())
+            .and_then(|path| Url::from_file_path(path).ok());
         for project in self.project.build_diagnostics.values() {
-            if let Some(build) = project.get(uri) {
+            if let Some(build) = project
+                .get(uri)
+                .or_else(|| physical.as_ref().and_then(|uri| project.get(uri)))
+            {
                 diagnostics.extend(build.iter().cloned());
             }
         }
@@ -480,9 +488,35 @@ impl Workspace {
 
     pub fn clear_build_diagnostics(&mut self, uri: &Url) {
         self.project.lint_diagnostics.remove(uri);
+        let physical = uri
+            .to_file_path()
+            .ok()
+            .and_then(|path| path.canonicalize().ok())
+            .and_then(|path| Url::from_file_path(path).ok());
         for project in self.project.build_diagnostics.values_mut() {
             project.remove(uri);
+            if let Some(physical) = &physical {
+                project.remove(physical);
+            }
         }
+    }
+
+    /// Keep editor identities while associating open buffers with build inputs.
+    /// Never canonicalize the document map: aliases may be retargeted later.
+    pub(crate) fn open_file_aliases(&self, inputs: &BTreeSet<Url>) -> BTreeMap<Url, Url> {
+        let physical: BTreeSet<_> = inputs
+            .iter()
+            .filter_map(|uri| uri.to_file_path().ok()?.canonicalize().ok())
+            .collect();
+        self.documents
+            .iter()
+            .filter_map(|(uri, doc)| {
+                doc.version?;
+                let path = uri.to_file_path().ok()?.canonicalize().ok()?;
+                let target = Url::from_file_path(&path).ok()?;
+                (physical.contains(&path) && *uri != target).then(|| (uri.clone(), target))
+            })
+            .collect()
     }
 
     pub fn dependencies(&self, uri: &Url) -> Vec<Url> {

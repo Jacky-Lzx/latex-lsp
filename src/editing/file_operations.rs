@@ -29,6 +29,16 @@ impl FileChanges {
                 .and_then(|uri| uri.to_file_path().ok())
                 .ok_or_else(|| Error::invalid_params("File events require local file URIs"))?;
             paths.insert(normalize_path(&path));
+            // Preserve the logical path for retarget/deletion checks, and
+            // match physical inputs when editors report a directory alias.
+            if let Some(physical) = path.ancestors().find_map(|parent| {
+                parent
+                    .canonicalize()
+                    .ok()
+                    .map(|physical| physical.join(path.strip_prefix(parent).unwrap()))
+            }) {
+                paths.insert(normalize_path(&physical));
+            }
         }
         Ok(Self(paths.into_iter().collect()))
     }

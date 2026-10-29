@@ -101,6 +101,12 @@ struct QueuedBuild {
     rebuild: bool,
 }
 
+pub(super) struct WatchedBuild {
+    root: Url,
+    queued: QueuedBuild,
+    generation: u64,
+}
+
 #[derive(Clone)]
 pub struct BuildManager {
     client: Client,
@@ -118,6 +124,7 @@ struct BuildInput {
     root_path: PathBuf,
     snapshots: BTreeMap<Url, (Option<i32>, String)>,
     file_snapshots: BTreeMap<Url, InputSnapshot>,
+    open_aliases: BTreeMap<Url, Url>,
     config: BuildConfig,
     progress_supported: bool,
     project: BTreeSet<Url>,
@@ -409,6 +416,8 @@ impl BuildManager {
                     .filter_map(|path| Url::from_file_path(path).ok()),
             );
         }
+        let open_aliases = workspace.open_file_aliases(&project);
+        project.extend(open_aliases.keys().cloned());
         let mut snapshots = BTreeMap::new();
         let mut file_snapshots = BTreeMap::new();
         for uri in &project {
@@ -567,6 +576,7 @@ impl BuildManager {
                 root_path,
                 snapshots,
                 file_snapshots,
+                open_aliases,
                 config,
                 progress_supported,
                 project,
@@ -687,27 +697,53 @@ impl BuildManager {
             .await;
     }
 
-    pub async fn watched_files_changed(
+    pub(super) async fn watched_files_changed(
         &self,
         changes: &crate::editing::file_operations::FileChanges,
-    ) -> BTreeSet<Url> {
-        // Capture affected roots before cancellation or diagnostic refresh drops
-        // their old input snapshots. A delayed duplicate must not enqueue work.
-        let roots = self
-            .state
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(_, record)| record.checks.image_changed(|uri| changes.affects(uri)))
-            .map(|(root, _)| root.clone())
-            .collect();
+    ) -> Vec<WatchedBuild> {
         self.cancel_changed_inputs(|uri| changes.affects(uri), true)
-            .await;
-        roots
+            .await
     }
 
-    async fn cancel_changed_inputs(&self, affects: impl Fn(&Url) -> bool, verify_inputs: bool) {
+    pub(super) async fn resume_watched(&self, builds: Vec<WatchedBuild>) {
+        for WatchedBuild {
+            root,
+            queued,
+            generation,
+        } in builds
+        {
+            if !self.closing.load(Ordering::SeqCst)
+                && (queued.rebuild
+                    || self
+                        .workspace
+                        .read()
+                        .await
+                        .settings(&queued.uri)
+                        .build
+                        .on_save)
+            {
+                if let Err(error) = self
+                    .start_request(queued.uri, Some((root, generation)), queued.rebuild, None)
+                    .await
+                {
+                    self.client
+                        .log_message(
+                            MessageType::WARNING,
+                            format!("Queued compilation skipped: {}", error.message),
+                        )
+                        .await;
+                }
+            }
+        }
+    }
+
+    async fn cancel_changed_inputs(
+        &self,
+        affects: impl Fn(&Url) -> bool,
+        verify_inputs: bool,
+    ) -> Vec<WatchedBuild> {
         let mut builds = BTreeSet::new();
+        let mut followups = Vec::new();
         {
             let mut state = self.state.lock().unwrap();
             for (root, record) in state.iter_mut() {
@@ -729,8 +765,9 @@ impl BuildManager {
                                 )
                         })
                 };
+                let image_changed = record.checks.image_changed(&affects);
                 if (!verify_inputs && affects(root))
-                    || record.checks.image_changed(&affects)
+                    || image_changed
                     || record.inputs.iter().any(|(uri, snapshot)| {
                         !defer_generated_database(uri)
                             && affects(uri)
@@ -743,8 +780,21 @@ impl BuildManager {
                         .any(|uri| !defer_generated_database(uri) && affects(uri))
                         && record.checks.changed_path().is_some())
                 {
-                    record.queued = None;
+                    let queued = record.queued.take();
                     record.cancel_generation = record.cancel_generation.wrapping_add(1);
+                    // A watcher invalidates this run, not the user's request
+                    // for newer saved inputs. Resume only after file refresh,
+                    // with a generation guard against explicit cancellation.
+                    if verify_inputs && (queued.is_some() || image_changed) {
+                        followups.push(WatchedBuild {
+                            root: root.clone(),
+                            queued: queued.unwrap_or_else(|| QueuedBuild {
+                                uri: root.clone(),
+                                rebuild: false,
+                            }),
+                            generation: record.cancel_generation,
+                        });
+                    }
                     if let Some((id, cancel)) = &record.active {
                         cancel.store(true, Ordering::Relaxed);
                         builds.insert(*id);
@@ -764,6 +814,7 @@ impl BuildManager {
             }
             finished.await;
         }
+        followups
     }
 }
 
@@ -771,6 +822,43 @@ impl BuildManager {
 mod tests {
     use super::*;
     use crate::project::workspace::Workspace;
+
+    #[tokio::test]
+    async fn explicit_cancellation_invalidates_a_detached_watcher_followup() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.tex");
+        std::fs::write(&path, "\\documentclass{article}\n").unwrap();
+        let path = path.canonicalize().unwrap();
+        let uri = Url::from_file_path(&path).unwrap();
+        let before = InputSnapshot::file(&path);
+        let source = "\\documentclass{article}\nChanged.\n";
+        std::fs::write(&path, source).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.open(uri.clone(), source.into(), 2);
+        workspace.config.build.executable = "unavailable-custom-compiler".into();
+        workspace.config.build.rebuild_arguments = Some(vec![]);
+        let (client, _outgoing) = Client::new();
+        let manager = BuildManager::new(client, WorkspaceStore::new(workspace));
+        manager.state.lock().unwrap().insert(
+            uri.clone(),
+            Record {
+                inputs: [(uri.clone(), before)].into(),
+                queued: Some(QueuedBuild {
+                    uri: uri.clone(),
+                    rebuild: true,
+                }),
+                ..Default::default()
+            },
+        );
+        let changes = crate::editing::file_operations::FileChanges::new([uri.as_str()]).unwrap();
+        let pending = manager.watched_files_changed(&changes).await;
+        assert_eq!(pending.len(), 1);
+        manager.cancel(Some(&uri));
+        manager.resume_watched(pending).await;
+        assert_eq!(manager.tasks.load(Ordering::SeqCst), 0);
+        assert!(manager.state.lock().unwrap()[&uri].queued.is_none());
+        assert!(!directory.path().join("build").exists());
+    }
 
     #[tokio::test]
     async fn queued_rebuilds_do_not_follow_a_changed_root_configuration() {

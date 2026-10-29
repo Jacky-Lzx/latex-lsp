@@ -466,7 +466,7 @@ impl Backend {
                 return;
             }
         };
-        let image_roots = if from_watcher {
+        let watched_builds = if from_watcher {
             self.builds.watched_files_changed(&changes).await
         } else {
             self.builds.files_changed(&changes).await;
@@ -495,15 +495,7 @@ impl Backend {
         // Revalidate cached analysis after a watcher event, preserving result
         // IDs when a delayed notification changes neither payload nor version.
         self.publish_affected(affected).await;
-        for root in image_roots {
-            if self.workspace.read().await.settings(&root).build.on_save {
-                if let Err(error) = self.builds.on_save(root).await {
-                    self.client
-                        .log_message(MessageType::WARNING, error.message)
-                        .await;
-                }
-            }
-        }
+        self.builds.resume_watched(watched_builds).await;
     }
 }
 

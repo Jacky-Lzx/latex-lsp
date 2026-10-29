@@ -8,6 +8,7 @@ impl BuildManager {
             root_path,
             snapshots,
             file_snapshots,
+            open_aliases,
             config,
             progress_supported,
             mut project,
@@ -366,8 +367,22 @@ impl BuildManager {
                 .filter_map(|input| input.snapshot())
                 .collect();
             checks = Arc::new(checks.with_generated_bibliography(&generated));
+            // Include editor aliases of inputs first discovered by the recorder.
+            project.extend(current.open_file_aliases(&project).into_keys());
             let stale_reason = generated_changed
                 .then(|| "Generated bibliography inputs changed".to_string())
+                .or_else(|| {
+                    open_aliases
+                        .iter()
+                        .find(|(alias, target)| {
+                            alias
+                                .to_file_path()
+                                .ok()
+                                .and_then(|path| path.canonicalize().ok())
+                                != target.to_file_path().ok()
+                        })
+                        .map(|(alias, _)| format!("Input binding changed: {alias}"))
+                })
                 .or_else(|| {
                     checks
                         .changed_path()
@@ -603,6 +618,17 @@ impl BuildManager {
                     .iter()
                     .filter_map(|(uri, doc)| doc.version.is_some().then_some(uri.clone())),
             );
+            // Publish compiler diagnostics on an open editor alias, retaining
+            // its version instead of also sending an unversioned physical URI.
+            let aliases = current.open_file_aliases(&affected);
+            let physical: BTreeSet<_> = aliases.into_values().collect();
+            affected.retain(|uri| {
+                !physical.contains(uri)
+                    || current
+                        .documents
+                        .get(uri)
+                        .is_some_and(|doc| doc.version.is_some())
+            });
             let inlay_refresh = current.client.inlay_refresh;
             let delivery = current.diagnostic_delivery.clone();
             let notifications = if delivery.is_pull() {
@@ -641,7 +667,13 @@ impl BuildManager {
                 .while_open(client.send_notification::<BuildFinished>(result))
                 .await;
             if inlay_refresh {
-                let _ = manager.while_open(client.inlay_hint_refresh()).await;
+                // UI refresh must not hold the build queue or shutdown open.
+                let client = client.clone();
+                tokio::spawn(async move {
+                    let _ =
+                        tokio::time::timeout(Duration::from_secs(5), client.inlay_hint_refresh())
+                            .await;
+                });
             }
             let queued = state.lock().unwrap().get_mut(&root_uri).and_then(|record| {
                 // A new manual build may already own the record. Its saves

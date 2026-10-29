@@ -32,8 +32,8 @@ vim.lsp.buf_request(0, 'workspace/executeCommand', {
 end)
 
 vim.lsp.handlers['latex/buildFinished'] = function(_, result)
-  local level = (result.status == 'success' or result.status == 'cancelled')
-    and vim.log.levels.INFO or vim.log.levels.ERROR
+  if not result or result.stale or result.status == 'cancelled' then return end
+  local level = result.status == 'success' and vim.log.levels.INFO or vim.log.levels.ERROR
   vim.notify(result.message, level)
 end
 ```
@@ -44,7 +44,7 @@ Call the following command via `workspace/executeCommand`, with the first parame
 
 - `latex.build`: Return `{status: "started", buildId, rootUri}` immediately, compilation runs in the background. When the same root file already has a task, `running` and the original task ID are returned.
 
-- `latex.rebuild`: Force recompile; default latexmk adds `-g`, direct TeX engine and Tectonic run directly every time. Used to restore modified products or when latexmk incremental judgment needs to be skipped. When the same root file is being compiled, duplicate requests are merged into one subsequent forced compilation, which will be executed even if `onSave` is `false`; the save event retains the queued forced requests, and subsequent tasks use the latest configuration and saved content. Cancellations, related file events, and server shutdown clear the queue.
+- `latex.rebuild`: Force recompile; default latexmk adds `-g`, direct TeX engine and Tectonic run directly every time. Used to restore modified products or when latexmk incremental judgment needs to be skipped. When the same root file is being compiled, duplicate requests are merged into one subsequent forced compilation, which will be executed even if `onSave` is `false`; the save event retains the queued forced requests, and subsequent tasks use the latest configuration and saved content. Explicit cancellation, file create/delete/rename operations, and server shutdown clear the queue. File watcher notifications preserve an existing queued save or forced rebuild and resume it after refreshing the project.
 
 - `latex.cancelBuild`: Cancel the compilation corresponding to this document; cancel all compilation when the parameter is omitted. Also terminate child processes started by latexmk on Unix.
 
