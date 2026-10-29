@@ -15651,16 +15651,19 @@ fn quick_fixes_highlights_and_selection_ranges_work_over_stdio() {
 }
 
 #[test]
-fn bare_bibliography_at_before_final_newline_completes_over_stdio() {
+fn bare_bibliography_at_before_whitespace_and_following_entries_completes_over_stdio() {
     let directory = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(directory.path().join("中文 refs.bib")).unwrap();
-    for snippets in [false, true] {
+    for (snippets, following) in [false, true].into_iter().flat_map(|snippets| {
+        ["", "@book{following,title={Keep this entry too}}\n"]
+            .map(|following| (snippets, following))
+    }) {
         let mut server = Server::start();
         server.request(1, "initialize", json!({"processId":null,"capabilities":{"textDocument":{"completion":{"completionItem":{"snippetSupport":snippets}}}}}));
         server.notify("initialized", json!({}));
         server.notify(
             "textDocument/didOpen",
-            json!({"textDocument":{"uri":uri,"languageId":"bib","version":1,"text":"@book{existing,title={Keep me}}\n\n\n"}}),
+            json!({"textDocument":{"uri":uri,"languageId":"bib","version":1,"text":format!("@book{{existing,title={{Keep me}}}}\n\n\n{following}")}}),
         );
         server.notify(
             "textDocument/didChange",

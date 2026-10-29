@@ -3236,7 +3236,11 @@ impl Syntax {
                 i += 1;
             }
             let kind_start = i;
-            i = bib_identifier_end(source, i);
+            // A second entry marker belongs to the next construct, even when
+            // whitespace follows an unfinished header's first marker.
+            if bytes.get(i) != Some(&b'@') {
+                i = bib_identifier_end(source, i);
+            }
             let kind = &source[kind_start..i];
             let kind_span = kind_start..i;
             i = bib_space(source, i, &mut result.comments);

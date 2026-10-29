@@ -78,6 +78,42 @@ fn entry_types_complete_empty_and_partial_prefixes_without_replacing_the_at_sign
 }
 
 #[test]
+fn bare_at_before_another_entry_preserves_both_completion_contexts() {
+    for whitespace in ["", "\n", "\r\n", " \n\n"] {
+        for snippets in [false, true] {
+            let prefix = "@book{existing, title={Keep me}}\n\n";
+            let following = "@book{following, title={Also keep me}}\n";
+            let source = format!("{prefix}@{whitespace}{following}");
+            let (workspace, uri) = workspace(&source, snippets);
+            let at = Text::new(source.clone()).position(prefix.len() + 1);
+            let items = features::completion(&workspace, &uri, at);
+            let article = items.iter().find(|item| item.label == "article").unwrap();
+            let Some(CompletionTextEdit::Edit(edit)) = &article.text_edit else {
+                panic!("missing edit")
+            };
+            assert_eq!(edit.range, Range::new(at, at));
+            assert_eq!(
+                article.insert_text_format,
+                Some(if snippets {
+                    InsertTextFormat::SNIPPET
+                } else {
+                    InsertTextFormat::PLAIN_TEXT
+                })
+            );
+            let completed = edited(&source, article);
+            assert!(completed.starts_with(&format!("{prefix}@article")));
+            assert!(completed.ends_with(&format!("{whitespace}{following}")));
+            assert!(items.iter().all(|item| item.label != "@book"));
+            let following_at =
+                Text::new(source.clone()).position(prefix.len() + 1 + whitespace.len() + 1);
+            assert!(features::completion(&workspace, &uri, following_at)
+                .iter()
+                .any(|item| item.label == "book"));
+        }
+    }
+}
+
+#[test]
 fn bare_at_completes_before_trailing_whitespace_without_consuming_it() {
     for prefix in ["", "@book{existing, title={Keep me}}\n\n"] {
         for suffix in ["\n", "\r\n", "  \n\n"] {
