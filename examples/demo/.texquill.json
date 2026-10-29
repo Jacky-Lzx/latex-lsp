@@ -6,7 +6,13 @@
   },
   "diagnostics": {
     "undefinedReferences": true,
-    "undefinedCitations": true
+    "undefinedCitations": true,
+    "chktex": {
+      "enabled": true,
+      "arguments": [
+        "-w46"
+      ]
+    }
   },
   "inlayHints": {
     "enabled": true,

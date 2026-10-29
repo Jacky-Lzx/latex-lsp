@@ -2822,6 +2822,138 @@ fn indexing_limits_are_visible_and_completion_reports_incompleteness() {
     server.wait_exit(0);
 }
 
+fn chktex_46_roundtrip(executable: &std::path::Path, deferred: bool) {
+    use texquill::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let source = "\\documentclass{article}\r\n\\begin{document}\r\n😀 $x +\r\n y$ and $$z$$.\r\n\\end{document}\r\n";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}},"dataSupport":deferred,"resolveSupport":{"properties":["edit"]}}}},"initializationOptions":{"distribution":{"enabled":false},"build":{"onSave":false},"diagnostics":{"chktex":{"enabled":true,"executable":executable,"arguments":["-w46"]}}}}));
+    server.notify("initialized", json!({}));
+    open_formatting_document(&mut server, &uri, source);
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+    let published = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == uri.as_str()
+            && message["params"]["version"] == 1
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(|item| item["source"] == "chktex" && item["code"] == "46")
+                })
+    });
+    let diagnostic = published["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["source"] == "chktex" && item["code"] == "46")
+        .unwrap();
+    let text = Text::new(source.into());
+    let start = source.find('$').unwrap();
+    assert_eq!(diagnostic["range"]["start"], json!(text.position(start)));
+    let params = json!({"textDocument":{"uri":uri},"range":{"start":diagnostic["range"]["start"],"end":diagnostic["range"]["start"]},"context":{"diagnostics":[diagnostic],"only":["quickfix"]}});
+    let actions = server.request(2, "textDocument/codeAction", params.clone());
+    assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+    assert_eq!(actions[0].get("edit").is_none(), deferred);
+    let resolved = server.request(3, "codeAction/resolve", actions[0].clone());
+    assert_eq!(resolved["diagnostics"], json!([diagnostic]));
+    assert_eq!(
+        resolved["edit"]["documentChanges"][0]["textDocument"]["version"],
+        1
+    );
+    let edits: Vec<lsp_types::TextEdit> =
+        serde_json::from_value(resolved["edit"]["documentChanges"][0]["edits"].clone()).unwrap();
+    assert_eq!(edits.len(), 2);
+    let mut corrected = source.to_owned();
+    let mut edits = edits;
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+    for edit in edits {
+        corrected.replace_range(
+            text.offset(edit.range.start).unwrap()..text.offset(edit.range.end).unwrap(),
+            &edit.new_text,
+        );
+    }
+    assert_eq!(
+        corrected,
+        source.replacen("$x +\r\n y$", "\\(x +\r\n y\\)", 1)
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":corrected}]}),
+    );
+    assert_eq!(
+        server.request(4, "textDocument/codeAction", params),
+        json!([])
+    );
+    if deferred {
+        server.send(
+            json!({"jsonrpc":"2.0","id":5,"method":"codeAction/resolve","params":actions[0]}),
+        );
+        assert_eq!(
+            server.until(|message| message["id"] == 5)["error"]["code"],
+            -32801
+        );
+    }
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+    // The unchanged display-math warning proves the second check completed;
+    // didChange's earlier empty diagnostic publication must not satisfy this.
+    let report = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == uri.as_str()
+            && message["params"]["version"] == 2
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(|item| item["source"] == "chktex" && item["code"] == "45")
+                })
+    });
+    assert!(
+        !report["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["source"] == "chktex" && item["code"] == "46"),
+        "{report}"
+    );
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn chktex_46_code_actions_support_eager_and_deferred_edits_over_stdio() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let executable = dir.path().join("checker");
+    std::fs::write(
+        &executable,
+        r#"#!/bin/sh
+text=$(cat)
+case "$text" in
+  *'$x +'*) printf '%s\n' '3:6:5:Warning:46:Use \( ... \) instead of $ ... $.' ;;
+esac
+printf '%s\n' '4:8:5:Warning:45:Use \[ ... \] instead of $$ ... $$.'
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for deferred in [false, true] {
+        chktex_46_roundtrip(&executable, deferred);
+    }
+}
+
+#[test]
+#[ignore = "requires chktex on PATH"]
+fn chktex_46_real_tool_action_preserves_multiline_math_and_clears_warning() {
+    chktex_46_roundtrip(std::path::Path::new("chktex"), true);
+}
+
 #[test]
 #[cfg(unix)]
 fn chktex_checks_buffer_on_save_and_discards_stale_results() {

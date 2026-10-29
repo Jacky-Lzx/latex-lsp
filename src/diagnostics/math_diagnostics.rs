@@ -41,6 +41,7 @@ impl Mode {
 struct Open {
     mode: Mode,
     span: Span<usize>,
+    convertible: bool,
 }
 
 #[derive(Default, PartialEq)]
@@ -138,9 +139,14 @@ struct Context {
 #[derive(Default)]
 pub(crate) struct Index {
     diagnostics: BTreeMap<Url, Vec<Diagnostic>>,
+    inline_dollars: BTreeMap<Url, Vec<Span<usize>>>,
 }
 impl Index {
     pub(crate) fn new(workspace: &Workspace, requested: &BTreeSet<Url>) -> Self {
+        Self::build(workspace, requested, false)
+    }
+
+    fn build(workspace: &Workspace, requested: &BTreeSet<Url>, chktex: bool) -> Self {
         let enabled: BTreeSet<_> = requested
             .iter()
             .filter(|uri| {
@@ -148,7 +154,7 @@ impl Index {
                     .documents
                     .get(uri)
                     .is_some_and(|doc| doc.kind == DocumentKind::Latex)
-                    && workspace.settings(uri).diagnostics.math_delimiters
+                    && (chktex || workspace.settings(uri).diagnostics.math_delimiters)
             })
             .cloned()
             .collect();
@@ -265,19 +271,48 @@ impl Index {
                 }
             }
         }
-        Self {
-            diagnostics: contexts
-                .into_iter()
-                .map(|(uri, context)| {
-                    let diagnostics = check(&workspace.documents[&uri], &uri, context);
-                    (uri, diagnostics)
-                })
-                .collect(),
+        let mut index = Self::default();
+        for (uri, context) in contexts {
+            let doc = &workspace.documents[&uri];
+            // ChkTeX identifies an opener even when a preceding input makes
+            // the initial math mode unknown. Never infer this from client data.
+            let starts = if chktex {
+                workspace
+                    .project
+                    .lint_diagnostics
+                    .get(&uri)
+                    .into_iter()
+                    .flatten()
+                    .filter(|diagnostic| inline_dollar_warning(diagnostic))
+                    .filter_map(|diagnostic| doc.text.offset(diagnostic.range.start))
+                    .collect()
+            } else {
+                BTreeSet::new()
+            };
+            let mut pairs = Vec::new();
+            let diagnostics = check(doc, &uri, context, &starts, &mut pairs);
+            index.diagnostics.insert(uri.clone(), diagnostics);
+            index.inline_dollars.insert(uri, pairs);
         }
+        index
     }
     pub(crate) fn take(&mut self, uri: &Url) -> Vec<Diagnostic> {
         self.diagnostics.remove(uri).unwrap_or_default()
     }
+}
+
+pub(crate) fn inline_dollar_warning(diagnostic: &Diagnostic) -> bool {
+    diagnostic.source.as_deref() == Some("chktex")
+        && matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if code == "46")
+}
+
+/// Confirm local dollar pairs using the same project semantics as math checks,
+/// independently of whether opt-in delimiter diagnostics are enabled.
+pub(crate) fn inline_dollar_pairs(workspace: &Workspace, uri: &Url) -> Vec<Span<usize>> {
+    Index::build(workspace, &BTreeSet::from([uri.clone()]), true)
+        .inline_dollars
+        .remove(uri)
+        .unwrap_or_default()
 }
 
 fn changes_math_syntax(doc: &Document) -> bool {
@@ -355,7 +390,13 @@ fn merge(mut spans: Vec<Span<usize>>) -> Vec<Span<usize>> {
     }
     merged
 }
-fn check(doc: &Document, uri: &Url, context: Context) -> Vec<Diagnostic> {
+fn check(
+    doc: &Document,
+    uri: &Url,
+    context: Context,
+    dollar_starts: &BTreeSet<usize>,
+    pairs: &mut Vec<Span<usize>>,
+) -> Vec<Diagnostic> {
     if context.unsafe_catcodes {
         return vec![];
     }
@@ -597,6 +638,9 @@ fn check(doc: &Document, uri: &Url, context: Context) -> Vec<Diagnostic> {
                 }
             }
             b'$' => {
+                if dollar_starts.contains(&at) && open.is_none() {
+                    unknown = false;
+                }
                 if open.as_ref().map(|open| open.mode) != Some(Mode::Inline)
                     && bytes.get(at + 1) == Some(&b'$')
                 {
@@ -617,7 +661,8 @@ fn check(doc: &Document, uri: &Url, context: Context) -> Vec<Diagnostic> {
         }
         if let Some((mode, opening)) = marker {
             if opening {
-                if let Some(active) = &open {
+                if let Some(active) = &mut open {
+                    active.convertible = false;
                     emit(
                         at..at + width,
                         "nested-math",
@@ -631,9 +676,17 @@ fn check(doc: &Document, uri: &Url, context: Context) -> Vec<Diagnostic> {
                     open = Some(Open {
                         mode,
                         span: at..at + width,
+                        convertible: mode == Mode::Inline && &source[at..at + width] == "$",
                     });
                 }
             } else if let Some(active) = open.take() {
+                if active.convertible
+                    && mode == Mode::Inline
+                    && &source[at..at + width] == "$"
+                    && dollar_starts.contains(&active.span.start)
+                {
+                    pairs.push(active.span.start..at + width);
+                }
                 if active.mode != mode {
                     emit(
                         at..at + width,

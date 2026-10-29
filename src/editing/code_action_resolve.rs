@@ -189,6 +189,40 @@ mod tests {
     }
 
     #[test]
+    fn chktex_resolution_rechecks_current_warning_even_without_source_changes() {
+        let (mut ws, uri, _) = fixture();
+        let source = "😀 $x + 1$\r\n";
+        ws.documents
+            .insert(uri.clone(), Document::new(&uri, source.into(), Some(1)));
+        let diagnostic = Diagnostic {
+            range: ws.documents[&uri].text.range(5, 12),
+            source: Some("chktex".into()),
+            code: Some(NumberOrString::String("46".into())),
+            message: "Use \\( ... \\) instead of $ ... $.".into(),
+            ..Default::default()
+        };
+        ws.project
+            .lint_diagnostics
+            .insert(uri.clone(), vec![diagnostic.clone()]);
+        let action = first(
+            &ws,
+            &uri,
+            diagnostic.range,
+            &context(CodeActionKind::QUICKFIX),
+        );
+        let resolved = resolve(&ws, action.clone()).unwrap();
+        assert_eq!(
+            apply(&ws.documents[&uri], resolved.edit.as_ref().unwrap()),
+            "😀 \\(x + 1\\)\r\n"
+        );
+        ws.project.lint_diagnostics.remove(&uri);
+        assert_eq!(
+            resolve(&ws, action).unwrap_err().code,
+            ErrorCode::ServerError(-32801)
+        );
+    }
+
+    #[test]
     fn refactor_resolution_matches_eager_edits_and_preserves_metadata() {
         let (mut ws, uri, range) = fixture();
         let context = context(CodeActionKind::REFACTOR);

@@ -1,6 +1,7 @@
 //! Source edits, refactorings, quick fixes and file operations.
 
 pub(crate) mod anchor_edits;
+mod chktex_fixes;
 pub(crate) mod code_action_resolve;
 pub(crate) mod file_fixes;
 pub mod file_operations;
@@ -44,6 +45,7 @@ pub fn code_actions(
         return actions;
     }
     let mut fixes = crate::diagnostics::environment_diagnostics::fixes(workspace, uri, doc);
+    fixes.extend(chktex_fixes::fixes(workspace, uri));
     fixes.extend(spelling_fixes::fixes(
         workspace,
         uri,
@@ -223,6 +225,7 @@ pub fn resolve_fix(workspace: &Workspace, request: FixRequest) -> Option<Workspa
     }
     let mut fixes =
         crate::diagnostics::environment_diagnostics::fixes(workspace, &request.uri, doc);
+    fixes.extend(chktex_fixes::fixes(workspace, &request.uri));
     fixes.extend(spelling_fixes::fixes(
         workspace,
         &request.uri,
