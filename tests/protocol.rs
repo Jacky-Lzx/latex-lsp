@@ -15580,6 +15580,20 @@ fn signature_help_triggers_follow_custom_delimiters_flags_and_completed_argument
 
 impl Drop for Server {
     fn drop(&mut self) {
+        // EOF lets the server cancel and reap its external process groups, even
+        // during unwinding or after the fixture directory has been removed.
+        drop(self.stdin.take());
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                _ => break,
+            }
+        }
+        // A broken server must not hang the suite or panic again during unwind.
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -19261,6 +19275,49 @@ impl Server {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn dropping_test_servers_reaps_build_groups_after_fixture_removal_and_panics() {
+    for panic in [false, true] {
+        let script = r#"printf '%s' "$$" > "$1/compiler-parent"
+sleep 30 &
+printf '%s' "$!" > "$1/compiler-child"
+touch "$1/compiler-ready"
+while [ ! -f "$1/release" ]; do sleep 0.02; done
+"#;
+        let (mut server, directory, uri) = fake_build_server(script, false);
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let output = directory.path().join("build/texquill");
+        wait_for_file(&output.join("compiler-ready"));
+        let parent: i32 = std::fs::read_to_string(output.join("compiler-parent"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let descendant: i32 = std::fs::read_to_string(output.join("compiler-child"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        // Keep a fallback outside the unwind so a failed regression is safe too.
+        let _group = OwnedProcessGroup(parent);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _server = server;
+            // Tuple fixtures can remove their directory before dropping Server.
+            // The compiler can no longer receive the release file it awaits.
+            drop(directory);
+            if panic {
+                panic!("simulate a failed assertion while a compiler is running");
+            }
+        }));
+        assert_eq!(result.is_err(), panic);
+        assert_process_stopped(parent);
+        assert_process_stopped(descendant);
     }
 }
 
