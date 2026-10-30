@@ -43,6 +43,7 @@ struct Record {
     rebuild: bool,
     cancel_generation: u64,
     inputs: BTreeMap<Url, InputSnapshot>,
+    configuration: Option<Value>,
     checks: Arc<crate::compilation::file_checks::Snapshot>,
     artifact: Option<PathBuf>,
     // Preserve the path passed to the compiler as well as initial physical
@@ -546,6 +547,7 @@ impl BuildManager {
             }
             record.active = Some((build_id, cancel.clone()));
             record.rebuild = rebuild;
+            record.configuration = Some(serde_json::to_value(config.unresolved()).unwrap());
             record.inputs = project
                 .iter()
                 .map(|uri| {
@@ -590,19 +592,31 @@ impl BuildManager {
         Ok(json!({"status":"started", "buildId":build_id, "rootUri":root, "rebuild":rebuild}))
     }
 
-    /// Coalesce repeated saves into one follow-up build using the newest files.
+    /// Queue changed saved inputs once; identical saves reuse the active build.
     pub async fn on_save(&self, uri: Url) -> Result<()> {
-        let root = self
-            .workspace
-            .read()
-            .await
+        let workspace = self.workspace.read().await;
+        let root = workspace
             .root_document(&uri)
             .map_err(Error::invalid_params)?;
         {
             let mut state = self.state.lock().unwrap();
             if let Some(record) = state.get_mut(&root) {
                 if let Some((_, cancel)) = &record.active {
-                    if !cancel.load(Ordering::Relaxed) {
+                    if !cancel.load(Ordering::Relaxed)
+                        // Compare compiler input bytes, not editor versions or
+                        // modification times, which can change on a plain save.
+                        && (!record.inputs.contains_key(&uri)
+                            || record.inputs.iter().any(|(uri, input)| input.changed(uri))
+                            || record.checks.changed_path().is_some()
+                            || record.checks.image_changed(|_| true)
+                            || record.configuration.as_ref()
+                                != Some(
+                                    &serde_json::to_value(
+                                        workspace.build_config(&root).unresolved(),
+                                    )
+                                    .unwrap(),
+                                ))
+                    {
                         let rebuild = record.queued.as_ref().is_some_and(|queued| queued.rebuild);
                         record.queued = Some(QueuedBuild { uri, rebuild });
                     }
@@ -610,6 +624,7 @@ impl BuildManager {
                 }
             }
         }
+        drop(workspace);
         self.start(uri).await.map(|_| ())
     }
 

@@ -13636,6 +13636,129 @@ fn editor_directory_aliases_protect_unsaved_inputs_changes_and_versioned_diagnos
 
 #[test]
 #[cfg(unix)]
+fn unchanged_saves_during_a_build_do_not_queue_another_compilation() {
+    let script = "echo run >> \"$1/runs\"\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+    for forced in [false, true] {
+        let (mut server, directory, uri) = fake_build_server(script, true);
+        if forced {
+            configure_rebuild(&mut server, &directory, true, "force");
+        }
+        let started = server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":if forced {"latex.rebuild"} else {"latex.build"},"arguments":[uri]}),
+        );
+        let output = directory.path().join("build/texquill");
+        wait_for_file(&output.join("ready"));
+        let source = std::fs::read_to_string(uri.to_file_path().unwrap()).unwrap();
+        for version in [2, 3] {
+            // An editor may rewrite identical bytes and advance its version.
+            std::fs::write(uri.to_file_path().unwrap(), &source).unwrap();
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]}));
+            server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+            let status = server.request(
+                3,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[uri]}),
+            );
+            assert_eq!(status["buildId"], started["buildId"]);
+            assert_eq!(status["queued"], false, "{status}");
+        }
+        // An explicit forced follow-up must survive an unchanged save.
+        if forced {
+            server.request(
+                4,
+                "workspace/executeCommand",
+                json!({"command":"latex.rebuild","arguments":[uri]}),
+            );
+            server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+            let status = server.request(
+                5,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[uri]}),
+            );
+            assert_eq!(status["queuedRebuild"], true);
+        }
+        std::fs::write(output.join("release"), "").unwrap();
+        server.until(|m| {
+            m["method"] == "latex/buildFinished" && m["params"]["buildId"] == started["buildId"]
+        });
+        if forced {
+            server.until(|m| {
+                m["method"] == "latex/buildFinished" && m["params"]["buildId"] != started["buildId"]
+            });
+        }
+        server.request(6, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+        assert_eq!(
+            std::fs::read_to_string(output.join("runs"))
+                .unwrap()
+                .lines()
+                .count(),
+            if forced { 2 } else { 1 }
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn saves_during_a_build_still_queue_changed_dependencies_or_configuration() {
+    let script = "echo run >> \"$1/runs\"\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+    for change in ["dependency", "configuration"] {
+        let (mut server, directory, uri) = fake_build_server(script, true);
+        let source = "\\documentclass{article}\n\\input{child}\n";
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        let child = directory.path().join("child.tex");
+        std::fs::write(&child, "Before.\n").unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        let started = server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let output = directory.path().join("build/texquill");
+        wait_for_file(&output.join("ready"));
+        if change == "dependency" {
+            std::fs::write(&child, "After.\n").unwrap();
+        } else {
+            configure_rebuild(&mut server, &directory, true, "force");
+        }
+        // The saved root itself is unchanged in both cases.
+        server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+        let status = server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[uri]}),
+        );
+        assert_eq!(status["queued"], true, "{change}: {status}");
+        std::fs::write(output.join("release"), "").unwrap();
+        server.until(|m| {
+            m["method"] == "latex/buildFinished" && m["params"]["buildId"] == started["buildId"]
+        });
+        let next = server.until(|m| {
+            m["method"] == "latex/buildFinished" && m["params"]["buildId"] != started["buildId"]
+        });
+        assert_eq!(next["params"]["status"], "success", "{change}: {next}");
+        assert_eq!(next["params"]["stale"], false, "{change}: {next}");
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+        assert_eq!(
+            std::fs::read_to_string(output.join("runs"))
+                .unwrap()
+                .lines()
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn repeated_saves_during_a_build_compile_the_latest_saved_content_once_more() {
     let script = "count=0\n[ ! -f \"$1/count\" ] || count=$(cat \"$1/count\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$1/count\"\nif [ \"$count\" = 1 ]; then\n  touch \"$1/ready\"\n  while [ ! -f \"$1/release\" ]; do sleep 0.02; done\nfi\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: build %s.\\n' \"$2\" \"$count\" > \"$1/main.log\"\n";
     let (mut server, directory, uri) = fake_build_server(script, true);
@@ -13659,6 +13782,8 @@ fn repeated_saves_during_a_build_compile_the_latest_saved_content_once_more() {
         server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]}));
         server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
     }
+    // Repeating an unchanged save must retain the already queued latest input.
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
     let status = server.request(
         3,
         "workspace/executeCommand",
@@ -13705,6 +13830,12 @@ fn cancelling_or_shutting_down_discards_the_queued_save() {
             2,
             "workspace/executeCommand",
             json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let source = "\\documentclass{article}\nChanged.\n";
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":source}]}),
         );
         server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
         let status = server.request(
@@ -17184,6 +17315,12 @@ fn required_input_creation_watchers_resume_saves_and_explicit_operations_clear_q
             json!({"command":"latex.build","arguments":[main]}),
         );
         wait_for_file(&directory.path().join("build/texquill/ready"));
+        let source = format!("{source}% Saved while compiling.\n");
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":3},"contentChanges":[{"text":source}]}),
+        );
         server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
         assert_eq!(
             server.request(
@@ -17333,6 +17470,12 @@ fn missing_include_directory_watchers_restart_selected_builds_and_preserve_saved
             json!({"command":"latex.build","arguments":[main]}),
         );
         wait_for_file(&directory.path().join("build/texquill/ready"));
+        let source = format!("{source}% Saved while compiling.\n");
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":3},"contentChanges":[{"text":source}]}),
+        );
         server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
         assert_eq!(
             server.request(
@@ -17757,6 +17900,12 @@ fn conditional_file_events_cancel_active_and_queued_builds_but_unrelated_files_d
             )["status"],
             "running"
         );
+        let source = format!("{source}% Saved while compiling.\n");
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":3},"contentChanges":[{"text":source}]}),
+        );
         server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
         assert_eq!(
             server.request(
@@ -18064,7 +18213,7 @@ fn watched_files_cancel_changed_project_inputs_but_preserve_existence_only_conte
                     "workspace/executeCommand",
                     json!({"command":"latex.buildStatus","arguments":[main]})
                 )["queued"],
-                true
+                false
             );
         }
         if kind == "delete" {
@@ -19020,6 +19169,12 @@ fn deleted_input_directories_cancel_active_and_queued_builds_but_unrelated_files
         json!({"command":"latex.buildStatus","arguments":[main]}),
     );
     assert_eq!(running["status"], "running");
+    let source = format!("{source}\n% Saved while compiling.\n");
+    std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
     server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
     let queued = server.request(
         1503,
@@ -19253,7 +19408,7 @@ fn missing_inputs_under_symlink_directories_match_canonical_creation_notificatio
                 "workspace/executeCommand",
                 json!({"command":"latex.buildStatus","arguments":[main]}),
             );
-            assert_eq!(queued["queued"], true, "{queued}");
+            assert_eq!(queued["queued"], false, "{queued}");
             std::fs::create_dir_all(physical.path().join("deep/nested")).unwrap();
             let target = physical.path().join(if command.contains("\\include") {
                 "deep/nested/optional.tex"
@@ -19668,7 +19823,7 @@ fn binary_input_content_changes_are_detected_even_with_preserved_size_and_timest
                 "workspace/executeCommand",
                 json!({"command":"latex.buildStatus","arguments":[main]}),
             );
-            assert_eq!(queued["queued"], true, "{queued}");
+            assert_eq!(queued["queued"], false, "{queued}");
         }
         pixels[64 * 1024 + 7] = 1;
         std::fs::write(&image, &pixels).unwrap();
